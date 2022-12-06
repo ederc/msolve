@@ -41,7 +41,7 @@ inline omp_int_t omp_get_max_threads(void) { return 1;}
 #endif
 
 #define PARALLEL_HASHING 1
-#define ORDER_COLUMNS 1
+#define ORDER_COLUMNS 0
 /* loop unrolling in sparse linear algebra:
  * we store the offset of the first elements not unrolled
  * in the second entry of the sparse row resp. sparse polynomial.

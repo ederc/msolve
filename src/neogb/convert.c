@@ -363,14 +363,26 @@ static void convert_hashes_to_columns(
         const len_t os  = rrows[k][PRELOOP];
         const len_t len = rrows[k][LENGTH];
         row = rrows[k] + OFFSET;
+		len_t prev = 0;
+		len_t tmp;
         for (j = 0; j < os; ++j) {
-            row[j]  = hds[row[j]].idx;
+			tmp = row[j];
+            row[j]  = hds[row[j]].idx - prev;
+			prev	= hds[tmp].idx;
         }
         for (; j < len; j += UNROLL) {
-            row[j]    = hds[row[j]].idx;
-            row[j+1]  = hds[row[j+1]].idx;
-            row[j+2]  = hds[row[j+2]].idx;
-            row[j+3]  = hds[row[j+3]].idx;
+			tmp = row[j];
+            row[j]		= hds[row[j]].idx - prev;
+			prev		= hds[tmp].idx;
+			tmp = row[j+1];
+            row[j+1]	= hds[row[j+1]].idx - prev;
+			prev		= hds[tmp].idx;
+			tmp = row[j+2];
+            row[j+2]	= hds[row[j+2]].idx - prev;
+			prev		= hds[tmp].idx;
+			tmp = row[j+3];
+            row[j+3]	= hds[row[j+3]].idx - prev;
+			prev		= hds[tmp].idx;
         }
     }
     for (k = 0; k < mat->nru; ++k) {
@@ -381,14 +393,26 @@ static void convert_hashes_to_columns(
         const len_t os  = trows[k][PRELOOP];
         const len_t len = trows[k][LENGTH];
         row = trows[k] + OFFSET;
+		len_t prev = 0;
+		len_t tmp;
         for (j = 0; j < os; ++j) {
-            row[j]  = hds[row[j]].idx;
+			tmp = row[j];
+            row[j]  = hds[row[j]].idx - prev;
+			prev	= hds[tmp].idx;
         }
         for (; j < len; j += UNROLL) {
-            row[j]    = hds[row[j]].idx;
-            row[j+1]  = hds[row[j+1]].idx;
-            row[j+2]  = hds[row[j+2]].idx;
-            row[j+3]  = hds[row[j+3]].idx;
+			tmp = row[j];
+            row[j]		= hds[row[j]].idx - prev;
+			prev		= hds[tmp].idx;
+			tmp = row[j+1];
+            row[j+1]	= hds[row[j+1]].idx - prev;
+			prev		= hds[tmp].idx;
+			tmp = row[j+2];
+            row[j+2]	= hds[row[j+2]].idx - prev;
+			prev		= hds[tmp].idx;
+			tmp = row[j+3];
+            row[j+3]	= hds[row[j+3]].idx - prev;
+			prev		= hds[tmp].idx;
         }
     }
     for (k = 0; k < mat->nrl; ++k) {
@@ -659,13 +683,13 @@ static void convert_sparse_matrix_rows_to_basis_elements(
         if (st->ff_bits == 32) {
             printf("new element (%u): length %u | degree %d | ", bl+k, bs->hm[bl+k][LENGTH], bs->hm[bl+k][DEG]);
             int kk = 0;
-            /* for (int kk=0; kk<bs->hm[bl+k][LENGTH]; ++kk) { */
-            printf("%u | ", bs->cf_32[bl+k][kk]);
+            for (int kk=0; kk<bs->hm[bl+k][LENGTH]; ++kk) {
+            /* printf("%u | ", bs->cf_32[bl+k][kk]); */
             for (int jj=0; jj < bht->evl; ++jj) {
                 printf("%u ", bht->ev[bs->hm[bl+k][OFFSET+kk]][jj]);
             }
-            /* printf(" || ");
-             * } */
+            printf(" || ");
+            }
             printf("\n");
         }
         if (st->ff_bits == 16) {
@@ -742,13 +766,16 @@ static void convert_sparse_matrix_rows_to_basis_elements_use_sht(
         row = rows[i];
         deg = sht->hd[hcm[rows[i][OFFSET]]].deg;
         const len_t len = rows[i][LENGTH]+OFFSET;
+		len_t prev = 0;
         if (st->nev ==  0) {
             for (j = OFFSET; j < len; ++j) {
-                row[j]  = hcm[row[j]];
+                prev += row[j];
+				row[j]  = hcm[prev];
             }
         } else {
             for (j = OFFSET; j < len; ++j) {
-                row[j]  = hcm[row[j]];
+				prev += row[j];
+                row[j]  = hcm[prev];
                 if (deg < sht->hd[row[j]].deg) {
                     deg = sht->hd[row[j]].deg;
                 }

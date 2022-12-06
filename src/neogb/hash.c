@@ -1116,11 +1116,12 @@ static inline void insert_in_basis_hash_table_pivots(
 #pragma omp parallel for num_threads(st->nthrds) \
     private(l)
 #endif
+	len_t prev = 0;
     for (l = OFFSET; l < len; ++l) {
         exp_t *evtl = evt + (omp_get_thread_num() * evl);
-        memcpy(evtl, evs[hcm[row[l]]],
+        memcpy(evtl, evs[hcm[row[l]+prev]],
                 (unsigned long)evl * sizeof(exp_t));
-
+		prev += row[l];
 #if PARALLEL_HASHING
         const val_t h = hds[hcm[row[l]]].val;
         row[l] = check_insert_in_hash_table(evtl, h, bht);
