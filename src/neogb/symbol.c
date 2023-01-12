@@ -252,13 +252,13 @@ static void select_spairs(
     gens  = (len_t *)malloc(2 * (unsigned long)nps * sizeof(len_t));
 
     /* preset matrix meta data, tuples of (multiplier, basis index) */
-    mat->rrd = (len_t *)malloc(4 * (unsigned long)nps * sizeof(len_t));
-    mat->trd = (len_t *)malloc(4 * (unsigned long)nps * sizeof(len_t));
+    mat->rrd  = (len_t *)malloc(4 * (unsigned long)nps * sizeof(len_t));
+    mat->trd  = (len_t *)malloc(4 * (unsigned long)nps * sizeof(len_t));
     hm_t *rrd = mat->rrd;
     hm_t *trd = mat->trd;
-    mat->sz = 2 * nps;
-    mat->nc = mat->ncl = mat->ncr = 0;
-    mat->nr = 0;
+    mat->sz   = 2 * nps;
+    mat->nc   = mat->ncl = mat->ncr = 0;
+    mat->nr   = 0;
 
     len_t rpos = 0, tpos = 0;
 
@@ -337,6 +337,22 @@ static void select_spairs(
         }
         i = j;
     }
+
+    /* memory stuff */
+    mat->nrl = mat->nr - mat->nc;
+    mat->nru = mat->nc;
+    trd = realloc(trd, (unsigned long)2*mat->nrl * sizeof(hm_t));
+    memset(ht->ev[0], 0, (unsigned long)evl * sizeof(exp_t));
+    /* fix rows to be reduced */
+
+    free(gens);
+
+    memmove(ps, ps+nps, (unsigned long)(psl->ld-nps) * sizeof(spair_t));
+    psl->ld -=  nps;
+
+    /* statistics */
+    st->num_rowsred +=  mat->nrl;
+    st->current_deg =   md;
 
     /* timings */
     st->select_ctime += cputime() - ct;
@@ -657,6 +673,61 @@ static void select_tbr(
 }
 
 
+static inline void find_multiplied_reducer_data(
+        const len_t idx,
+        ht_t *ht,
+        mat_t *mat,
+        const bs_t * const bs
+        )
+{
+    len_t i, k;
+
+    const hm_t m = ht->lh[idx];
+
+    const len_t evl = ht->evl;
+
+    const exp_t * const e = ht->ev[m];
+
+    const hd_t hdm    = ht->hd[m];
+    const len_t lml   = bs->lml;
+    const sdm_t ns    = ~hdm.sdm;
+
+    const sdm_t * const lms = bs->lm;
+    const bl_t * const lmps = bs->lmps;
+
+    exp_t *etmp = ht->ev[0];
+    const hd_t * const hdb  = ht->hd;
+    exp_t * const * const evb = ht->ev;
+
+    i = 0;
+start:
+    while (i < lml && lms[i] & ns) {
+        i++;
+    }
+    if (i < lml) {
+        const hm_t *b = bs->hm[lmps[i]];
+        const exp_t * const f = evb[b[OFFSET]];
+        for (k=0; k < evl; ++k) {
+            etmp[k] = (exp_t)(e[k]-f[k]);
+            if (etmp[k] < 0) {
+                i++;
+                goto start;
+            }
+        }
+        hm_t prev = lmps[i];
+        const hi_t h  = hdm.val - hdb[b[OFFSET]].val;
+        multiplied_poly_to_hash_table(ht, h, etmp, b);
+#if PARALLEL_HASHING
+        hm_t mul = check_insert_in_hash_table(etmp, h, ht);
+#else
+        hm_t mul = insert_in_hash_table(etmp, ht);
+#endif
+        rrd[2*mat->nru]   = mul;
+        rrd[2*mat->nru+1] = prev;
+        mat->nru++;
+    }
+}
+
 static inline void find_multiplied_reducer_no_row(
         const bs_t * const bs,
         const hm_t m,
@@ -787,6 +858,43 @@ start:
         }
         sht->hd[m].idx  = 2;
         *nr             = rr + 1;
+    }
+}
+
+static void symbolic_preproessing(
+        mat_t *mat,
+        ht_t *ht,
+        const bs_t * const bs,
+        stat_t *st
+        )
+{
+    /* timings */
+    double ct = cputime();
+    double rt = realtime();
+
+    /* timings */
+    st->symbol_ctime += cputime() - ct;
+    st->symbol_rtime += realtime() - rt;
+
+    len_t i = 0;
+
+    while (i < ht->lhld) {
+        while (mat->sz < ht->lhld - i) {
+            mat->sz *= 2;
+            mat->rrd = realloc(mat->rrd,
+                    (unsigned long)2 * mat->sz * sizeof(hm_t));
+        }
+        j = i;
+        i = ht->lhld;
+        const len_t lld = i;
+
+        for (; j < lld; ++j) {
+            if (ht->idx[ht->lh[j]] == 1) {
+                find_multiplied_reducer_data(j, ht, mat, bs);
+                ht->idx[ht->lh[j]] = 2;
+                mat->nc++;
+            }
+        }
     }
 }
 
