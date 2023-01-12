@@ -321,6 +321,67 @@ start:
     }
 }
 
+int core_f4_new(
+        bs_t *bs,   /* input data -> becomes basis */
+        ht_t *ht,   /* hash table */
+        stat_t *st  /* statistics storing meta data */
+        )
+{
+    int32_t round, i, j;
+
+    /* timings for one round */
+    double rrt, crt;
+
+    /* hashes-to-columns map, initialized with length 1, is reallocated
+       in each call when generating matrices for linear algebra */
+    hi_t *hcm = (hi_t *)malloc(sizeof(hi_t));
+    /* matrix holding sparse information generated
+       during symbolic preprocessing */
+    mat_t *mat = (mat_t *)calloc(1, sizeof(mat_t));
+
+    /* pair set */
+    ps_t *ps = initialize_pairset();
+
+    /* reset bs->ld for first update process */
+    bs->ld  = 0;
+
+    /* move input generators to basis and generate first spairs.
+       always check redundancy since input generators may be redundant
+       even so they are homogeneous. */
+    update_basis_f4(ps, bs, ht, st, st->ngens, 1);
+
+    /* let's start the f4 rounds, we are done when no more spairs
+       are left in the pairset or if we found a constant in the basis. */
+    if (st->info_level > 1) {
+        printf("\ndeg     sel   pairs        mat          density \
+           new data             time(rd)\n");
+        printf("-------------------------------------------------\
+----------------------------------------\n");
+    }
+    for (round = 1; ps->ld > 0; ++round) {
+        /* get meta data */
+        rrt = realtime();
+        crt = cputime();
+        st->max_bht_size = st->max_bht_size > ht->esz ?
+            st->max_bht_size :ht->esz;
+        st->current_rd = round;
+
+        /* preprocess data for next reduction round */
+        select_spairs_by_minimal_degree(matrix, bs, ps, st, sht, bht, NULL);
+        /* if we found a constant we are done, so remove all remaining pairs */
+        if (bs->constant  == 1) {
+            ps->ld  = 0;
+        }
+        if (st->info_level > 1) {
+            printf("%13.2f sec\n", realtime() - rrt);
+        }
+    }
+    if (st->info_level > 1) {
+        printf("-------------------------------------------------\
+----------------------------------------\n");
+    }
+}
+
 int core_f4(
         bs_t **bsp,
         ht_t **bhtp,
@@ -377,8 +438,8 @@ int core_f4(
       /* preprocess data for next reduction round */
       select_spairs_by_minimal_degree(mat, bs, ps, st, sht, bht, NULL);
       symbolic_preprocessing(mat, bs, st, sht, NULL, bht);
-      convert_hashes_to_columns(&hcm, mat, st, sht);
-      sort_matrix_rows_decreasing(mat->rr, mat->nru);
+      convert_hashes_to_columns_and_generate_matrix(&hcm, mat, st, sht);
+      /* sort_matrix_rows_decreasing(mat->rr, mat->nru); */
       sort_matrix_rows_increasing(mat->tr, mat->nrl);
       /* print pbm files of the matrices */
       if (st->gen_pbm_file != 0) {

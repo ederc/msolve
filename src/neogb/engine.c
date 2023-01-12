@@ -23,7 +23,7 @@
 
 int initialize_gba_input_data(
         bs_t **bsp,
-        ht_t **bhtp,
+        ht_t **htp,
         stat_t **stp,
         /* input values */
         const int32_t *lens,
@@ -47,7 +47,7 @@ int initialize_gba_input_data(
         )
 {
     bs_t *bs    = *bsp;
-    ht_t *bht   = *bhtp;
+    ht_t *ht    = *htp;
     stat_t *st  = *stp;
 
     /* initialize stuff */
@@ -78,9 +78,9 @@ int initialize_gba_input_data(
     /* initialize basis */
     bs  = initialize_basis(st);
     /* initialize basis hash table */
-    bht = initialize_basis_hash_table(st);
+    ht = initialize_hash_table(st);
 
-    import_input_data(bs, bht, st, lens, exps, cfs, invalid_gens);
+    import_input_data(bs, ht, st, lens, exps, cfs, invalid_gens);
 
     if (st->info_level > 0) {
       print_initial_statistics(stderr, st);
@@ -88,11 +88,11 @@ int initialize_gba_input_data(
 
     /* for faster divisibility checks, needs to be done after we have
      * read some input data for applying heuristics */
-    calculate_divmask(bht);
+    calculate_divmask(ht);
 
     /* sort initial elements, smallest lead term first */
     sort_r(bs->hm, (unsigned long)bs->ld, sizeof(hm_t *),
-            initial_input_cmp, bht);
+            initial_input_cmp, ht);
     /* normalize input generators */
     if (st->fc > 0) {
         normalize_initial_basis(bs, st->fc);
@@ -103,7 +103,7 @@ int initialize_gba_input_data(
     }
 
     *bsp  = bs;
-    *bhtp = bht;
+    *htp  = ht;
     *stp  = st;
 
     free(invalid_gens);
@@ -113,14 +113,14 @@ int initialize_gba_input_data(
 
 int core_gba(
         bs_t **bsp,
-        ht_t **bhtp,
+        ht_t **htp,
         stat_t **stp
         )
 {
     if ((*stp)->use_signatures == 0) {
-        return core_f4(bsp, bhtp, stp);
+        return core_f4(bsp, htp, stp);
     } else {
-        return core_sba_schreyer(bsp, bhtp, stp);
+        return core_sba_schreyer(bsp, htp, stp);
     }
 }
 

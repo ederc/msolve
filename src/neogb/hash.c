@@ -42,7 +42,7 @@ static val_t pseudo_random_number_generator(
     return (val_t)rseed;
 }
 
-ht_t *initialize_basis_hash_table(
+ht_t *initialize_hash_table(
     stat_t *st
     )
 {
@@ -65,6 +65,10 @@ ht_t *initialize_basis_hash_table(
     ht->hsz   = (hl_t)pow(2, st->init_hts);
     ht->esz   = ht->hsz / 2;
     ht->hmap  = calloc(ht->hsz, sizeof(hi_t));
+    ht->idx   = calloc(ht->hsz, sizeof(len_t));
+    ht->lhld  = 0;
+    ht->lhsz  = ht->esz/2 > 3 ? ht->esz/2 : 3;
+    ht->lh    = calloc(ht->lhsz, sizeof(len_t));
 
     if (st->nev == 0) {
         ht->evl = nv + 1; /* store also degree at first position */
@@ -311,6 +315,14 @@ void free_hash_table(
     )
 {
     ht_t *ht  = *htp;
+    if (ht->lh) {
+        free(ht->lh);
+        ht->lh = NULL;
+    }
+    if (ht->idx) {
+        free(ht->idx);
+        ht->idx = NULL;
+    }
     if (ht->hmap) {
         free(ht->hmap);
         ht->hmap = NULL;
@@ -321,7 +333,7 @@ void free_hash_table(
     }
     if (ht->ev) {
         /* note: memory is allocated as one big block,
-            *       so freeing ev[0] is enough */
+         *       so freeing ev[0] is enough */
         free(ht->ev[0]);
         free(ht->ev);
         ht->ev  = NULL;
@@ -335,39 +347,47 @@ void full_free_hash_table(
                      ht_t **htp
                      )
 {
-  ht_t *ht  = *htp;
-  if (ht->hmap) {
-    free(ht->hmap);
-    ht->hmap = NULL;
-  }
-  if (ht->hd) {
-    free(ht->hd);
-    ht->hd  = NULL;
-  }
-  if (ht->ev) {
-    /* note: memory is allocated as one big block,
-     *       so freeing ev[0] is enough */
-    free(ht->ev[0]);
-    free(ht->ev);
-    ht->ev  = NULL;
-  }
-  if (ht != NULL) {
-    if (ht->rn) {
-      free(ht->rn);
-      ht->rn = NULL;
+    ht_t *ht  = *htp;
+    if (ht->lh) {
+        free(ht->lh);
+        ht->lh = NULL;
     }
-    if (ht->dv) {
-      free(ht->dv);
-      ht->dv = NULL;
+    if (ht->idx) {
+        free(ht->idx);
+        ht->idx = NULL;
     }
-    if (ht->dm) {
-      free(ht->dm);
-      ht->dm = NULL;
+    if (ht->hmap) {
+        free(ht->hmap);
+        ht->hmap = NULL;
     }
-  }
-  free(ht);
-  ht    = NULL;
-  *htp  = ht;
+    if (ht->hd) {
+        free(ht->hd);
+        ht->hd  = NULL;
+    }
+    if (ht->ev) {
+        /* note: memory is allocated as one big block,
+         *       so freeing ev[0] is enough */
+        free(ht->ev[0]);
+        free(ht->ev);
+        ht->ev  = NULL;
+    }
+    if (ht != NULL) {
+        if (ht->rn) {
+            free(ht->rn);
+            ht->rn = NULL;
+        }
+        if (ht->dv) {
+            free(ht->dv);
+            ht->dv = NULL;
+        }
+        if (ht->dm) {
+            free(ht->dm);
+            ht->dm = NULL;
+        }
+    }
+    free(ht);
+    ht    = NULL;
+    *htp  = ht;
 }
 
 /* we just double the hash table size */
@@ -411,6 +431,12 @@ static void enlarge_hash_table(
     if (ht->hsz < (hl_t)pow(2,32)) {
         ht->hsz = 2 * ht->hsz;
         const hl_t hsz  = ht->hsz;
+        ht->idx  = realloc(ht->idx, hsz * sizeof(len_t));
+        if (ht->idx == NULL) {
+            fprintf(stderr, "Enlarging hash table failed for hsz = %lu,\n", (unsigned long)hsz);
+            fprintf(stderr, "segmentation fault will follow.\n");
+        }
+        memset(ht->idx, 0, hsz * sizeof(len_t));
         ht->hmap  = realloc(ht->hmap, hsz * sizeof(hi_t));
         if (ht->hmap == NULL) {
             fprintf(stderr, "Enlarging hash table failed for hsz = %lu,\n", (unsigned long)hsz);
@@ -1131,6 +1157,50 @@ static inline void insert_in_basis_hash_table_pivots(
     }
 }
 
+static inline void insert_multiplied_poly_in_hash_table_no_row(
+    const val_t h1,
+    const exp_t * const ea,
+    const hm_t * const b,
+    ht_t *ht
+    )
+{
+    len_t j, l;
+    exp_t *n;
+    hm_t t;
+
+    const len_t len = b[LENGTH]+OFFSET;
+    const len_t evl = ht->evl;
+
+    hd_t *hd   = ht->hd;
+    exp_t **ev = ht->ev;
+
+    l = OFFSET;
+
+    for (; l < len; ++l) {
+        const exp_t * const eb = ev[b[l]];
+
+        n = ev[ht->eld];
+        for (j = 0; j < evl; ++j) {
+            n[j]  = (exp_t)(ea[j] + eb[j]);
+        }
+
+#if PARALLEL_HASHING
+        const val_t h   = h1 + hd[b[l]].val;
+        t = check_insert_in_hash_table(n, h, ht);
+#else
+        t = insert_in_hash_table(n, ht);
+#endif
+        if (ht->idx[t] == 0) {
+            ht->lh[ht->lhld++] = t;
+            ht->idx[t]++;
+            /* mark leading terms as done for symbolic preprocessing */
+            if (l == OFFSET) {
+                ht->idx[t]++; 
+            }
+        }
+    }
+}
+
 static inline void insert_multiplied_poly_in_hash_table(
     hm_t *row,
     const val_t h1,
@@ -1363,6 +1433,27 @@ static inline hi_t get_lcm(
 #else
     return insert_in_hash_table(etmp, ht2);
 #endif
+}
+
+static inline void multiplied_poly_to_hash_table(
+    ht_t *ht,
+    const val_t hm,
+    const exp_t * const em,
+    const hm_t *poly
+    )
+{
+    /* hash table product insertions appear only here:
+     * we check for hash table enlargements first and then do the insertions
+     * without further elargment checks there */
+    while (ht->eld+poly[LENGTH] >= ht->esz) {
+        enlarge_hash_table(ht);
+    }
+    while (ht->lhsz - ht->lhld < poly[LENGTH]) {
+        ht->lhsz *= 2;
+        ht->lh = realloc(ht->lh, (unsigned long)ht->lhsz * sizeof(len_t));
+    }
+
+    insert_multiplied_poly_in_hash_table_no_row(hm, em, poly, ht);
 }
 
 static inline hm_t *multiplied_poly_to_matrix_row(
