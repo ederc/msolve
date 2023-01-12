@@ -1192,7 +1192,6 @@ static inline void insert_multiplied_poly_in_hash_table_no_row(
 #endif
         if (ht->idx[t] == 0) {
             ht->lh[ht->lhld++] = t;
-            ht->idx[t]++;
             /* mark leading terms as done for symbolic preprocessing */
             if (l == OFFSET) {
                 ht->idx[t]++; 
