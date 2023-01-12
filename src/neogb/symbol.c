@@ -199,6 +199,7 @@ static void select_spairs(
         mat_t *mat,
         ht_t *ht,
         ps_t *ps,
+        const bs_t * const bs,
         stat_t *st,
         )
 {

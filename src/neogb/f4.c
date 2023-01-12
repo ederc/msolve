@@ -367,7 +367,7 @@ int core_f4_new(
         st->current_rd = round;
 
         /* preprocess data for next reduction round */
-        select_spairs_by_minimal_degree(matrix, bs, ps, st, sht, bht, NULL);
+        select_spairs(mat, ht, ps, bs, ps, st);
         /* if we found a constant we are done, so remove all remaining pairs */
         if (bs->constant  == 1) {
             ps->ld  = 0;
