@@ -297,52 +297,23 @@ static void sba_convert_hashes_to_columns(
 }
 
 
-static void convert_hashes_to_columns_and_generate_matrix(
-	const bs_t *bs,
-	hi_t **hcmp,
-	mat_t *mat,
-	stat_t *st,
-	ht_t *sht
+static void convert_hashes_to_columns_no_matrix(
+        ht_t *ht,
+        const bs_t * const bs,
+        stat_t *st
         )
 {
-	hl_t i;
-	hi_t j, k;
-	hm_t *row;
-	int64_t nterms = 0;
+    /* timings */
+    double ct = cputime();
+    double rt = realtime();
 
-	hi_t *hcm = *hcmp;
+    realloc(ht->lh, (unsigned long)ht->lhld * sizeof(len_t));
+    sort_r(ht->lh, (unsigned long)ht->lhld, sizeof(hi_t), hcm_cmp, ht);
 
-	/* timings */
-	double ct0, ct1, rt0, rt1;
-	ct0 = cputime();
-	rt0 = realtime();
-
-	len_t hi;
-
-	const len_t mnr = mat->nr;
-	const hl_t esld = sht->eld;
-	hd_t *hds       = sht->hd;
-	hm_t **rrows    = mat->rr;
-	hm_t **trows    = mat->tr;
-
-	/* all elements in the sht hash table represent
-	 * exactly one column of the matrix */
-	hcm = realloc(hcm, (esld-1) * sizeof(hi_t));
-	for (k = 0, j = 0, i = 1; i < esld; ++i) {
-		hi  = hds[i].idx;
-
-		hcm[j++]  = i;
-		if (hi == 2) {
-			k++;
-		}
-	}
-	sort_r(hcm, (unsigned long)j, sizeof(hi_t), hcm_cmp, sht);
-
-
-
-
-
-
+    /* timings */
+    st->convert_ctime += cputime() - ct;
+    st->convert_rtime += realtime() - rt;
+}
 
 
 /*
