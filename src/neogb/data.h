@@ -110,6 +110,7 @@ struct hd_t
     val_t val;
     sdm_t sdm;
     deg_t deg;
+    len_t div;
 };
 
 /* 
