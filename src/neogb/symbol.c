@@ -699,7 +699,8 @@ static inline void find_multiplied_reducer_data(
     const hd_t * const hdb  = ht->hd;
     exp_t * const * const evb = ht->ev;
 
-    i = 0;
+    i = hdm.div;
+    if (i == 0 || bs->red[i] != 9) {
 start:
     while (i < lml && lms[i] & ns) {
         i++;
@@ -725,6 +726,7 @@ start:
         rrd[2*mat->nru]   = mul;
         rrd[2*mat->nru+1] = prev;
         mat->nru++;
+        hdm.div = i;
     }
 }
 
@@ -861,7 +863,7 @@ start:
     }
 }
 
-static void symbolic_preproessing(
+static void symbolic_preproessing_new(
         mat_t *mat,
         ht_t *ht,
         const bs_t * const bs,
@@ -871,10 +873,6 @@ static void symbolic_preproessing(
     /* timings */
     double ct = cputime();
     double rt = realtime();
-
-    /* timings */
-    st->symbol_ctime += cputime() - ct;
-    st->symbol_rtime += realtime() - rt;
 
     len_t i = 0;
 
@@ -896,6 +894,15 @@ static void symbolic_preproessing(
             }
         }
     }
+    mat->rrd = realloc(mat->rrd, (unsigned long)2*mat->nru * sizeof(hm_t));
+    mat->nr  = mat->nrl + mat->nru;
+    mat->sz  = mat->nr;
+
+    /* TODO: Tracer stuff? */
+
+    /* timings */
+    st->symbol_ctime += cputime() - ct;
+    st->symbol_rtime += realtime() - rt;
 }
 
 static void symbolic_preprocessing(
