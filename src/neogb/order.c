@@ -460,11 +460,10 @@ static int monomial_cmp_pivots_drl(
         const ht_t * const ht
         )
 {
-    len_t i;
 
+#if ORDER_COLUMNS
     const hd_t ha = ht->hd[a];
     const hd_t hb = ht->hd[b];
-#if ORDER_COLUMNS
     /* first known pivots vs. tail terms */
     if (ha.idx != hb.idx) {
         if (ha.idx < hb.idx) {
@@ -488,7 +487,7 @@ static int monomial_cmp_pivots_drl(
     }
 
     /* note: reverse lexicographical */
-    i = ht->evl-1;
+    len_t i = ht->evl-1;
     while (i > 1 && ea[i] == eb[i]) {
         --i;
     }
