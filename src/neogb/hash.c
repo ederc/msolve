@@ -66,6 +66,7 @@ ht_t *initialize_hash_table(
     ht->esz   = ht->hsz / 2;
     ht->hmap  = calloc(ht->hsz, sizeof(hi_t));
     ht->idx   = calloc(ht->hsz, sizeof(len_t));
+    ht->div   = calloc(ht->hsz, sizeof(len_t));
     ht->lhld  = 0;
     ht->lhsz  = ht->esz/2 > 3 ? ht->esz/2 : 3;
     ht->lh    = calloc(ht->lhsz, sizeof(len_t));
@@ -319,6 +320,10 @@ void free_hash_table(
         free(ht->lh);
         ht->lh = NULL;
     }
+    if (ht->div) {
+        free(ht->div);
+        ht->div = NULL;
+    }
     if (ht->idx) {
         free(ht->idx);
         ht->idx = NULL;
@@ -351,6 +356,10 @@ void full_free_hash_table(
     if (ht->lh) {
         free(ht->lh);
         ht->lh = NULL;
+    }
+    if (ht->div) {
+        free(ht->div);
+        ht->div = NULL;
     }
     if (ht->idx) {
         free(ht->idx);
@@ -431,6 +440,12 @@ static void enlarge_hash_table(
     if (ht->hsz < (hl_t)pow(2,32)) {
         ht->hsz = 2 * ht->hsz;
         const hl_t hsz  = ht->hsz;
+        ht->div  = realloc(ht->div, hsz * sizeof(len_t));
+        if (ht->idx == NULL) {
+            fprintf(stderr, "Enlarging hash table failed for hsz = %lu,\n", (unsigned long)hsz);
+            fprintf(stderr, "segmentation fault will follow.\n");
+        }
+        memset(ht->div, 0, hsz * sizeof(len_t));
         ht->idx  = realloc(ht->idx, hsz * sizeof(len_t));
         if (ht->idx == NULL) {
             fprintf(stderr, "Enlarging hash table failed for hsz = %lu,\n", (unsigned long)hsz);

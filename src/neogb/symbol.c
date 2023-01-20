@@ -699,7 +699,7 @@ static inline void find_multiplied_reducer_data(
     const hd_t * const hdb  = ht->hd;
     exp_t * const * const evb = ht->ev;
 
-    i = hdm.div;
+    i = ht->div[m];
     if (i == 0 || bs->red[i] != 9) {
 start:
     while (i < lml && lms[i] & ns) {
@@ -726,7 +726,7 @@ start:
         rrd[2*mat->nru]   = mul;
         rrd[2*mat->nru+1] = prev;
         mat->nru++;
-        hdm.div = i;
+        hd->div[m] = i;
     }
 }
 

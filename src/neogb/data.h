@@ -110,7 +110,6 @@ struct hd_t
     val_t val;
     sdm_t sdm;
     deg_t deg;
-    len_t div;
 };
 
 /* 
@@ -143,6 +142,7 @@ struct ht_t
     len_t lhld;   /* load of local hashes */
     len_t lhsz;   /* size of local hashes */
     len_t *idx;   /* indices for symbolic preprocessin and matrix generation */
+    len_t *div;   /* caches diviro 
     len_t elo;    /* load of exponent vector before current step */
     hl_t eld;     /* load of exponent vector */
     hl_t esz;     /* size of exponent vector */
