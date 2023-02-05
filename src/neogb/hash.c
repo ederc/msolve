@@ -1172,6 +1172,62 @@ static inline void insert_in_basis_hash_table_pivots(
     }
 }
 
+static inline hm_t find_in_hash_table(
+        const val_t val,
+        const exp_t ev,
+        const ht_t * const ht
+        )
+{
+    len_t i = 0, j = 0;
+    const hi_t mod = (hi_t)(ht->hsz - 1);
+restart:
+    for (; i < ht->hsz; ++i) {
+        k = (hi_t)((k+i) & mod);
+        const hi_t hm = ht->hmap[k];
+        if (ht->hd[hm].val != val) {
+            continue;
+        }
+        const exp_t * const ehm = ht->ev[hm];
+        for (j = 0; j < ht->evl-1; j += 2) {
+            if (ev[j] != ehm[j] || ev[j+1] != ehm[j+1]) {
+                i++;
+                goto restart;
+            }
+        }
+        if (ev[ht->evl-1] != ehm[ht->evl-1]) {
+            i++;
+            goto restart;
+        }
+        return hm;
+    }
+    return -1;
+}
+
+static inline hm_t get_multiplied_monomial(
+    const hm_t mul,
+    const exp_t * const emul,
+    const hm_t  mon,
+    const ht_t * const ht
+    )
+{
+    /* generate hash value and exponent vector for
+    multiplied monomial */
+    const len_t len = b[LENGTH]+OFFSET;
+    const len_t evl = ht->evl;
+
+    hd_t *hd   = ht->hd;
+
+    const exp_t * const emon = ht->ev[mon];
+    exp_t *ev = ht->ev[0];
+    for (i = 0; i < evl; ++i) {
+        ev[i] = emul[i] + emon[i];
+    }
+    const val_t val = hd[mul].val + hd[mon].val;
+
+    return find_in_hash_table(val, ev, ht);
+}
+
+
 static inline void insert_multiplied_poly_in_hash_table_no_row(
     const val_t h1,
     const exp_t * const ea,

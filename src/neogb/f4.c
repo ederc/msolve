@@ -368,6 +368,9 @@ int core_f4_new(
 
         /* preprocess data for next reduction round */
         select_spairs(mat, ht, ps, bs, ps, st);
+        symbolic_preprocessing_new(mat, ht, bs, st);
+        convert_hashes_to_columns_no_matrix(ht, bs, st);
+        generate_reducer_matrix_part(mat, ht, bs, st);
         /* if we found a constant we are done, so remove all remaining pairs */
         if (bs->constant  == 1) {
             ps->ld  = 0;

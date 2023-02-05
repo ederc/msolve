@@ -320,142 +320,86 @@ static void convert_hashes_to_columns_no_matrix(
     st->convert_rtime += realtime() - rt;
 }
 
+static inline void set_matrix_meta_data(
+        len_t *md,
+        const len_t idx,
+        const hm_t mul,
+        const hm_t * const poly,
+        const ht_t * const ht
+        )
+{
+    md[idx] = calloc(OFFSET, sizeof(len_t));
 
-/*
-
-TODO: If we generate the reducer rows here we also need to
-      trace the mulitplied reducer data in BINDEX and MULT here.
-
-*/
-
-
-
-
-
-
-
-
-
-
-
-    /* printf("hcm\n");
-	 * for (int ii=0; ii<j; ++ii) {
-	 *     printf("hcm[%d] = %d | idx %u | deg %u |", ii, hcm[ii], hds[hcm[ii]].idx, sht->ev[hcm[ii]][DEG]+sht->ev[hcm[ii]][sht->ebl]);
-	 *     for (int jj = 0; jj < sht->evl; ++jj) {
-	 *         printf("%d ", sht->ev[hcm[ii]][jj]);
-	 *     }
-	 *     printf("\n");
-	 * } */
-
-	mat->ncl  = k;
-	mat->ncr  = (len_t)esld - 1 - mat->ncl;
-
-	st->num_rowsred +=  mat->nrl;
-
-	/* store the other direction (hash -> column) */
-	const hi_t ld = (hi_t)(esld - 1);
-	for (k = 0; k < ld; ++k) {
-		hds[hcm[k]].idx  = (hi_t)k;
-	}
-
-	mat->cd_rr = realloc(mat->cd_rr, (unsigned long)mat->nru * sizeof(cd_t *);
-	/* map column positions to matrix rows */
-#pragma omp parallel for num_threads(st->nthrds) private(k, j)
-	for (k = 0; k < mat->nru; ++k) {
-		hm_t mul	=	pre_rr[2*k];
-		hm_t *poly	=	bs->hm[pre_rr[2*k+1]];
-
-		mat->cd_rr[k] = malloc((unsigned long)m(at->nc + CD_OFFSET) * sizeof(cd_t));
-		mat->cd_rr[k][CD_COEFFS] = 
-
-		const len_t os  = rrows[k][PRELOOP];
-		const len_t len = rrows[k][LENGTH];
-		row = rrows[k] + OFFSET;
-		len_t prev = 0;
-		len_t tmp;
-		for (j = 0; j < os; ++j) {
-			tmp = row[j];
-			row[j]  = hds[row[j]].idx - prev;
-			prev	= hds[tmp].idx;
-		}
-		for (; j < len; j += UNROLL) {
-			tmp = row[j];
-			row[j]		= hds[row[j]].idx - prev;
-			prev		= hds[tmp].idx;
-			tmp = row[j+1];
-			row[j+1]	= hds[row[j+1]].idx - prev;
-			prev		= hds[tmp].idx;
-			tmp = row[j+2];
-			row[j+2]	= hds[row[j+2]].idx - prev;
-			prev		= hds[tmp].idx;
-			tmp = row[j+3];
-			row[j+3]	= hds[row[j+3]].idx - prev;
-			prev		= hds[tmp].idx;
-		}
-	}
-	for (k = 0; k < mat->nru; ++k) {
-		nterms  +=  rrows[k][LENGTH];
-	}
-	mat->cd_tr = realloc(mat->cd_tr, (unsigned long)mat->nrl * sizeof(cd_t *);
-#pragma omp parallel for num_threads(st->nthrds) private(k, j)
-	for (k = 0; k < mat->nrl; ++k) {
-		const len_t os  = trows[k][PRELOOP];
-		const len_t len = trows[k][LENGTH];
-		row = trows[k] + OFFSET;
-		len_t prev = 0;
-		len_t tmp;
-		for (j = 0; j < os; ++j) {
-			tmp = row[j];
-			row[j]  = hds[row[j]].idx - prev;
-			prev	= hds[tmp].idx;
-		}
-		for (; j < len; j += UNROLL) {
-			tmp = row[j];
-			row[j]		= hds[row[j]].idx - prev;
-			prev		= hds[tmp].idx;
-			tmp = row[j+1];
-			row[j+1]	= hds[row[j+1]].idx - prev;
-			prev		= hds[tmp].idx;
-			tmp = row[j+2];
-			row[j+2]	= hds[row[j+2]].idx - prev;
-			prev		= hds[tmp].idx;
-			tmp = row[j+3];
-			row[j+3]	= hds[row[j+3]].idx - prev;
-			prev		= hds[tmp].idx;
-		}
-	}
-	for (k = 0; k < mat->nrl; ++k) {
-		nterms  +=  trows[k][LENGTH];
-	}
-
-	/* next we sort each row by the new colum order due
-	 * to known / unkown pivots */
-
-	/* NOTE: As strange as it may sound, we do not need to sort the rows.
-	 * When reducing, we copy them to dense rows, there we copy the coefficients
-	 * at the right place and reduce then. For the reducers itself it is not
-	 * important in which order the terms are represented as long as the first
-	 * term is the lead term, which is always true. Once a row is finally reduced
-	 * it is copied back to a sparse representation, now in the correct term
-	 * order since it is coming from the correctly sorted dense row. So all newly
-	 * added elements have all their terms sorted correctly w.r.t. the given
-	 * monomial order. */
-
-	/* compute density of matrix */
-	nterms  *=  100; /* for percentage */
-	double density = (double)nterms / (double)mnr / (double)mat->nc;
-
-	/* timings */
-	ct1 = cputime();
-	rt1 = realtime();
-	st->convert_ctime +=  ct1 - ct0;
-	st->convert_rtime +=  rt1 - rt0;
-	if (st->info_level > 1) {
-		printf(" %7d x %-7d %8.2f%%", mat->nr, mat->nc, density);
-		fflush(stdout);
-	}
-	*hcmp = hcm;
+    md[DEG]     = ht->hd[mul].deg + poly[DEG];
+    md[BINDEX]  = poly[BINDEX];
+    md[MULT]    = mul;
+    md[COEFFS]  = poly[COEFFS];
+    md[PRELOOP] = poly[PRELOOP];
+    md[LENGTH]  = poly[LENGTH];
 }
+
+static inline void set_matrix_column_data(
+        cd_t *cd,
+        len_t *lcd,
+        const len_t idx,
+        const hm_t mul,
+        const exp_t * const emul,
+        const hm_t * const poly,
+        const ht_t * const ht
+        )
+{
+    len_t i, j, k, d;
+    const len_t len = poly[LENGTH];
+    const hd_t * const hd = ht->hd;
+
+    cd[idx]  = calloc((unsigned long)len, sizeof(cd_t));
+    lcd[idx] = calloc((unsigned long)len, sizeof(len_t));
+
+    k = 0;
+    j = 0; /* counts number of column differences > 2^8 - 1 */
+    for (i = 0; i < len; ++i) {
+        const len_t idx  = hd[get_multiplied_monomial(
+                                mul, emul, poly[OFFSET], ht)].idx;
+        d = idx - k;
+        if (d < CD_SIZE) {
+            cd[idx][i] = (cd_t)d;
+        } else {
+            cd[idx][i]    = 0
+            lcd[idx][j++] = d;
+        }
+        k = idx;
+    }
+    lcd[idx] = realloc(lcd[idx], (unsigned long)j * sizeof(len_t));
+}
+
+static void generate_reducer_matrix_part(
+        mat_t *mat,
+        const ht_t * const ht,
+        const bs_t * const bs,
+        stat_t *st
+        )
+{
+    const len_t *rrd      = mat->rrd;
+    const hd_t * const hd = ht->hd;
+
+    /* we directly allocate space for all rows, not only for the
+    known pivots, but also for the later on newly computed ones */
+    mat->cd  = calloc((unsigned long)mat->nr, sizeof(cd_t *));
+    mat->lcd = calloc((unsigned long)mat->nr, sizeof(len_t *));
+    mat->md  = calloc((unsigned long)mat->nr, sizeof(len_t *));
+
+    for (i = 0; i < mat->nru; ++i) {
+        const hm_t mul   = rrd[2*i];
+        const exp_t emul = ht->ev[mul];
+        const hm_t +poly = bs->hm[rrd[2*i+1]];
+        /* get multiplied leading term to insert at right place */
+        const len_t idx  = hd[get_multiplied_monomial(
+                                mul, emul, poly[OFFSET], ht)].idx;
+        set_matrix_meta_data(mat->md, idx, mul, poly, ht);
+        set_matrix_column_data(mat->cd, mat->lcd, idx, mul, emul, poly, ht);
+    }
+}
+
 
 static void convert_hashes_to_columns(
         hi_t **hcmp,

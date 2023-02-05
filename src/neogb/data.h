@@ -61,6 +61,7 @@ inline omp_int_t omp_get_max_threads(void) { return 1;}
 
 /* macros for column difference meta data */
 #define CD_BITSIZE 8
+#define CD_SIZE 256
 #define CD_METASIZE (32/CD_BITSIZE)
 #define CD_OFFSET  (6*CD_METASIZE)           /* real data starts at OFFSET */
 #define CD_LENGTH  (OFFSET-(1*CD_METASIZE))  /* length of the row */
@@ -225,8 +226,9 @@ struct mat_t
                            (multiplier, basis_index) */
     len_t *rrd;         /* pre data for rr rows consisting of tuples
                            (multiplier, basis_index) */
-	cd_t **cd_tr;		/* column difference storage for tr*/
-	cd_t **cd_rr;		/* column difference storage for rr*/
+    cd_t **cd;          /* column difference storage for rr*/
+    len_t **lcd;        /* longer than 8bit column differences for rr */
+    len_t **md;         /* meta data for corresponding row */
     hm_t **tr;          /* rows to be reduced of the matrix, only column */
                         /* entries, coefficients are handled via linking */
                         /* to coefficient arrays */
