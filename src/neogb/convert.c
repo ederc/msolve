@@ -62,12 +62,12 @@ static void convert_multipliers_to_columns(
 
     /* store the other direction (hash -> column) */
     for (i = 0; i < sat->ld; ++i) {
-        ht->hd[hcm[i]].idx  = (hi_t)i;
+        ht->idx[hcm[i]]  = (hi_t)i;
     }
 
     /* map column positions to mul entries*/
     for (i = 0; i < sat->ld; ++i) {
-        sat->hm[i][MULT]  =  ht->hd[sat->hm[i][MULT]].idx;
+        sat->hm[i][MULT]  =  ht->idx[sat->hm[i][MULT]];
     }
     /* timings */
     ct1 = cputime();
@@ -101,14 +101,14 @@ static void convert_hashes_to_columns_sat(
 
     const len_t mnr = mat->nr;
     const hl_t esld = sht->eld;
-    hd_t *hds       = sht->hd;
+    len_t *hds      = sht->idx;
     hm_t **rrows    = mat->rr;
 
     /* all elements in the sht hash table represent
      * exactly one column of the matrix */
     hcm = realloc(hcm, (esld-1) * sizeof(hi_t));
     for (k = 0, j = 0, i = 1; i < esld; ++i) {
-        hi  = hds[i].idx;
+        hi  = hds[i];
 
         hcm[j++]  = i;
         if (hi == 2) {
@@ -134,7 +134,7 @@ static void convert_hashes_to_columns_sat(
     /* store the other direction (hash -> column) */
     const hi_t ld = (hi_t)(esld - 1);
     for (k = 0; k < ld; ++k) {
-        hds[hcm[k]].idx  = (hi_t)k;
+        hds[hcm[k]]  = (hi_t)k;
     }
 
     /* map column positions to reducer matrix */
@@ -144,13 +144,13 @@ static void convert_hashes_to_columns_sat(
         const len_t len = rrows[k][LENGTH];
         row = rrows[k] + OFFSET;
         for (j = 0; j < os; ++j) {
-            row[j]  = hds[row[j]].idx;
+            row[j]  = hds[row[j]];
         }
         for (; j < len; j += UNROLL) {
-            row[j]    = hds[row[j]].idx;
-            row[j+1]  = hds[row[j+1]].idx;
-            row[j+2]  = hds[row[j+2]].idx;
-            row[j+3]  = hds[row[j+3]].idx;
+            row[j]    = hds[row[j]];
+            row[j+1]  = hds[row[j+1]];
+            row[j+2]  = hds[row[j+2]];
+            row[j+3]  = hds[row[j+3]];
         }
     }
     for (k = 0; k < mat->nru; ++k) {
@@ -163,13 +163,13 @@ static void convert_hashes_to_columns_sat(
         const len_t len = sat->hm[k][LENGTH];
         row = sat->hm[k] + OFFSET;
         for (j = 0; j < os; ++j) {
-            row[j]  = hds[row[j]].idx;
+            row[j]  = hds[row[j]];
         }
         for (; j < len; j += UNROLL) {
-            row[j]    = hds[row[j]].idx;
-            row[j+1]  = hds[row[j+1]].idx;
-            row[j+2]  = hds[row[j+2]].idx;
-            row[j+3]  = hds[row[j+3]].idx;
+            row[j]    = hds[row[j]];
+            row[j+1]  = hds[row[j+1]];
+            row[j+2]  = hds[row[j+2]];
+            row[j+3]  = hds[row[j+3]];
         }
     }
     for (k = 0; k < mat->nrl; ++k) {
@@ -227,7 +227,7 @@ static void sba_convert_hashes_to_columns(
 
     const len_t nr = smat->cld;
     const hl_t eld = ht->eld;
-    hd_t *hd       = ht->hd;
+    len_t *hd      = ht->idx;
     hm_t **cr      = smat->cr;
 
     hcm = realloc(hcm, (unsigned long)eld * sizeof(hi_t));
@@ -235,8 +235,8 @@ static void sba_convert_hashes_to_columns(
     for (i = 0; i < nr; ++i) {
         const len_t len = SM_OFFSET + cr[i][SM_LEN];
         for (j = SM_OFFSET; j < len; ++j) {
-            if (hd[cr[i][j]].idx == 0) {
-                hd[cr[i][j]].idx = 1;
+            if (hd[cr[i][j]]== 0) {
+                hd[cr[i][j]]= 1;
                 hcm[k++] = cr[i][j];
             }
         }
@@ -259,7 +259,7 @@ static void sba_convert_hashes_to_columns(
     /* store the other direction (hash -> column) */
     const hi_t ld = k;
     for (i = 0; i < ld; ++i) {
-        hd[hcm[i]].idx = (hi_t)i;
+        hd[hcm[i]] = (hi_t)i;
     }
 
     /* map column positions to matrix rows */
@@ -269,13 +269,13 @@ static void sba_convert_hashes_to_columns(
         const len_t len = cr[i][SM_LEN];
         row = cr[i] + SM_OFFSET;
         for (j = 0; j < os; ++j) {
-            row[j]  = hd[row[j]].idx;
+            row[j]  = hd[row[j]];
         }
         for (; j < len; j += UNROLL) {
-            row[j]    = hd[row[j]].idx;
-            row[j+1]  = hd[row[j+1]].idx;
-            row[j+2]  = hd[row[j+2]].idx;
-            row[j+3]  = hd[row[j+3]].idx;
+            row[j]    = hd[row[j]];
+            row[j+1]  = hd[row[j+1]];
+            row[j+2]  = hd[row[j+2]];
+            row[j+3]  = hd[row[j+3]];
         }
         nterms += len;
     }
@@ -322,26 +322,24 @@ static void convert_hashes_to_columns_no_matrix(
 
 static inline void set_matrix_meta_data(
         len_t *md,
-        const len_t idx,
         const hm_t mul,
         const hm_t * const poly,
         const ht_t * const ht
         )
 {
-    md[idx] = calloc(OFFSET, sizeof(len_t));
+    md = calloc(OFFSET, sizeof(len_t));
 
     md[DEG]     = ht->hd[mul].deg + poly[DEG];
     md[BINDEX]  = poly[BINDEX];
     md[MULT]    = mul;
-    md[COEFFS]  = poly[COEFFS];
+    md[COEFFS]  = poly[COEFFS];
     md[PRELOOP] = poly[PRELOOP];
-    md[LENGTH]  = poly[LENGTH];
+    md[LENGTH]  = poly[LENGTH];
 }
 
 static inline void set_matrix_column_data(
         cd_t *cd,
         len_t *lcd,
-        const len_t idx,
         const hm_t mul,
         const exp_t * const emul,
         const hm_t * const poly,
@@ -350,26 +348,26 @@ static inline void set_matrix_column_data(
 {
     len_t i, j, k, d;
     const len_t len = poly[LENGTH];
-    const hd_t * const hd = ht->hd;
+    const len_t * const hi = ht->idx;
 
-    cd[idx]  = calloc((unsigned long)len, sizeof(cd_t));
-    lcd[idx] = calloc((unsigned long)len, sizeof(len_t));
+    cd  = calloc((unsigned long)len, sizeof(cd_t));
+    lcd = calloc((unsigned long)len, sizeof(len_t));
 
     k = 0;
     j = 0; /* counts number of column differences > 2^8 - 1 */
     for (i = 0; i < len; ++i) {
-        const len_t idx  = hd[get_multiplied_monomial(
-                                mul, emul, poly[OFFSET], ht)].idx;
+        const len_t idx  = hi[get_multiplied_monomial(
+                                mul, emul, poly[OFFSET], ht)];
         d = idx - k;
         if (d < CD_SIZE) {
-            cd[idx][i] = (cd_t)d;
+            cd[i] = (cd_t)d;
         } else {
-            cd[idx][i]    = 0
-            lcd[idx][j++] = d;
+            cd[i]    = 0;
+            lcd[j++] = d;
         }
         k = idx;
     }
-    lcd[idx] = realloc(lcd[idx], (unsigned long)j * sizeof(len_t));
+    lcd = realloc(lcd, (unsigned long)j * sizeof(len_t));
 }
 
 static void generate_reducer_matrix_part(
@@ -379,8 +377,10 @@ static void generate_reducer_matrix_part(
         stat_t *st
         )
 {
-    const len_t *rrd      = mat->rrd;
-    const hd_t * const hd = ht->hd;
+    len_t i = 0;
+
+    const len_t *rrd       = mat->rrd;
+    const len_t * const hi = ht->idx;
 
     /* we directly allocate space for all rows, not only for the
     known pivots, but also for the later on newly computed ones */
@@ -389,14 +389,14 @@ static void generate_reducer_matrix_part(
     mat->md  = calloc((unsigned long)mat->nr, sizeof(len_t *));
 
     for (i = 0; i < mat->nru; ++i) {
-        const hm_t mul   = rrd[2*i];
-        const exp_t emul = ht->ev[mul];
-        const hm_t +poly = bs->hm[rrd[2*i+1]];
+        const hm_t mul    = rrd[2*i];
+        const exp_t *emul = ht->ev[mul];
+        const hm_t *poly  = bs->hm[rrd[2*i+1]];
         /* get multiplied leading term to insert at right place */
-        const len_t idx  = hd[get_multiplied_monomial(
-                                mul, emul, poly[OFFSET], ht)].idx;
-        set_matrix_meta_data(mat->md, idx, mul, poly, ht);
-        set_matrix_column_data(mat->cd, mat->lcd, idx, mul, emul, poly, ht);
+        const len_t idx = hi[get_multiplied_monomial(
+                                mul, emul, poly[OFFSET], ht)];
+        set_matrix_meta_data(mat->md[idx], mul, poly, ht);
+        set_matrix_column_data(mat->cd[idx], mat->lcd[idx], mul, emul, poly, ht);
     }
 }
 
@@ -424,7 +424,7 @@ static void convert_hashes_to_columns(
 
     const len_t mnr = mat->nr;
     const hl_t esld = sht->eld;
-    hd_t *hds       = sht->hd;
+    len_t *hds      = sht->idx;
     hm_t **rrows    = mat->rr;
     hm_t **trows    = mat->tr;
 
@@ -432,7 +432,7 @@ static void convert_hashes_to_columns(
      * exactly one column of the matrix */
     hcm = realloc(hcm, (esld-1) * sizeof(hi_t));
     for (k = 0, j = 0, i = 1; i < esld; ++i) {
-        hi  = hds[i].idx;
+        hi  = hds[i];
 
         hcm[j++]  = i;
         if (hi == 2) {
@@ -458,7 +458,7 @@ static void convert_hashes_to_columns(
     /* store the other direction (hash -> column) */
     const hi_t ld = (hi_t)(esld - 1);
     for (k = 0; k < ld; ++k) {
-        hds[hcm[k]].idx  = (hi_t)k;
+        hds[hcm[k]]= (hi_t)k;
     }
 
     /* map column positions to matrix rows */
@@ -471,22 +471,22 @@ static void convert_hashes_to_columns(
 		len_t tmp;
         for (j = 0; j < os; ++j) {
 			tmp = row[j];
-            row[j]  = hds[row[j]].idx - prev;
-			prev	= hds[tmp].idx;
+            row[j]  = hds[row[j]] - prev;
+			prev	= hds[tmp];
         }
         for (; j < len; j += UNROLL) {
 			tmp = row[j];
-            row[j]		= hds[row[j]].idx - prev;
-			prev		= hds[tmp].idx;
+            row[j]		= hds[row[j]] - prev;
+			prev		= hds[tmp];
 			tmp = row[j+1];
-            row[j+1]	= hds[row[j+1]].idx - prev;
-			prev		= hds[tmp].idx;
+            row[j+1]	= hds[row[j+1]] - prev;
+			prev		= hds[tmp];
 			tmp = row[j+2];
-            row[j+2]	= hds[row[j+2]].idx - prev;
-			prev		= hds[tmp].idx;
+            row[j+2]	= hds[row[j+2]] - prev;
+			prev		= hds[tmp];
 			tmp = row[j+3];
-            row[j+3]	= hds[row[j+3]].idx - prev;
-			prev		= hds[tmp].idx;
+            row[j+3]	= hds[row[j+3]] - prev;
+			prev		= hds[tmp];
         }
     }
     for (k = 0; k < mat->nru; ++k) {
@@ -501,22 +501,22 @@ static void convert_hashes_to_columns(
 		len_t tmp;
         for (j = 0; j < os; ++j) {
 			tmp = row[j];
-            row[j]  = hds[row[j]].idx - prev;
-			prev	= hds[tmp].idx;
+            row[j]  = hds[row[j]] - prev;
+			prev	= hds[tmp];
         }
         for (; j < len; j += UNROLL) {
 			tmp = row[j];
-            row[j]		= hds[row[j]].idx - prev;
-			prev		= hds[tmp].idx;
+            row[j]		= hds[row[j]] - prev;
+			prev		= hds[tmp];
 			tmp = row[j+1];
-            row[j+1]	= hds[row[j+1]].idx - prev;
-			prev		= hds[tmp].idx;
+            row[j+1]	= hds[row[j+1]] - prev;
+			prev		= hds[tmp];
 			tmp = row[j+2];
-            row[j+2]	= hds[row[j+2]].idx - prev;
-			prev		= hds[tmp].idx;
+            row[j+2]	= hds[row[j+2]] - prev;
+			prev		= hds[tmp];
 			tmp = row[j+3];
-            row[j+3]	= hds[row[j+3]].idx - prev;
-			prev		= hds[tmp].idx;
+            row[j+3]	= hds[row[j+3]] - prev;
+			prev		= hds[tmp];
         }
     }
     for (k = 0; k < mat->nrl; ++k) {

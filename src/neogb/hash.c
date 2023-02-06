@@ -1153,11 +1153,11 @@ static inline void insert_in_basis_hash_table_pivots(
     
     exp_t *evt  = (exp_t *)malloc(
         (unsigned long)(st->nthrds * evl) * sizeof(exp_t));
+	len_t prev = 0;
 #if PARALLEL_HASHING
 #pragma omp parallel for num_threads(st->nthrds) \
     private(l)
 #endif
-	len_t prev = 0;
     for (l = OFFSET; l < len; ++l) {
         exp_t *evtl = evt + (omp_get_thread_num() * evl);
         memcpy(evtl, evs[hcm[row[l]+prev]],
@@ -1174,11 +1174,11 @@ static inline void insert_in_basis_hash_table_pivots(
 
 static inline hm_t find_in_hash_table(
         const val_t val,
-        const exp_t ev,
+        const exp_t *ev,
         const ht_t * const ht
         )
 {
-    len_t i = 0, j = 0;
+    len_t i = 0, j = 0, k = 0;
     const hi_t mod = (hi_t)(ht->hsz - 1);
 restart:
     for (; i < ht->hsz; ++i) {
@@ -1210,9 +1210,10 @@ static inline hm_t get_multiplied_monomial(
     const ht_t * const ht
     )
 {
+    len_t i = 0;
+
     /* generate hash value and exponent vector for
     multiplied monomial */
-    const len_t len = b[LENGTH]+OFFSET;
     const len_t evl = ht->evl;
 
     hd_t *hd   = ht->hd;
@@ -1388,7 +1389,7 @@ void reset_hash_table_indices(
         )
 {
     for (len_t i = 0; i < len; ++i) {
-        ht->hd[hcm[i]].idx = 0;
+        ht->idx[hcm[i]] = 0;
     }
 }
 
