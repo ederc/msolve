@@ -244,14 +244,14 @@ static void reduce_basis(
     for (i = 0; i < bs->lml; ++i) {
         mat->rr[mat->nr] = multiplied_poly_to_matrix_row(
                 sht, bht, 0, etmp, bs->hm[bs->lmps[i]]);
-        sht->hd[mat->rr[mat->nr][OFFSET]].idx  = 1;
+        sht->idx[mat->rr[mat->nr][OFFSET]]  = 1;
         mat->nr++;
     }
     mat->nc = mat->nr; /* needed for correct counting in symbol */
     symbolic_preprocessing(mat, bs, st, sht, NULL, bht);
     /* no known pivots, we need mat->ncl = 0, so set all indices to 1 */
     for (i = 0; i < sht->eld; ++i) {
-        sht->hd[i].idx = 1;
+        sht->idx[i]= 1;
     }
 
     /* free data from bht, we use sht later on */
@@ -327,14 +327,11 @@ int core_f4_new(
         stat_t *st  /* statistics storing meta data */
         )
 {
-    int32_t round, i, j;
+    int32_t round;
 
     /* timings for one round */
     double rrt, crt;
 
-    /* hashes-to-columns map, initialized with length 1, is reallocated
-       in each call when generating matrices for linear algebra */
-    hi_t *hcm = (hi_t *)malloc(sizeof(hi_t));
     /* matrix holding sparse information generated
        during symbolic preprocessing */
     mat_t *mat = (mat_t *)calloc(1, sizeof(mat_t));
@@ -367,7 +364,7 @@ int core_f4_new(
         st->current_rd = round;
 
         /* preprocess data for next reduction round */
-        select_spairs(mat, ht, ps, bs, ps, st);
+        select_spairs(mat, ht, ps, bs, st);
         symbolic_preprocessing_new(mat, ht, bs, st);
         convert_hashes_to_columns_no_matrix(ht, bs, st);
         generate_reducer_matrix_part(mat, ht, bs, st);
@@ -376,13 +373,16 @@ int core_f4_new(
             ps->ld  = 0;
         }
         if (st->info_level > 1) {
-            printf("%13.2f sec\n", realtime() - rrt);
+            printf("real: %13.2f sec | cpu: %13.2f sec\n",
+                    realtime() - rrt, cputime() - crt);
         }
     }
     if (st->info_level > 1) {
         printf("-------------------------------------------------\
 ----------------------------------------\n");
     }
+
+    return 0;
 }
 
 int core_f4(
@@ -441,7 +441,7 @@ int core_f4(
       /* preprocess data for next reduction round */
       select_spairs_by_minimal_degree(mat, bs, ps, st, sht, bht, NULL);
       symbolic_preprocessing(mat, bs, st, sht, NULL, bht);
-      convert_hashes_to_columns_and_generate_matrix(&hcm, mat, st, sht);
+      convert_hashes_to_columns(&hcm, mat, st, sht);
       /* sort_matrix_rows_decreasing(mat->rr, mat->nru); */
       sort_matrix_rows_increasing(mat->tr, mat->nrl);
       /* print pbm files of the matrices */

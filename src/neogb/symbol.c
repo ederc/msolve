@@ -865,7 +865,7 @@ start:
     }
 }
 
-static void symbolic_preproessing_new(
+static void symbolic_preprocessing_new(
         mat_t *mat,
         ht_t *ht,
         const bs_t * const bs,
