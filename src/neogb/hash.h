@@ -38,7 +38,7 @@ void reset_hash_table_indices(
         const len_t len
         );
 
-ht_t *initialize_basis_hash_table(
+ht_t *initialize_hash_table(
     stat_t *st
     );
 

@@ -26,7 +26,7 @@ static void initialize_mstrace(mstrace_t msd, stat_t *st){
    *******************/
   msd->bs_qq = initialize_basis(st);
   /* initialize basis hash table, update hash table, symbolic hash table */
-  msd->bht = initialize_basis_hash_table(st);
+  msd->bht = initialize_hash_table(st);
   msd->tht = initialize_secondary_hash_table(msd->bht, st);
 
   /* generate array to store modular bases */

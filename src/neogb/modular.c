@@ -1935,7 +1935,7 @@ int64_t f4_trace_julia(
     *******************/
     bs_t *bs_qq = initialize_basis(st);
     /* initialize basis hash table, update hash table, symbolic hash table */
-    ht_t *bht = initialize_basis_hash_table(st);
+    ht_t *bht = initialize_hash_table(st);
     /* hash table to store the hashes of the multiples of
      * the basis elements stored in the trace */
     ht_t *tht = initialize_secondary_hash_table(bht, st);
