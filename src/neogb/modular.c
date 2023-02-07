@@ -134,14 +134,14 @@ void reduce_basis_no_hash_table_switching(
     for (i = 0; i < bs->lml; ++i) {
         mat->rr[mat->nr] = multiplied_poly_to_matrix_row(
                 sht, bht, 0, etmp, bs->hm[bs->lmps[i]]);
-        sht->hd[mat->rr[mat->nr][OFFSET]].idx  = 1;
+        sht->idx[mat->rr[mat->nr][OFFSET]] = 1;
         mat->nr++;
     }
     mat->nc = mat->nr; /* needed for correct counting in symbol */
     symbolic_preprocessing(mat, bs, st, sht, NULL, bht);
     /* no known pivots, we need mat->ncl = 0, so set all indices to 1 */
     for (i = 0; i < sht->eld; ++i) {
-        sht->hd[i].idx = 1;
+        sht->idx[i] = 1;
     }
 
     /* generate hash <-> column mapping */
@@ -574,7 +574,7 @@ bs_t *f4sat_trace_application_test_phase(
                  * so we do not need the rows anymore */
                 convert_columns_to_hashes(sat, hcm, hcmm);
                 for (i = 0; i < sat->ld; ++i) {
-                    bht->hd[hcmm[i]].idx = 0;
+                    bht->idx[hcmm[i]] = 0;
                 }
             }
             clear_matrix(mat);
@@ -879,7 +879,7 @@ bs_t *f4sat_trace_application_phase(
                  * so we do not need the rows anymore */
                 convert_columns_to_hashes(sat, hcm, hcmm);
                 for (i = 0; i < sat->ld; ++i) {
-                    bht->hd[hcmm[i]].idx = 0;
+                    bht->idx[hcmm[i]] = 0;
                 }
             }
             clear_matrix(mat);
@@ -1390,7 +1390,7 @@ end_sat_step:
                      * so we do not need the rows anymore */
                     convert_columns_to_hashes(sat, hcm, hcmm);
                     for (i = 0; i < sat->ld; ++i) {
-                        bht->hd[hcmm[i]].idx = 0;
+                        bht->idx[hcmm[i]] = 0;
                     }
                 }
                 clear_matrix(mat);
@@ -1727,7 +1727,7 @@ bs_t *f4sat_trace_learning_phase_2(
                  * so we do not need the rows anymore */
                 convert_columns_to_hashes(sat, hcm, hcmm);
                 for (i = 0; i < sat->ld; ++i) {
-                    bht->hd[hcmm[i]].idx = 0;
+                    bht->idx[hcmm[i]]= 0;
                 }
             }
             clear_matrix(mat);

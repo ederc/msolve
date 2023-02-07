@@ -675,8 +675,8 @@ static inline void find_multiplied_reducer_data(
     len_t i, k;
 
     bi_t dp; /* divisor polynomial basis index */
-    hm_t *b;
-    exp_t *f;
+    hm_t *b  = NULL;
+    exp_t *f = NULL;
 
     const hm_t m = ht->lh[idx];
 
@@ -703,6 +703,7 @@ static inline void find_multiplied_reducer_data(
             etmp[k] = (exp_t)(e[k]-f[k]);
         }
     } else {
+        i = 0;
 start:
         while (i < lml && lms[i] & ns) {
             i++;

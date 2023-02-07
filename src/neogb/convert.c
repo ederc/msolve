@@ -307,7 +307,7 @@ static void convert_hashes_to_columns_no_matrix(
     double ct = cputime();
     double rt = realtime();
 
-    realloc(ht->lh, (unsigned long)ht->lhld * sizeof(len_t));
+    ht->lh = realloc(ht->lh, (unsigned long)ht->lhld * sizeof(len_t));
     sort_r(ht->lh, (unsigned long)ht->lhld, sizeof(hi_t), hcm_cmp, ht);
 
     /* store the other direction (hash -> column) */

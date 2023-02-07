@@ -685,7 +685,7 @@ end_sat_step:
                      * so we do not need the rows anymore */
                     convert_columns_to_hashes(sat, hcm, hcmm);
                     for (i = 0; i < sat->ld; ++i) {
-                        bht->hd[hcmm[i]].idx = 0;
+                        bht->idx[hcmm[i]]= 0;
                     }
                 }
                 clear_matrix(mat);
