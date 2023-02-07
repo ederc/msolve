@@ -830,7 +830,6 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_31_bit(
     const int64_t mod           = (int64_t)st->fc;
     const int64_t mod2          = (int64_t)st->fc * st->fc;
     const len_t ncols           = mat->nc;
-    const len_t ncl             = mat->ncl;
     cf32_t * const * const mcf  = mat->cf_32;
 #ifdef HAVE_AVX2
     int64_t res[4] __attribute__((aligned(32)));
@@ -2297,7 +2296,6 @@ static void exact_sparse_reduced_echelon_form_ff_32(
     const len_t ncols = mat->nc;
     const len_t nrl   = mat->nrl;
     const len_t ncr   = mat->ncr;
-    const len_t ncl   = mat->ncl;
 
     /* we fill in all known lead terms in pivs */
     hm_t **pivs   = (hm_t **)calloc((unsigned long)ncols, sizeof(hm_t *));
