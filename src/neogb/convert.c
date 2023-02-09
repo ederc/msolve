@@ -320,7 +320,37 @@ static void convert_hashes_to_columns_no_matrix(
     st->convert_rtime += realtime() - rt;
 }
 
-static inline void set_matrix_meta_data(
+static inline void generate_dense_row_ff_32(
+        int64_t *dr,
+        len_t *sc,
+        mat_t *mat,
+        const len_t pos,
+        const ht_t * const ht,
+        const bs_t * const bs
+        )
+{
+    len_t i, j;
+    const len_t * const hi = ht->idx;
+    const len_t *rrd       = mat->rrd;
+    const len_t nc         = mat->nc;
+    const hm_t mul         = rrd[2*pos];
+    const exp_t *emul      = ht->ev[mul];
+    const hm_t *poly       = bs->hm[rrd[2*pos+1]];
+    const len_t len        = poly[LENGTH];
+    const cf32_t cf        = bs->cf_32[poly[COEFFS]];
+
+    /* start colum index for dense row */
+    *sc = hi[get_multiplied_monomial(mul, emul, poly[OFFSET], ht)];
+
+    memset(dr, 0, (unsigned long)nc * sizeof(int64_t));
+
+    for (i = 0; i < len; ++i) {
+        j  = hi[get_multiplied_monomial(mul, emul, poly[OFFSET+i], ht)];
+        dr[j] = cf[i];
+    }
+}
+
+static inline void generate_matrix_meta_data(
         len_t *md,
         const hm_t mul,
         const hm_t * const poly,
@@ -337,7 +367,7 @@ static inline void set_matrix_meta_data(
     md[LENGTH]  = poly[LENGTH];
 }
 
-static inline void set_matrix_column_data(
+static inline void generate_matrix_column_data(
         cd_t *cd,
         len_t *lcd,
         const hm_t mul,
@@ -357,7 +387,7 @@ static inline void set_matrix_column_data(
     j = 0; /* counts number of column differences > 2^8 - 1 */
     for (i = 0; i < len; ++i) {
         const len_t idx  = hi[get_multiplied_monomial(
-                                mul, emul, poly[OFFSET], ht)];
+                                mul, emul, poly[OFFSET+i], ht)];
         d = idx - k;
         if (d < CD_SIZE) {
             cd[i] = (cd_t)d;
@@ -395,8 +425,9 @@ static void generate_reducer_matrix_part(
         /* get multiplied leading term to insert at right place */
         const len_t idx = hi[get_multiplied_monomial(
                                 mul, emul, poly[OFFSET], ht)];
-        set_matrix_meta_data(mat->md[idx], mul, poly, ht);
-        set_matrix_column_data(mat->cd[idx], mat->lcd[idx], mul, emul, poly, ht);
+        generate_matrix_meta_data(mat->md[idx], mul, poly, ht);
+        generate_matrix_column_data(
+                mat->cd[idx], mat->lcd[idx], mul, emul, poly, ht);
     }
 }
 
