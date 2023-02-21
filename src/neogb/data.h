@@ -56,30 +56,7 @@ inline omp_int_t omp_get_max_threads(void) { return 1;}
 #define COEFFS  (OFFSET-3)  /* index of corresponding coefficient vector */
 #define MULT    (OFFSET-4)  /* hash of multiplier (for tracing and saturation) */
 #define BINDEX  (OFFSET-5)  /* basis index of element (for tracing) */
-#define DEG     (OFFSET-6)  /* the first entry in each exponent vector
-                             * stores the total degree of the polynomial */
-
-/* macros for column difference meta data */
-#define CD_BITSIZE 8
-#define CD_SIZE 256
-#define CD_METASIZE (32/CD_BITSIZE)
-#define CD_OFFSET  (6*CD_METASIZE)           /* real data starts at OFFSET */
-#define CD_LENGTH  (OFFSET-(1*CD_METASIZE))  /* length of the row */
-#define CD_PRELOOP (OFFSET-(2*CD_METASIZE))  /* length of not unrolled loop part */
-#define CD_COEFFS  (OFFSET-(3*CD_METASIZE))  /* index of corresponding coefficient vector */
-#define CD_MULT    (OFFSET-(4*CD_METASIZE))  /* hash of multiplier (for tracing and saturation) */
-#define CD_BINDEX  (OFFSET-(5*CD_METASIZE))  /* basis index of element (for tracing) */
-#define CD_DEG     (OFFSET-(6*CD_METASIZE))  /* the first entry in each exponent vector
-                             * stores the total degree of the polynomial */
-
-/* there is a different prelude with meta data for signature based matrices */
-#define SM_OFFSET  5            /* real data starts at SIGOFFSET for signature
-                                 * based comptutations */
-#define SM_LEN   (SM_OFFSET-1)  /* signature meta data length of polynomial */
-#define SM_PRE   (SM_OFFSET-2)  /* signature meta data preloop of polynomial */
-#define SM_CFS   (SM_OFFSET-3)  /* index of corresponding coefficient array */
-#define SM_SIDX  (SM_OFFSET-4)  /* index of signautre */
-#define SM_SMON  (SM_OFFSET-5)  /* hash value of signature monomial */
+#define DEG     (OFFSET-6)  /* total degree of the polynomial */
 
 
 /* computational data */
@@ -103,6 +80,14 @@ typedef uint8_t cd_t;    /* column differences */
 typedef len_t bi_t;      /* basis index of element */
 typedef len_t bl_t;      /* basis load */
 typedef len_t pl_t;      /* pair set load */
+
+
+/* bitsize of column difference */
+#define BSCD    8
+#define SCD     (pow(2,BSCD))
+#define RATIO   (sizeof(len_t))/(BSCD)
+
+
 
 /* hash data structure */
 typedef struct hd_t hd_t;
@@ -218,6 +203,20 @@ struct bs_t
                        the denominator is 1) */
 };
 
+/* typedef struct row_t;
+struct row_t
+{
+    len_t cf;
+    len_t pre;
+    len_t len;
+    len_t bidx;
+    hm_t mul;
+    deg_t deg;
+
+    cd_t *cd;
+    len_t *lcd;
+};
+*/
 /* matrix stuff */
 typedef struct mat_t mat_t;
 struct mat_t
@@ -226,9 +225,7 @@ struct mat_t
                            (multiplier, basis_index) */
     len_t *rrd;         /* pre data for rr rows consisting of tuples
                            (multiplier, basis_index) */
-    cd_t **cd;          /* column difference storage for rr*/
-    len_t **lcd;        /* longer than 8bit column differences for rr */
-    len_t **md;         /* meta data for corresponding row */
+    len_t *row;         /* row in matrix */
     hm_t **tr;          /* rows to be reduced of the matrix, only column */
                         /* entries, coefficients are handled via linking */
                         /* to coefficient arrays */
