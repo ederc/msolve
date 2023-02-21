@@ -345,31 +345,20 @@ static inline void generate_dense_row_ff_32(
     memset(dr, 0, (unsigned long)nc * sizeof(int64_t));
 
     for (i = 0; i < len; ++i) {
-        j  = hi[get_multiplied_monomial(mul, emul, poly[OFFSET+i], ht)];
+        j     = hi[get_multiplied_monomial(mul, emul, poly[OFFSET+i], ht)];
         dr[j] = cf[i];
     }
 }
 
-static inline void generate_matrix_meta_data(
-        len_t *md,
-        const hm_t mul,
-        const hm_t * const poly,
-        const ht_t * const ht
-        )
-{
-    md = calloc(OFFSET, sizeof(len_t));
 
-    md[DEG]     = ht->hd[mul].deg + poly[DEG];
-    md[BINDEX]  = poly[BINDEX];
-    md[MULT]    = mul;
-    md[COEFFS]  = poly[COEFFS];
-    md[PRELOOP] = poly[PRELOOP];
-    md[LENGTH]  = poly[LENGTH];
-}
-
-static inline void generate_matrix_column_data(
-        cd_t *cd,
-        len_t *lcd,
+/* When generating the column differences information for the rows we do a bit
+of playing around with different sizes for packing the information as much
+as possible to decrease memory usage. Please see the corresponding documentation
+at the various stages of the code below as well as the macro definitions in
+src/neogb/data.h for more information. */
+static void generate_mnatrix_row(
+        mat_t *mat,
+        const len_t idx,
         const hm_t mul,
         const exp_t * const emul,
         const hm_t * const poly,
@@ -380,16 +369,32 @@ static inline void generate_matrix_column_data(
     const len_t len = poly[LENGTH];
     const len_t * const hi = ht->idx;
 
-    cd  = calloc((unsigned long)len, sizeof(cd_t));
-    lcd = calloc((unsigned long)len, sizeof(len_t));
+    /* allocate memory for row:
+        - OFFSET for meta data
+        - len for possible long column differences
+        - len/RATIO for column differences
+        - len%RATIO > 0 for len not divisible by RATIO */
+    const unsigned long rlen = OFFSET + len + len/RATIO + (len%RATIO > 0);
+    row = calloc(rlen, sizeof(len_t));
 
+    /* set meta data */
+    row[DEG]     = ht->hd[mul].deg + poly[DEG];
+    row[BINDEX]  = poly[BINDEX];
+    row[MULT]    = mul;
+    row[COEFFS]  = poly[COEFFS];
+    row[PRELOOP] = poly[PRELOOP];
+    row[LENGTH]  = poly[LENGTH];
+
+    /* write column difference data */
     k = 0;
-    j = 0; /* counts number of column differences > 2^8 - 1 */
+    j = 0; /* counts number of column differences > 2^BSCD - 1 */
+    cd_t *cd   = row + OFFSET;
+    len_t *lcd = row + (OFFSET + len/RATIO + (len%RATIO > 0);
     for (i = 0; i < len; ++i) {
         const len_t idx  = hi[get_multiplied_monomial(
                                 mul, emul, poly[OFFSET+i], ht)];
         d = idx - k;
-        if (d < CD_SIZE) {
+        if (d < SCD) {
             cd[i] = (cd_t)d;
         } else {
             cd[i]    = 0;
@@ -397,7 +402,9 @@ static inline void generate_matrix_column_data(
         }
         k = idx;
     }
-    lcd = realloc(lcd, (unsigned long)j * sizeof(len_t));
+    /* get rid of unused space for long column differences */
+    row = realloc(row, (rlen - (len - j)) * sizeof(len_t));
+    mat->row[idx] = row;
 }
 
 static void generate_reducer_matrix_part(
@@ -414,7 +421,8 @@ static void generate_reducer_matrix_part(
 
     /* we directly allocate space for all rows, not only for the
     known pivots, but also for the later on newly computed ones */
-    mat->cd  = calloc((unsigned long)mat->nr, sizeof(cd_t *));
+    mat->row = calloc((unsigned long)mat->nc, sizeof(row_t));
+    mat->cd  = calloc((unsigned long)mat->nr, sizeof(len_t *));
     mat->lcd = calloc((unsigned long)mat->nr, sizeof(len_t *));
     mat->md  = calloc((unsigned long)mat->nr, sizeof(len_t *));
 
@@ -425,9 +433,7 @@ static void generate_reducer_matrix_part(
         /* get multiplied leading term to insert at right place */
         const len_t idx = hi[get_multiplied_monomial(
                                 mul, emul, poly[OFFSET], ht)];
-        generate_matrix_meta_data(mat->md[idx], mul, poly, ht);
-        generate_matrix_column_data(
-                mat->cd[idx], mat->lcd[idx], mul, emul, poly, ht);
+        generate_mnatrix_row(mat, idx, mul, emul, poly, ht);
     }
 }
 
