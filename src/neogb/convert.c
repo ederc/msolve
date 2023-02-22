@@ -320,37 +320,6 @@ static void convert_hashes_to_columns_no_matrix(
     st->convert_rtime += realtime() - rt;
 }
 
-static inline void generate_dense_row_ff_32(
-        int64_t *dr,
-        len_t *sc,
-        mat_t *mat,
-        const len_t pos,
-        const ht_t * const ht,
-        const bs_t * const bs
-        )
-{
-    len_t i, j;
-    const len_t * const hi = ht->idx;
-    const len_t *rrd       = mat->rrd;
-    const len_t nc         = mat->nc;
-    const hm_t mul         = rrd[2*pos];
-    const exp_t *emul      = ht->ev[mul];
-    const hm_t *poly       = bs->hm[rrd[2*pos+1]];
-    const len_t len        = poly[LENGTH];
-    const cf32_t cf        = bs->cf_32[poly[COEFFS]];
-
-    /* start colum index for dense row */
-    *sc = hi[get_multiplied_monomial(mul, emul, poly[OFFSET], ht)];
-
-    memset(dr, 0, (unsigned long)nc * sizeof(int64_t));
-
-    for (i = 0; i < len; ++i) {
-        j     = hi[get_multiplied_monomial(mul, emul, poly[OFFSET+i], ht)];
-        dr[j] = cf[i];
-    }
-}
-
-
 /* When generating the column differences information for the rows we do a bit
 of playing around with different sizes for packing the information as much
 as possible to decrease memory usage. Please see the corresponding documentation
@@ -375,7 +344,7 @@ static void generate_mnatrix_row(
         - len/RATIO for column differences
         - len%RATIO > 0 for len not divisible by RATIO */
     const unsigned long rlen = OFFSET + len + len/RATIO + (len%RATIO > 0);
-    row = calloc(rlen, sizeof(len_t));
+    len_t *row = calloc(rlen, sizeof(len_t));
 
     /* set meta data */
     row[DEG]     = ht->hd[mul].deg + poly[DEG];
@@ -388,8 +357,8 @@ static void generate_mnatrix_row(
     /* write column difference data */
     k = 0;
     j = 0; /* counts number of column differences > 2^BSCD - 1 */
-    cd_t *cd   = row + OFFSET;
-    len_t *lcd = row + (OFFSET + len/RATIO + (len%RATIO > 0);
+    cd_t *cd   = (cd_t *)(row + OFFSET);
+    len_t *lcd = row + (OFFSET + len/RATIO + (len%RATIO > 0));
     for (i = 0; i < len; ++i) {
         const len_t idx  = hi[get_multiplied_monomial(
                                 mul, emul, poly[OFFSET+i], ht)];
@@ -397,14 +366,14 @@ static void generate_mnatrix_row(
         if (d < SCD) {
             cd[i] = (cd_t)d;
         } else {
-            cd[i]    = 0;
+            cd[i]    = (cd_t)0;
             lcd[j++] = d;
         }
         k = idx;
     }
     /* get rid of unused space for long column differences */
     row = realloc(row, (rlen - (len - j)) * sizeof(len_t));
-    mat->row[idx] = row;
+    mat->row[idx] = row;
 }
 
 static void generate_reducer_matrix_part(
@@ -421,10 +390,7 @@ static void generate_reducer_matrix_part(
 
     /* we directly allocate space for all rows, not only for the
     known pivots, but also for the later on newly computed ones */
-    mat->row = calloc((unsigned long)mat->nc, sizeof(row_t));
-    mat->cd  = calloc((unsigned long)mat->nr, sizeof(len_t *));
-    mat->lcd = calloc((unsigned long)mat->nr, sizeof(len_t *));
-    mat->md  = calloc((unsigned long)mat->nr, sizeof(len_t *));
+    mat->row = calloc((unsigned long)mat->nc, sizeof(len_t *));
 
     for (i = 0; i < mat->nru; ++i) {
         const hm_t mul    = rrd[2*i];
