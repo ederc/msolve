@@ -234,6 +234,8 @@ struct mat_t
     len_t *rrd;         /* pre data for rr rows consisting of tuples
                            (multiplier, basis_index) */
     len_t **row;        /* row in matrix */
+    len_t **nrow;       /* keeps track of new pivots in order to extract
+                           them more efficiently when writing to the basis */
     hm_t **tr;          /* rows to be reduced of the matrix, only column */
                         /* entries, coefficients are handled via linking */
                         /* to coefficient arrays */
