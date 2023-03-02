@@ -355,8 +355,6 @@ static void generate_matrix_row(
     row[PRELOOP] = poly[PRELOOP];
     row[LENGTH]  = poly[LENGTH];
 
-    mat->cf_32[idx] = bs->cf_32[row[BINDEX]];
-
     /* write column difference data */
     k = 0;
     j = 0; /* counts number of column differences > 2^BSCD - 1 */
