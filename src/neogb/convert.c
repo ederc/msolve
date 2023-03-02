@@ -325,13 +325,14 @@ of playing around with different sizes for packing the information as much
 as possible to decrease memory usage. Please see the corresponding documentation
 at the various stages of the code below as well as the macro definitions in
 src/neogb/data.h for more information. */
-static void generate_mnatrix_row(
+static void generate_matrix_row(
         mat_t *mat,
         const len_t idx,
         const hm_t mul,
         const exp_t * const emul,
         const hm_t * const poly,
-        const ht_t * const ht
+        const ht_t * const ht,
+        const bs_t * const bs
         )
 {
     len_t i, j, k, d;
@@ -353,6 +354,8 @@ static void generate_mnatrix_row(
     row[COEFFS]  = poly[COEFFS];
     row[PRELOOP] = poly[PRELOOP];
     row[LENGTH]  = poly[LENGTH];
+
+    mat->cf_32[idx] = bs->cf_32[row[BINDEX]];
 
     /* write column difference data */
     k = 0;
@@ -390,16 +393,51 @@ static void generate_reducer_matrix_part(
 
     /* we directly allocate space for all rows, not only for the
     known pivots, but also for the later on newly computed ones */
-    mat->row = calloc((unsigned long)mat->nc, sizeof(len_t *));
+    mat->row   = calloc((unsigned long)mat->nc, sizeof(len_t *));
 
-    for (i = 0; i < mat->nru; ++i) {
-        const hm_t mul    = rrd[2*i];
-        const exp_t *emul = ht->ev[mul];
-        const hm_t *poly  = bs->hm[rrd[2*i+1]];
-        /* get multiplied leading term to insert at right place */
-        const len_t idx = hi[get_multiplied_monomial(
-                                mul, emul, poly[OFFSET], ht)];
-        generate_mnatrix_row(mat, idx, mul, emul, poly, ht);
+    switch (st->ff_bits) {
+        case 8:
+            mat->cf_8 = calloc((unsigned long)mat->nc, sizeof(cf8_t *));
+            for (i = 0; i < mat->nru; ++i) {
+                const hm_t mul    = rrd[2*i];
+                const exp_t *emul = ht->ev[mul];
+                const hm_t *poly  = bs->hm[rrd[2*i+1]];
+                /* get multiplied leading term to insert at right place */
+                const len_t idx = hi[get_multiplied_monomial(
+                                        mul, emul, poly[OFFSET], ht)];
+                generate_matrix_row(mat, idx, mul, emul, poly, ht, bs);
+                mat->cf_8[idx] = bs->cf_8[mat->row[idx][BINDEX]];
+            }
+            break;
+        case 16:
+            mat->cf_16 = calloc((unsigned long)mat->nc, sizeof(cf16_t *));
+            for (i = 0; i < mat->nru; ++i) {
+                const hm_t mul    = rrd[2*i];
+                const exp_t *emul = ht->ev[mul];
+                const hm_t *poly  = bs->hm[rrd[2*i+1]];
+                /* get multiplied leading term to insert at right place */
+                const len_t idx = hi[get_multiplied_monomial(
+                                        mul, emul, poly[OFFSET], ht)];
+                generate_matrix_row(mat, idx, mul, emul, poly, ht, bs);
+                mat->cf_16[idx] = bs->cf_16[mat->row[idx][BINDEX]];
+            }
+            break;
+        case 32:
+            mat->cf_32 = calloc((unsigned long)mat->nc, sizeof(cf32_t *));
+            for (i = 0; i < mat->nru; ++i) {
+                const hm_t mul    = rrd[2*i];
+                const exp_t *emul = ht->ev[mul];
+                const hm_t *poly  = bs->hm[rrd[2*i+1]];
+                /* get multiplied leading term to insert at right place */
+                const len_t idx = hi[get_multiplied_monomial(
+                                        mul, emul, poly[OFFSET], ht)];
+                generate_matrix_row(mat, idx, mul, emul, poly, ht, bs);
+                mat->cf_32[idx] = bs->cf_32[mat->row[idx][BINDEX]];
+            }
+            break;
+        default:
+            fprintf(stderr, "ff_bits not correctly set in generate_reducer_matrix_part().\n");
+            exit(1);
     }
 }
 
