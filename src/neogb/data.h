@@ -58,6 +58,14 @@ inline omp_int_t omp_get_max_threads(void) { return 1;}
 #define BINDEX  (OFFSET-5)  /* basis index of element (for tracing) */
 #define DEG     (OFFSET-6)  /* total degree of the polynomial */
 
+/* there is a different prelude with meta data for signature based matrices */
+#define SM_OFFSET  5            /* real data starts at SIGOFFSET for signature
+                                 * based comptutations */
+#define SM_LEN   (SM_OFFSET-1)  /* signature meta data length of polynomial */
+#define SM_PRE   (SM_OFFSET-2)  /* signature meta data preloop of polynomial */
+#define SM_CFS   (SM_OFFSET-3)  /* index of corresponding coefficient array */
+#define SM_SIDX  (SM_OFFSET-4)  /* index of signautre */
+#define SM_SMON  (SM_OFFSET-5)  /* hash value of signature monomial */
 
 /* computational data */
 typedef uint8_t cf8_t;   /* coefficient type finite field (8 bit) */
@@ -225,7 +233,7 @@ struct mat_t
                            (multiplier, basis_index) */
     len_t *rrd;         /* pre data for rr rows consisting of tuples
                            (multiplier, basis_index) */
-    len_t *row;         /* row in matrix */
+    len_t **row;        /* row in matrix */
     hm_t **tr;          /* rows to be reduced of the matrix, only column */
                         /* entries, coefficients are handled via linking */
                         /* to coefficient arrays */
