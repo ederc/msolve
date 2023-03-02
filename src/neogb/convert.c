@@ -359,7 +359,7 @@ static void generate_matrix_row(
     k = 0;
     j = 0; /* counts number of column differences > 2^BSCD - 1 */
     cd_t *cd   = (cd_t *)(row + OFFSET);
-    len_t *lcd = row + (OFFSET + len/RATIO + (len%RATIO > 0));
+    len_t *lcd = row + (rlen - k);
     for (i = 0; i < len; ++i) {
         const len_t idx  = hi[get_multiplied_monomial(
                                 mul, emul, poly[OFFSET+i], ht)];
