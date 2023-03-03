@@ -333,12 +333,16 @@ start:
     }
 }
 
-int core_f4_new(
-        bs_t *bs,   /* input data -> becomes basis */
-        ht_t *ht,   /* hash table */
-        stat_t *st  /* statistics storing meta data */
+int core_f4(
+        bs_t **bsp,   /* input data -> becomes basis */
+        ht_t **htp,   /* hash table */
+        stat_t **stp  /* statistics storing meta data */
         )
 {
+    bs_t *bs   = *bsp;
+    ht_t *ht   = *htp;
+    stat_t *st = *stp;
+
     int32_t round;
 
     /* timings for one round */
@@ -411,7 +415,7 @@ int core_f4_new(
     return 0;
 }
 
-int core_f4(
+int core_f4_old(
         bs_t **bsp,
         ht_t **bhtp,
         stat_t **stp
