@@ -384,7 +384,7 @@ static void generate_reducer_matrix_part(
         stat_t *st
         )
 {
-    len_t i = 0;
+    len_t i = 0, j = 0;
 
     const len_t *rrd       = mat->rrd;
     const len_t * const hi = ht->idx;
@@ -392,6 +392,7 @@ static void generate_reducer_matrix_part(
     /* we directly allocate space for all rows, not only for the
     known pivots, but also for the later on newly computed ones */
     mat->row   = calloc((unsigned long)mat->nc, sizeof(len_t *));
+    mat->op    = calloc((unsigned long)mat->nru, sizeof(len_t *));
 
     switch (st->ff_bits) {
         case 8:
@@ -405,6 +406,7 @@ static void generate_reducer_matrix_part(
                                         mul, emul, poly[OFFSET], ht)];
                 generate_matrix_row(mat, idx, mul, emul, poly, ht, bs);
                 mat->cf_8[idx] = bs->cf_8[mat->row[idx][BINDEX]];
+                mat->op[j++] = mat->row[idx];
             }
             break;
         case 16:
@@ -418,6 +420,7 @@ static void generate_reducer_matrix_part(
                                         mul, emul, poly[OFFSET], ht)];
                 generate_matrix_row(mat, idx, mul, emul, poly, ht, bs);
                 mat->cf_16[idx] = bs->cf_16[mat->row[idx][BINDEX]];
+                mat->op[j++] = mat->row[idx];
             }
             break;
         case 32:
@@ -431,6 +434,7 @@ static void generate_reducer_matrix_part(
                                         mul, emul, poly[OFFSET], ht)];
                 generate_matrix_row(mat, idx, mul, emul, poly, ht, bs);
                 mat->cf_32[idx] = bs->cf_32[mat->row[idx][BINDEX]];
+                mat->op[j++] = mat->row[idx];
             }
             break;
         default:

@@ -234,7 +234,12 @@ struct mat_t
     len_t *rrd;         /* pre data for rr rows consisting of tuples
                            (multiplier, basis_index) */
     len_t **row;        /* row in matrix */
-    len_t **nrow;       /* keeps track of new pivots in order to extract
+    len_t **op;         /* keeps track of old, i.e. known pivots, i.e.
+                           reducers found during symbolic preprocessing,
+                           for this linear algebra step. Needed to easily
+                           free memory before the interreduction step of the
+                           current pivots (newly found) start. */
+    len_t **cp;         /* keeps track of current pivots in order to extract
                            them more efficiently when writing to the basis */
     hm_t **tr;          /* rows to be reduced of the matrix, only column */
                         /* entries, coefficients are handled via linking */
