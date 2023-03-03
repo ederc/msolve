@@ -353,8 +353,9 @@ static void select_spairs(
 
     free(gens);
 
-    memmove(ps, ps+nps, (unsigned long)(ps->ld-nps) * sizeof(spair_t));
-    ps->ld -=  nps;
+    memmove(p, p+nps, (unsigned long)(ps->ld-nps) * sizeof(spair_t));
+    ps->p  =  p;
+    ps->ld -= nps;
 
     /* statistics */
     st->num_rowsred +=  mat->nrl;
