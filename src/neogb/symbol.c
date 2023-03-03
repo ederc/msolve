@@ -718,20 +718,20 @@ start:
                     goto start;
                 }
             }
-        }
-        dp = lmps[i];
-    }
-    const hi_t h  = hdm.val - hdb[b[OFFSET]].val;
+            dp = lmps[i];
+            const hi_t h  = hdm.val - hdb[b[OFFSET]].val;
 #if PARALLEL_HASHING
-    hm_t mul = check_insert_in_hash_table(etmp, h, ht);
+            hm_t mul = check_insert_in_hash_table(etmp, h, ht);
 #else
-    hm_t mul = insert_in_hash_table(etmp, ht);
+            hm_t mul = insert_in_hash_table(etmp, ht);
 #endif
-    multiplied_poly_to_hash_table(ht, h, etmp, b);
-    mat->rrd[2*mat->nru]   = mul;
-    mat->rrd[2*mat->nru+1] = dp;
-    mat->nru++;
-    ht->div[m] = dp;
+            multiplied_poly_to_hash_table(ht, h, etmp, b);
+            mat->rrd[2*mat->nru]   = mul;
+            mat->rrd[2*mat->nru+1] = dp;
+            mat->nru++;
+            ht->div[m] = dp;
+        }
+    }
 }
 
 static inline void find_multiplied_reducer_no_row(
