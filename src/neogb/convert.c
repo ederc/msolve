@@ -405,7 +405,7 @@ static void generate_reducer_matrix_part(
                 const len_t idx = hi[get_multiplied_monomial(
                                         mul, emul, poly[OFFSET], ht)];
                 generate_matrix_row(mat, idx, mul, emul, poly, ht, bs);
-                mat->cf_8[idx] = bs->cf_8[mat->row[idx][BINDEX]];
+                mat->cf_8[idx] = bs->cf_8[mat->row[idx][COEFFS]];
                 mat->op[j++] = mat->row[idx];
             }
             break;
@@ -419,7 +419,7 @@ static void generate_reducer_matrix_part(
                 const len_t idx = hi[get_multiplied_monomial(
                                         mul, emul, poly[OFFSET], ht)];
                 generate_matrix_row(mat, idx, mul, emul, poly, ht, bs);
-                mat->cf_16[idx] = bs->cf_16[mat->row[idx][BINDEX]];
+                mat->cf_16[idx] = bs->cf_16[mat->row[idx][COEFFS]];
                 mat->op[j++] = mat->row[idx];
             }
             break;
@@ -433,7 +433,7 @@ static void generate_reducer_matrix_part(
                 const len_t idx = hi[get_multiplied_monomial(
                                         mul, emul, poly[OFFSET], ht)];
                 generate_matrix_row(mat, idx, mul, emul, poly, ht, bs);
-                mat->cf_32[idx] = bs->cf_32[mat->row[idx][BINDEX]];
+                mat->cf_32[idx] = bs->cf_32[mat->row[idx][COEFFS]];
                 mat->op[j++] = mat->row[idx];
             }
             break;
