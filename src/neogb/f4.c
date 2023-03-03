@@ -80,6 +80,18 @@ static void clear_matrix(
     }
     free(mat->rba);
     mat->rba  = NULL;
+    free(mat->cp);
+    mat->cp = NULL;
+    free(mat->op);
+    mat->op = NULL;
+    free(mat->row);
+    mat->row = NULL;
+    free(mat->rr);
+    mat->rr = NULL;
+    free(mat->rrd);
+    mat->rrd = NULL;
+    free(mat->trd);
+    mat->trd  = NULL;
     free(mat->rr);
     mat->rr = NULL;
     free(mat->tr);
@@ -345,7 +357,7 @@ int core_f4_new(
     /* move input generators to basis and generate first spairs.
        always check redundancy since input generators may be redundant
        even so they are homogeneous. */
-    update_basis_f4(ps, bs, ht, st, st->ngens, 1);
+    update_basis_f4(ps, bs, ht, st, st->ngens, 1-st->homogeneous);
 
     /* let's start the f4 rounds, we are done when no more spairs
        are left in the pairset or if we found a constant in the basis. */
@@ -368,10 +380,24 @@ int core_f4_new(
         symbolic_preprocessing_new(mat, ht, bs, st);
         convert_hashes_to_columns_no_matrix(ht, bs, st);
         generate_reducer_matrix_part(mat, ht, bs, st);
+        exact_sparse_linear_algebra_cd_ff_32(mat, bs, ht, st);
+        reset_hash_table_index_data(ht);
+        /* columns indices are mapped back to exponent hashes */
+        if (mat->np > 0) {
+        convert_sparse_cd_matrix_rows_to_basis_elements(mat, bs, ht, st);
+        }
+        /* all rows in mat are now polynomials in the basis,
+        * so we do not need the rows anymore */
+        clear_matrix(mat);
+
         /* if we found a constant we are done, so remove all remaining pairs */
         if (bs->constant  == 1) {
-            ps->ld  = 0;
+            ps->ld =  0;
+            bs->ld += mat->np;
+            continue;
         }
+        /* check redundancy only if input is not homogeneous */
+        update_basis_f4(ps, bs, ht, st, mat->np, 1-st->homogeneous);
         if (st->info_level > 1) {
             printf("real: %13.2f sec | cpu: %13.2f sec\n",
                     realtime() - rrt, cputime() - crt);

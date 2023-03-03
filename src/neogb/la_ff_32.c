@@ -57,7 +57,7 @@ static inline void generate_dense_row_from_multiplied_polynomial_ff_32(
 static inline void generate_dense_row_from_sparse_row_ff_32(
         int64_t *dr,
         mat_t *mat,
-        const len_t idx;
+        const len_t idx
         )
 {
     len_t i, j;
@@ -66,11 +66,9 @@ static inline void generate_dense_row_from_sparse_row_ff_32(
 
     const len_t *row = mat->row[idx];
     const cf32_t *cf = mat->cf_32[idx];
-    const len_t len  = row[LENGTH]
+    const len_t len  = row[LENGTH];
     const cd_t * const cd   = (cd_t *)(row + OFFSET);
     const len_t * const lcd = row + (OFFSET + len/RATIO + (len%RATIO > 0));
-
-    memset(dr, 0, (unsigned long)nc * sizeof(int64_t));
 
     len_t pos = 0;
     for (j = 0, i = 0; i < len; ++i) {
@@ -3941,8 +3939,8 @@ static void exact_sparse_linear_algebra_cd_ff_32(
     int64_t *dr = (int64_t *)malloc(
                 (unsigned long)st->nthrds * nc * sizeof(int64_t));
 
-    /* keep track of new rows, i.e. unknown pivots, i.e. new basis elements */
-    mat->nrow = calloc((unsigned long)nrl, sizeof(len_t *));
+    /* keep track of current pivots, i.e. new basis elements */
+    mat->cp = calloc((unsigned long)nrl, sizeof(len_t *));
 
     /* reduce w.r.t. known pivots */
 #pragma omp parallel for num_threads(st->nthrds) private(i)
@@ -3982,7 +3980,7 @@ static void exact_sparse_linear_algebra_cd_ff_32(
         } while (!k);
 		if (npiv != NULL) {
 			mat->cp[i] = mat->row[npiv[OFFSET]];
-            mat->cf_32[npiv[OFFSET] = cfs;
+            mat->cf_32[npiv[OFFSET]] = cfs;
 		}
     }
 
@@ -4016,7 +4014,7 @@ static void exact_sparse_linear_algebra_cd_ff_32(
         free(mat->row[sc]);
         free(mat->cf_32[sc]);
         mat->row[sc]  = reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
-                drl, mat, sc, mat->cf_32+sc, st);
+                dr, mat, sc, mat->cf_32+sc, st);
         mat->cp[i] = mat->row[sc];
     }
 

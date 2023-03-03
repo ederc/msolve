@@ -1382,6 +1382,16 @@ restart:
     }
 }
 
+void reset_hash_table_index_data(
+        ht_t *ht
+        )
+{
+    /* What is more efficient, searching only a few indices to be reset or
+    just memsetting everything back to zero? */
+
+    memset(ht->idx, 0, (unsigned long)ht->hsz * sizeof(len_t));
+}
+
 void reset_hash_table_indices(
         ht_t *ht,
         const hi_t * const hcm,

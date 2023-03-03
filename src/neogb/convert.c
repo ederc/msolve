@@ -359,7 +359,7 @@ static void generate_matrix_row(
     k = 0;
     j = 0; /* counts number of column differences > 2^BSCD - 1 */
     cd_t *cd   = (cd_t *)(row + OFFSET);
-    len_t *lcd = row + (rlen - k);
+    len_t *lcd = row + (rlen - len);
     for (i = 0; i < len; ++i) {
         const len_t idx  = hi[get_multiplied_monomial(
                                 mul, emul, poly[OFFSET+i], ht)];
@@ -873,6 +873,81 @@ static void convert_sparse_matrix_rows_to_basis_elements(
     rt1 = realtime();
     st->convert_ctime +=  ct1 - ct0;
     st->convert_rtime +=  rt1 - rt0;
+}
+
+static void convert_sparse_cd_matrix_rows_to_basis_elements(
+        mat_t *mat,
+        bs_t *bs,
+        const ht_t * const ht,
+        stat_t *st
+        )
+{
+    /* timings */
+    double ct = cputime();
+    double rt = realtime();
+
+    len_t i;
+
+    const len_t np = mat->np;
+    const len_t bl = bs->ld;
+
+    const len_t * const lh = ht->lh;
+
+#pragma omp parallel for num_threads(st->nthrds) private(i)
+    for (i = 0; i < np; ++i) {
+        len_t k = 0;
+        len_t pos = 0;
+
+        const len_t len = mat->cp[i][LENGTH];
+
+        const cd_t * const cd   = (cd_t *)(mat->cp[i] + OFFSET);
+        const len_t * const lcd = mat->cp[i] + (OFFSET + len/RATIO + (len%RATIO > 0));
+
+        hm_t *poly = calloc((unsigned long)len + OFFSET, sizeof(hm_t));
+        for (len_t j = OFFSET; j < OFFSET+len; ++j) {
+            pos = cd[j] != 0 ? pos + cd[j] : pos + lcd[k++];
+            poly[j] = lh[pos];
+        }
+        poly[DEG] = ht->hd[poly[OFFSET]].deg;
+
+        /* check for degree of polynomial if we are using an elimination order */
+        if (st->nev != 0) {
+            const hd_t * const hd = ht->hd;
+            deg_t deg = poly[DEG];
+            for (len_t j = OFFSET; j < OFFSET+len; ++j) {
+                deg = deg < hd[poly[j]].deg ? hd[poly[j]].deg : deg;
+            }
+            poly[DEG] = deg;
+        }
+        free(mat->cp[i]);
+        mat->cp[i] = NULL;
+
+        switch (st->ff_bits) {
+            case 0:
+                bs->cf_qq[bl+i] = mat->cf_qq[poly[COEFFS]];
+                break;
+            case 8:
+                bs->cf_8[bl+i]  = mat->cf_8[poly[COEFFS]];
+                break;
+            case 16:
+                bs->cf_16[bl+i] = mat->cf_16[poly[COEFFS]];
+                break;
+            case 32:
+                bs->cf_32[bl+i] = mat->cf_32[poly[COEFFS]];
+                break;
+            default:
+                bs->cf_32[bl+i] = mat->cf_32[poly[COEFFS]];
+                break;
+        }
+        poly[COEFFS] = bl+k;
+        bs->hm[bl+k] = poly;
+        if (poly[DEG] == 0) {
+            bs->constant  = 1;
+        }
+    }
+    /* timings */
+    st->convert_ctime += cputime() - ct;
+    st->convert_rtime += realtime() - rt;
 }
 
 static void convert_sparse_matrix_rows_to_basis_elements_use_sht(
