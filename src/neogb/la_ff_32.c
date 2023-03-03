@@ -24,6 +24,61 @@
 #include <immintrin.h>
 #endif
 
+static inline void generate_dense_row_from_multiplied_polynomial_ff_32(
+        int64_t *dr,
+        len_t *sc,
+        mat_t *mat,
+        const len_t pos,
+        const ht_t * const ht,
+        const bs_t * const bs
+        )
+{
+    len_t i, j;
+    const len_t * const hi = ht->idx;
+    const len_t *rrd       = mat->rrd;
+    const len_t nc         = mat->nc;
+    const hm_t mul         = rrd[2*pos];
+    const exp_t *emul      = ht->ev[mul];
+    const hm_t *poly       = bs->hm[rrd[2*pos+1]];
+    const len_t len        = poly[LENGTH];
+    const cf32_t *cf       = bs->cf_32[poly[COEFFS]];
+
+    /* start colum index for dense row */
+    *sc = hi[get_multiplied_monomial(mul, emul, poly[OFFSET], ht)];
+
+    memset(dr, 0, (unsigned long)nc * sizeof(int64_t));
+
+    for (i = 0; i < len; ++i) {
+        j     = hi[get_multiplied_monomial(mul, emul, poly[OFFSET+i], ht)];
+        dr[j] = cf[i];
+    }
+}
+
+static inline void generate_dense_row_from_sparse_row_ff_32(
+        int64_t *dr,
+        mat_t *mat,
+        const len_t idx;
+        )
+{
+    len_t i, j;
+
+    memset(dr, 0, (unsigned long)mat->nc * sizeof(int64_t));
+
+    const len_t *row = mat->row[idx];
+    const cf32_t *cf = mat->cf_32[idx];
+    const len_t len  = row[LENGTH]
+    const cd_t * const cd   = (cd_t *)(row + OFFSET);
+    const len_t * const lcd = row + (OFFSET + len/RATIO + (len%RATIO > 0));
+
+    memset(dr, 0, (unsigned long)nc * sizeof(int64_t));
+
+    len_t pos = 0;
+    for (j = 0, i = 0; i < len; ++i) {
+        pos = cd[i] != 0 ? pos + cd[i] : pos + lcd[j++];
+        dr[pos] = cf[i];
+    }
+}
+
 static inline cf32_t *normalize_dense_matrix_row_ff_32(
         cf32_t *row,
         const hm_t len,
@@ -811,6 +866,163 @@ static hm_t *sba_reduce_dense_row_by_known_pivots_sparse_31_bit(
     smat->cc32[ri] = cf;
 
     return smat->cr[ri];
+}
+
+static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
+        int64_t *dr,
+        mat_t *mat,
+        const len_t dpiv, /* pivot of dense row at the beginning */
+        cf32_t **cfsp,
+        stat_t *st
+        )
+{
+    hi_t i, j, k, l;
+    int64_t np = -1;
+    const int64_t mod  = (int64_t)st->fc;
+    const int64_t mod2 = (int64_t)st->fc * st->fc;
+    const len_t ncols  = mat->nc;
+#ifdef HAVE_AVX2
+    int64_t res[4] __attribute__((aligned(32)));
+    __m256i cmpv, redv, drv, mulv, prodv, resv, rresv;
+    __m256i zerov= _mm256_set1_epi64x(0);
+    __m256i mod2v = _mm256_set1_epi64x(mod2);
+#endif
+
+    k = 0;
+    for (i = dpiv; i < ncols; ++i) {
+        if (dr[i] != 0) {
+            dr[i] = dr[i] % mod;
+        }
+        if (dr[i] == 0) {
+            continue;
+        }
+        if (mat->row[i] == NULL) {
+            if (np == -1) {
+                np  = i;
+            }
+            k++;
+            continue;
+        }
+
+        /* found reducer row, get multiplier */
+        const int64_t mul        = (int64_t)dr[i];
+        const cf32_t * const pcf = mat->cf_32[i];;
+
+#ifdef HAVE_AVX2
+        const len_t len = dts[LENGTH];
+        const len_t os  = len % 8;
+        const hm_t * const ds  = dts + OFFSET;
+        const uint32_t mul32 = (uint32_t)(dr[i]);
+        mulv  = _mm256_set1_epi32(mul32);
+        for (j = 0; j < os; ++j) {
+            dr[ds[j]] -=  mul * cfs[j];
+            dr[ds[j]] +=  (dr[ds[j]] >> 63) & mod2;
+        }
+        for (; j < len; j += 8) {
+            redv  = _mm256_loadu_si256((__m256i*)(cfs+j));
+            drv   = _mm256_setr_epi64x(
+                dr[ds[j+1]],
+                dr[ds[j+3]],
+                dr[ds[j+5]],
+                dr[ds[j+7]]);
+            /* first four mult-adds -- lower */
+            prodv = _mm256_mul_epu32(mulv, _mm256_srli_epi64(redv, 32));
+            resv  = _mm256_sub_epi64(drv, prodv);
+            cmpv  = _mm256_cmpgt_epi64(zerov, resv);
+            rresv = _mm256_add_epi64(resv, _mm256_and_si256(cmpv, mod2v));
+            _mm256_store_si256((__m256i*)(res), rresv);
+            dr[ds[j+1]] = res[0];
+            dr[ds[j+3]] = res[1];
+            dr[ds[j+5]] = res[2];
+            dr[ds[j+7]] = res[3];
+            /* second four mult-adds -- higher */
+            prodv = _mm256_mul_epu32(mulv, redv);
+            drv   = _mm256_setr_epi64x(
+                dr[ds[j]],
+                dr[ds[j+2]],
+                dr[ds[j+4]],
+                dr[ds[j+6]]);
+            resv  = _mm256_sub_epi64(drv, prodv);
+            cmpv  = _mm256_cmpgt_epi64(zerov, resv);
+            rresv = _mm256_add_epi64(resv, _mm256_and_si256(cmpv, mod2v));
+            _mm256_store_si256((__m256i*)(res), rresv);
+            dr[ds[j]]   = res[0];
+            dr[ds[j+2]] = res[1];
+            dr[ds[j+4]] = res[2];
+            dr[ds[j+6]] = res[3];
+        }
+#else
+        const len_t os  = mat->row[i][PRELOOP];
+        const len_t len = mat->row[i][LENGTH];
+        const cd_t * const cd   = (cd_t *)(mat->row[i] + OFFSET);
+        const len_t * const lcd = mat->row[i] + (OFFSET + len/RATIO + (len%RATIO > 0));
+        len_t pos  = 0;
+        l = 0;
+        for (j = 0; j < os; ++j) {
+            pos = cd[j] != 0 ? pos + cd[j] : pos + lcd[l++];
+            dr[pos]   -=  mul * pcf[j];
+            dr[pos]   +=  (dr[pos] >> 63) & mod2;
+        }
+        for (; j < len; j += UNROLL) {
+            pos = cd[j] != 0 ? pos + cd[j] : pos + lcd[l++];
+            dr[pos]   -=  mul * pcf[j];
+            dr[pos]   +=  (dr[pos] >> 63) & mod2;
+            pos = cd[j+1] != 0 ? pos + cd[j+1] : pos + lcd[l++];
+            dr[pos]   -=  mul * pcf[j+1];
+            dr[pos]   +=  (dr[pos] >> 63) & mod2;
+            pos = cd[j+2] != 0 ? pos + cd[j+2] : pos + lcd[l++];
+            dr[pos]   -=  mul * pcf[j+2];
+            dr[pos]   +=  (dr[pos] >> 63) & mod2;
+            pos = cd[j+3] != 0 ? pos + cd[j+3] : pos + lcd[l++];
+            dr[pos]   -=  mul * pcf[j+3];
+            dr[pos]   +=  (dr[pos] >> 63) & mod2;
+        }
+#endif
+        dr[i] = 0;
+        st->application_nr_mult +=  len / 1000.0;
+        st->application_nr_add  +=  len / 1000.0;
+        st->application_nr_red++;
+    }
+
+    if (k == 0) {
+        return NULL;
+    }
+
+    /* allocate memory for row:
+        - OFFSET for meta data
+        - k for possible long column differences
+        - k/RATIO for column differences
+        - k%RATIO > 0 for len not divisible by RATIO */
+    const unsigned long rlen = OFFSET + k + k/RATIO + (k%RATIO > 0);
+
+    len_t *row  = calloc(rlen, sizeof(len_t));
+    cd_t *cd    = (cd_t *)(row + OFFSET);
+    len_t *lcd  = row + (rlen - k);
+    cf32_t *cfs = (cf32_t *)malloc((unsigned long)k * sizeof(cf32_t));
+    j = 0;
+    l = 0;
+    len_t prev = 0;
+    len_t diff = 0;
+    for (i = np; i < ncols; ++i) {
+        if (dr[i] != 0) {
+            diff = i -prev;
+            if (diff < SCD) {
+                cd[j] = (cd_t)diff;
+            } else {
+                cd[j]    = (cd_t)0;
+                lcd[l++] = diff;
+            }
+            prev = i;
+            cfs[j] = (cf32_t)dr[i];
+            j++;
+        }
+    }
+    row[COEFFS]   = row[OFFSET];
+    row[PRELOOP]  = j % UNROLL;
+    row[LENGTH]   = j;
+
+    *cfsp = cfs;
+    return row;
 }
 
 static hm_t *reduce_dense_row_by_known_pivots_sparse_31_bit(
@@ -3706,6 +3918,111 @@ static void sba_linear_algebra_ff_32(
     st->la_rtime  +=  rt1 - rt0;
 
     st->num_zerored += smat->nz;
+}
+
+static void exact_sparse_linear_algebra_cd_ff_32(
+        mat_t *mat,
+        const bs_t * const bs,
+        const ht_t * const ht,
+        stat_t *st
+        )
+{
+    /* timings */
+    double ct = cputime();
+    double rt = realtime();
+
+    len_t i = 0;
+
+    const len_t nc  = mat->nc;
+    const len_t nrl = mat->nrl;
+    const len_t nru = mat->nru;
+
+    /* allocate memory of dense row(s) */
+    int64_t *dr = (int64_t *)malloc(
+                (unsigned long)st->nthrds * nc * sizeof(int64_t));
+
+    /* keep track of new rows, i.e. unknown pivots, i.e. new basis elements */
+    mat->nrow = calloc((unsigned long)nrl, sizeof(len_t *));
+
+    /* reduce w.r.t. known pivots */
+#pragma omp parallel for num_threads(st->nthrds) private(i)
+    for (i = 0; i < nrl; ++i) {
+        len_t k = 0;
+        /* construct dense row from (multiplier, poly) data */
+        len_t sc = 0; /* starting column for dense row */
+        int64_t *drl = dr + (omp_get_thread_num() * nc);
+        generate_dense_row_from_multiplied_polynomial_ff_32(
+                drl, &sc, mat, i, ht, bs);
+
+        /* remove link to basis elements coefficients in order to not
+        mess around with it in the following */
+        cf32_t *cfs = NULL;
+        len_t *npiv = NULL;
+
+        do {
+            free(npiv);
+            npiv = NULL;
+            free(cfs);
+            cfs = NULL;
+			/* printf("i+nru = %d | nr = %d | i = %d\n", i+mat->nru, mat->nr, i); */
+            npiv  = reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
+                    drl, mat, sc, &cfs, st);
+            if (!npiv) {
+                break;
+            }
+            /* normalize coefficient array
+             * NOTE: this has to be done here, otherwise the reduction may
+             * lead to wrong results in a parallel computation since other
+             * threads might directly use the new pivot once it is synced. */
+            if (cfs[0] != 1) {
+                normalize_sparse_matrix_row_ff_32(
+                        cfs, npiv[PRELOOP], npiv[LENGTH], st->fc);
+            }
+            k   = __sync_bool_compare_and_swap(&mat->row[npiv[OFFSET]], NULL, npiv);
+        } while (!k);
+		if (npiv != NULL) {
+			mat->cp[i] = mat->row[npiv[OFFSET]];
+            mat->cf_32[npiv[OFFSET] = cfs;
+		}
+    }
+
+    /* prepare interreduction of new pivots */
+
+    /* free memory for old pivots */
+    for (i = 0; i < nru; ++i) {
+        free(mat->op[i]);
+        mat->op[i] = NULL;
+    }
+
+    dr = realloc(dr, (unsigned long)nc * sizeof(int64_t));
+
+    /* compactify new pivots */
+    len_t j = 0;
+    for (i = 0; i < nrl; ++i) {
+        if (mat->cp[i] != NULL) {
+            mat->cp[j++] = mat->cp[i];
+        }
+    }
+    mat->np = j; /* number of new pivots */
+    mat->cp = realloc(mat->cp, (unsigned long)mat->np * sizeof(len_t *));
+
+    /* sort for optimal interreduction step */
+    sort_matrix_rows_increasing(mat->cp, mat->np);
+
+    const len_t np = mat->np;
+    for (i = 0; i < np; ++i) {
+        const len_t sc = mat->cp[i][OFFSET];
+        generate_dense_row_from_sparse_row_ff_32(dr, mat, sc);
+        free(mat->row[sc]);
+        free(mat->cf_32[sc]);
+        mat->row[sc]  = reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
+                drl, mat, sc, mat->cf_32+sc, st);
+        mat->cp[i] = mat->row[sc];
+    }
+
+    /* timings */
+    st->la_ctime += cputime() - ct;
+    st->la_rtime += realtime() - rt;
 }
 
 static void exact_sparse_linear_algebra_ff_32(
