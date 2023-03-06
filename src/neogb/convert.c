@@ -308,7 +308,18 @@ static void convert_hashes_to_columns_no_matrix(
     double rt = realtime();
 
     ht->lh = realloc(ht->lh, (unsigned long)ht->lhld * sizeof(len_t));
+    for (int ii = 0; ii < ht->lhld; ++ii) {
+        printf("lh[%d] = %u\n", ii, ht->lh[ii]);
+    }
     sort_r(ht->lh, (unsigned long)ht->lhld, sizeof(hi_t), hcm_cmp, ht);
+    printf("sorted\n-------------------\n");
+    for (int ii = 0; ii < ht->lhld; ++ii) {
+        printf("lh[%d] = %u | ", ii, ht->lh[ii]);
+        for (int jj = 0; jj < ht->evl; ++jj) {
+            printf("%u ", ht->ev[ht->lh[ii]][jj]);
+        }
+        printf("\n");
+    }
 
     /* store the other direction (hash -> column) */
     for (len_t i = 0; i < ht->lhld; ++i) {
@@ -920,9 +931,13 @@ static void convert_sparse_cd_matrix_rows_to_basis_elements(
         const len_t * const lcd = mat->cp[i] + (OFFSET + len/RATIO + (len%RATIO > 0));
 
         hm_t *poly = calloc((unsigned long)len + OFFSET, sizeof(hm_t));
-        for (len_t j = OFFSET; j < OFFSET+len; ++j) {
+        hm_t *p = poly + OFFSET;
+        for (len_t j = 0; j < len; ++j) {
+            printf("cd[%u] = %u\n", j, cd[j]);
             pos = cd[j] != SCD ? pos + cd[j] : pos + lcd[k++];
-            poly[j] = lh[pos];
+            printf("lh[%u] = %u\n", pos, lh[pos]);
+            p[j] = lh[pos];
+            printf("poly[%u] = %u\n", j, poly[j]);
         }
         poly[LENGTH]  = len;
         poly[PRELOOP] = mat->cp[i][PRELOOP];

@@ -1026,7 +1026,7 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
     len_t diff = 0;
     for (i = np; i < ncols; ++i) {
         if (dr[i] != 0) {
-            diff = i -prev;
+            diff = i - prev;
             if (diff < SCD) {
                 cd[j] = (cd_t)diff;
             } else {
