@@ -92,8 +92,8 @@ typedef len_t pl_t;      /* pair set load */
 
 /* bitsize of column difference */
 #define BSCD    8
-#define SCD     (pow(2,BSCD))
-#define RATIO   (sizeof(len_t))/(BSCD)
+#define SCD     ((pow(2,(BSCD))) - 1)
+#define RATIO   (sizeof(len_t))/(sizeof(cd_t))
 
 
 

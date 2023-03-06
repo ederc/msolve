@@ -357,7 +357,7 @@ static void generate_matrix_row(
 
     /* write column difference data */
     k = 0;
-    j = 0; /* counts number of column differences > 2^BSCD - 1 */
+    j = 0; /* counts number of column differences >= 2^BSCD - 1 */
     cd_t *cd   = (cd_t *)(row + OFFSET);
     len_t *lcd = row + (rlen - len);
     for (i = 0; i < len; ++i) {
@@ -367,13 +367,23 @@ static void generate_matrix_row(
         if (d < SCD) {
             cd[i] = (cd_t)d;
         } else {
-            cd[i]    = (cd_t)0;
+            cd[i]    = (cd_t)SCD;
             lcd[j++] = d;
         }
         k = idx;
     }
+    printf("cd = ");
+    for (i = 0; i < len; ++i) {
+        printf("%u ", cd[i]);
+    }
+    printf("\n");
     /* get rid of unused space for long column differences */
+    printf("len%ratio %d --> %d\n", len%RATIO, len%RATIO>0);
+    printf("row[LENGTH] %d\n", row[LENGTH]);
+    printf("rlen %lu\n", rlen);
+    printf("j %d\n", j);
     row = realloc(row, (rlen - (len - j)) * sizeof(len_t));
+    printf("new length %d\n",(rlen - (len - j)));
     mat->row[idx] = row;
 }
 
@@ -893,8 +903,14 @@ static void convert_sparse_cd_matrix_rows_to_basis_elements(
 
     const len_t * const lh = ht->lh;
 
+    printf("bld %u, bsz %u\n", bs->ld, bs->sz);
+    check_enlarge_basis(bs, mat->np, st);
+    printf("mat->np %u\n", mat->np);
+    printf("bld %u, bsz %u\n", bs->ld, bs->sz);
+
 #pragma omp parallel for num_threads(st->nthrds) private(i)
     for (i = 0; i < np; ++i) {
+        printf("cp[%d] = %p\n", i, mat->cp[i]);
         len_t k = 0;
         len_t pos = 0;
 
@@ -905,10 +921,13 @@ static void convert_sparse_cd_matrix_rows_to_basis_elements(
 
         hm_t *poly = calloc((unsigned long)len + OFFSET, sizeof(hm_t));
         for (len_t j = OFFSET; j < OFFSET+len; ++j) {
-            pos = cd[j] != 0 ? pos + cd[j] : pos + lcd[k++];
+            pos = cd[j] != SCD ? pos + cd[j] : pos + lcd[k++];
             poly[j] = lh[pos];
         }
-        poly[DEG] = ht->hd[poly[OFFSET]].deg;
+        poly[LENGTH]  = len;
+        poly[PRELOOP] = mat->cp[i][PRELOOP];
+        poly[COEFFS]  = bl+i;
+        poly[DEG]     = ht->hd[poly[OFFSET]].deg;
 
         /* check for degree of polynomial if we are using an elimination order */
         if (st->nev != 0) {
@@ -939,11 +958,24 @@ static void convert_sparse_cd_matrix_rows_to_basis_elements(
                 bs->cf_32[bl+i] = mat->cf_32[poly[COEFFS]];
                 break;
         }
-        poly[COEFFS] = bl+k;
-        bs->hm[bl+k] = poly;
+        bs->hm[bl+i] = poly;
         if (poly[DEG] == 0) {
             bs->constant  = 1;
         }
+#if 1
+        if (st->ff_bits == 32) {
+            printf("new element (%u): length %u | degree %d | ", bl+i, bs->hm[bl+i][LENGTH], bs->hm[bl+i][DEG]);
+            int kk = 0;
+            for (int kk=0; kk<bs->hm[bl+i][LENGTH]; ++kk) {
+            printf("%u | ", bs->cf_32[bl+i][kk]);
+            for (int jj=0; jj < ht->evl; ++jj) {
+                printf("%u ", ht->ev[bs->hm[bl+i][OFFSET+kk]][jj]);
+            }
+            printf(" || ");
+            }
+            printf("\n");
+        }
+#endif
     }
     /* timings */
     st->convert_ctime += cputime() - ct;

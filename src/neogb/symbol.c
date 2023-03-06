@@ -346,8 +346,11 @@ static void select_spairs(
 
     /* memory stuff */
     mat->nrl = mat->nr - mat->nc;
+    printf("nr %u , nc %u, nrl%u\n", mat->nr, mat->nc, mat->nrl);
     mat->nru = mat->nc;
     trd = realloc(trd, (unsigned long)2*mat->nrl * sizeof(hm_t));
+
+    mat->trd = trd;
     memset(ht->ev[0], 0, (unsigned long)evl * sizeof(exp_t));
     /* fix rows to be reduced */
 

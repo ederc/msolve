@@ -33,13 +33,14 @@ static inline void generate_dense_row_from_multiplied_polynomial_ff_32(
         const bs_t * const bs
         )
 {
+    printf("pos %u\n", pos);
     len_t i, j;
     const len_t * const hi = ht->idx;
-    const len_t *rrd       = mat->rrd;
+    const len_t *trd       = mat->trd;
     const len_t nc         = mat->nc;
-    const hm_t mul         = rrd[2*pos];
+    const hm_t mul         = trd[2*pos];
     const exp_t *emul      = ht->ev[mul];
-    const hm_t *poly       = bs->hm[rrd[2*pos+1]];
+    const hm_t *poly       = bs->hm[trd[2*pos+1]];
     const len_t len        = poly[LENGTH];
     const cf32_t *cf       = bs->cf_32[poly[COEFFS]];
 
@@ -888,6 +889,11 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
 
     k = 0;
     for (i = dpiv; i < ncols; ++i) {
+    printf("dr = ");
+    for (int ii = 0; ii < ncols; ++ii) {
+        printf("%lu ", dr[ii]);
+    }
+    printf("\n");
         if (dr[i] != 0) {
             dr[i] = dr[i] % mod;
         }
@@ -904,7 +910,8 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
 
         /* found reducer row, get multiplier */
         const int64_t mul        = (int64_t)dr[i];
-        const cf32_t * const pcf = mat->cf_32[i];;
+        printf("mul %ld\n", mul);
+        const cf32_t * const pcf = mat->cf_32[i];
 
 #ifdef HAVE_AVX2
         const len_t len = dts[LENGTH];
@@ -950,29 +957,44 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
             dr[ds[j+6]] = res[3];
         }
 #else
+        printf("i %d\n", i);
         const len_t os  = mat->row[i][PRELOOP];
         const len_t len = mat->row[i][LENGTH];
         const cd_t * const cd   = (cd_t *)(mat->row[i] + OFFSET);
         const len_t * const lcd = mat->row[i] + (OFFSET + len/RATIO + (len%RATIO > 0));
         len_t pos  = 0;
+        printf("len %d | os %d\n", len, os);
         l = 0;
         for (j = 0; j < os; ++j) {
-            pos = cd[j] != 0 ? pos + cd[j] : pos + lcd[l++];
+            printf("oj %d\n", j);
+            printf("ocd[j] %d\n", cd[j]);
+            printf("ol %d\n", l);
+            pos = cd[j] != SCD ? pos + cd[j] : pos + lcd[l++];
             dr[pos]   -=  mul * pcf[j];
             dr[pos]   +=  (dr[pos] >> 63) & mod2;
         }
         for (; j < len; j += UNROLL) {
-            pos = cd[j] != 0 ? pos + cd[j] : pos + lcd[l++];
+            printf("j %d\n", j);
+            printf("cd[j] %d\n", cd[j]);
+            pos = cd[j] != SCD ? pos + cd[j] : pos + lcd[l++];
+            printf("pos1 %d\n", pos);
+            printf("pcf = %d\n", pcf[j]);
             dr[pos]   -=  mul * pcf[j];
             dr[pos]   +=  (dr[pos] >> 63) & mod2;
-            pos = cd[j+1] != 0 ? pos + cd[j+1] : pos + lcd[l++];
+            pos = cd[j+1] != SCD ? pos + cd[j+1] : pos + lcd[l++];
+            printf("pos2 %d\n", pos);
+            printf("pcf = %d\n", pcf[j+1]);
             dr[pos]   -=  mul * pcf[j+1];
             dr[pos]   +=  (dr[pos] >> 63) & mod2;
-            pos = cd[j+2] != 0 ? pos + cd[j+2] : pos + lcd[l++];
+            pos = cd[j+2] != SCD ? pos + cd[j+2] : pos + lcd[l++];
+            printf("pos3 %d\n", pos);
+            printf("pcf = %d\n", pcf[j+2]);
             dr[pos]   -=  mul * pcf[j+2];
             dr[pos]   +=  (dr[pos] >> 63) & mod2;
-            pos = cd[j+3] != 0 ? pos + cd[j+3] : pos + lcd[l++];
+            pos = cd[j+3] != SCD ? pos + cd[j+3] : pos + lcd[l++];
+            printf("pos4 %d\n", pos);
             dr[pos]   -=  mul * pcf[j+3];
+            printf("pcf = %d\n", pcf[j+3]);
             dr[pos]   +=  (dr[pos] >> 63) & mod2;
         }
 #endif
@@ -981,6 +1003,7 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
         st->application_nr_add  +=  len / 1000.0;
         st->application_nr_red++;
     }
+    printf("k in reduction %d\n", k);
 
     if (k == 0) {
         return NULL;
@@ -1007,7 +1030,7 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
             if (diff < SCD) {
                 cd[j] = (cd_t)diff;
             } else {
-                cd[j]    = (cd_t)0;
+                cd[j]    = (cd_t)SCD;
                 lcd[l++] = diff;
             }
             prev = i;
@@ -1015,7 +1038,7 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
             j++;
         }
     }
-    row[COEFFS]   = row[OFFSET];
+    row[COEFFS]   = cd[0];
     row[PRELOOP]  = j % UNROLL;
     row[LENGTH]   = j;
 
@@ -3946,6 +3969,7 @@ static void exact_sparse_linear_algebra_cd_ff_32(
 #pragma omp parallel for num_threads(st->nthrds) private(i)
     for (i = 0; i < nrl; ++i) {
         len_t k = 0;
+        len_t lc = 0;  /* leading columns */
         /* construct dense row from (multiplier, poly) data */
         len_t sc = 0; /* starting column for dense row */
         int64_t *drl = dr + (omp_get_thread_num() * nc);
@@ -3976,11 +4000,13 @@ static void exact_sparse_linear_algebra_cd_ff_32(
                 normalize_sparse_matrix_row_ff_32(
                         cfs, npiv[PRELOOP], npiv[LENGTH], st->fc);
             }
-            k   = __sync_bool_compare_and_swap(&mat->row[npiv[OFFSET]], NULL, npiv);
+            lc = ((cd_t *)(npiv + OFFSET))[0];
+            printf("lc[%u] = %u\n", i, lc);
+            k  = __sync_bool_compare_and_swap(&mat->row[lc], NULL, npiv);
         } while (!k);
 		if (npiv != NULL) {
-			mat->cp[i] = mat->row[npiv[OFFSET]];
-            mat->cf_32[npiv[OFFSET]] = cfs;
+			mat->cp[i] = mat->row[lc];
+            mat->cf_32[lc] = cfs;
 		}
     }
 
@@ -4009,13 +4035,19 @@ static void exact_sparse_linear_algebra_cd_ff_32(
 
     const len_t np = mat->np;
     for (i = 0; i < np; ++i) {
-        const len_t sc = mat->cp[i][OFFSET];
+        const len_t sc = ((cd_t *)(mat->cp[i] + OFFSET))[0];
+        printf("sc %u / i %u / np %u\n", sc, i, np);
         generate_dense_row_from_sparse_row_ff_32(dr, mat, sc);
         free(mat->row[sc]);
+        mat->row[sc] = NULL;
         free(mat->cf_32[sc]);
         mat->row[sc]  = reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
                 dr, mat, sc, mat->cf_32+sc, st);
         mat->cp[i] = mat->row[sc];
+    }
+
+    for (i = 0 ; i < np; ++i) {
+        printf("cp[%u] = %p | LEN %u, CF %u\n", i, mat->cp[i], mat->cp[i][LENGTH], mat->cp[i][COEFFS]);
     }
 
     /* timings */
