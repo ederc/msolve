@@ -307,7 +307,8 @@ static void convert_hashes_to_columns_no_matrix(
     double ct = cputime();
     double rt = realtime();
 
-    ht->lh = realloc(ht->lh, (unsigned long)ht->lhld * sizeof(len_t));
+    ht->lh   = realloc(ht->lh, (unsigned long)ht->lhld * sizeof(len_t));
+    ht->lhsz = ht->lhld;
     for (int ii = 0; ii < ht->lhld; ++ii) {
         printf("lh[%d] = %u\n", ii, ht->lh[ii]);
     }

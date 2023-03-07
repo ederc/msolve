@@ -1263,6 +1263,7 @@ static inline void insert_multiplied_poly_in_hash_table_no_row(
         t = insert_in_hash_table(n, ht);
 #endif
         if (ht->idx[t] == 0) {
+            printf("lhld %u / %u lhsz\n", ht->lhld, ht->lhsz);
             ht->lh[ht->lhld++] = t;
             ht->idx[t]++;
             /* mark leading terms as done for symbolic preprocessing */
