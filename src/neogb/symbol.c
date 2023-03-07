@@ -684,6 +684,12 @@ static inline void find_multiplied_reducer_data(
 
     const hm_t m = ht->lh[idx];
 
+    printf("searching reducer for ");
+    for (int j = 0; j < ht->evl; ++j) {
+        printf("%d ", ht->ev[m][j]);
+    }
+    printf("\n");
+
     const len_t evl = ht->evl;
 
     const exp_t * const e = ht->ev[m];
@@ -700,6 +706,8 @@ static inline void find_multiplied_reducer_data(
     exp_t * const * const evb = ht->ev;
 
     dp = ht->div[m];
+    printf("dp %u - > red? %u\n", dp, bs->red[dp]);
+    i  = 0;
     if (dp > 0 && bs->red[dp] == 0) {
         b = bs->hm[dp];
         f = evb[b[OFFSET]];
@@ -707,7 +715,6 @@ static inline void find_multiplied_reducer_data(
             etmp[k] = (exp_t)(e[k]-f[k]);
         }
     } else {
-        i = 0;
 start:
         while (i < lml && lms[i] & ns) {
             i++;
@@ -723,18 +730,22 @@ start:
                 }
             }
             dp = lmps[i];
-            const hi_t h  = hdm.val - hdb[b[OFFSET]].val;
-#if PARALLEL_HASHING
-            hm_t mul = check_insert_in_hash_table(etmp, h, ht);
-#else
-            hm_t mul = insert_in_hash_table(etmp, ht);
-#endif
-            multiplied_poly_to_hash_table(ht, h, etmp, b);
-            mat->rrd[2*mat->nru]   = mul;
-            mat->rrd[2*mat->nru+1] = dp;
-            mat->nru++;
-            ht->div[m] = dp;
         }
+    }
+    printf("dp %u | i %u | lml %u\n", dp, i, lml);
+    if (i < lml) {
+        printf("reducer found: bs[%u]\n", dp);
+        const hi_t h  = hdm.val - hdb[b[OFFSET]].val;
+#if PARALLEL_HASHING
+        hm_t mul = check_insert_in_hash_table(etmp, h, ht);
+#else
+        hm_t mul = insert_in_hash_table(etmp, ht);
+#endif
+        multiplied_poly_to_hash_table(ht, h, etmp, b);
+        mat->rrd[2*mat->nru]   = mul;
+        mat->rrd[2*mat->nru+1] = dp;
+        mat->nru++;
+        ht->div[m] = dp;
     }
 }
 

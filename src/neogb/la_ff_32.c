@@ -3958,6 +3958,8 @@ static void exact_sparse_linear_algebra_cd_ff_32(
     const len_t nrl = mat->nrl;
     const len_t nru = mat->nru;
 
+    printf("--- matrix data: nc %u | nrl %u | nru %u ---\n", nc, nrl, nru);
+
     /* allocate memory of dense row(s) */
     int64_t *dr = (int64_t *)malloc(
                 (unsigned long)st->nthrds * nc * sizeof(int64_t));
@@ -4044,6 +4046,7 @@ static void exact_sparse_linear_algebra_cd_ff_32(
         mat->row[sc]  = reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
                 dr, mat, sc, mat->cf_32+sc, st);
         mat->cp[i] = mat->row[sc];
+        printf("CFI %p == %p ?\n", mat->cf_32[sc], mat->cf_32[mat->cp[i][COEFFS]]);
     }
 
     for (i = 0 ; i < np; ++i) {

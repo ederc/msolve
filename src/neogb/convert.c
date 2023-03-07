@@ -927,6 +927,7 @@ static void convert_sparse_cd_matrix_rows_to_basis_elements(
         len_t pos = 0;
 
         const len_t len = mat->cp[i][LENGTH];
+        const len_t cfi = mat->cp[i][COEFFS];
 
         const cd_t * const cd   = (cd_t *)(mat->cp[i] + OFFSET);
         const len_t * const lcd = mat->cp[i] + (OFFSET + len/RATIO + (len%RATIO > 0));
@@ -940,6 +941,24 @@ static void convert_sparse_cd_matrix_rows_to_basis_elements(
             p[j] = lh[pos];
             printf("poly[%u] = %u\n", j, poly[j]);
         }
+        switch (st->ff_bits) {
+            case 0:
+                bs->cf_qq[bl+i] = mat->cf_qq[cfi];
+                break;
+            case 8:
+                bs->cf_8[bl+i]  = mat->cf_8[cfi];
+                break;
+            case 16:
+                bs->cf_16[bl+i] = mat->cf_16[cfi];
+                break;
+            case 32:
+                bs->cf_32[bl+i] = mat->cf_32[cfi];
+                break;
+            default:
+                bs->cf_32[bl+i] = mat->cf_32[cfi];
+                break;
+        }
+        printf("len convert %u\n", len);
         poly[LENGTH]  = len;
         poly[PRELOOP] = mat->cp[i][PRELOOP];
         poly[COEFFS]  = bl+i;
@@ -957,31 +976,16 @@ static void convert_sparse_cd_matrix_rows_to_basis_elements(
         free(mat->cp[i]);
         mat->cp[i] = NULL;
 
-        switch (st->ff_bits) {
-            case 0:
-                bs->cf_qq[bl+i] = mat->cf_qq[poly[COEFFS]];
-                break;
-            case 8:
-                bs->cf_8[bl+i]  = mat->cf_8[poly[COEFFS]];
-                break;
-            case 16:
-                bs->cf_16[bl+i] = mat->cf_16[poly[COEFFS]];
-                break;
-            case 32:
-                bs->cf_32[bl+i] = mat->cf_32[poly[COEFFS]];
-                break;
-            default:
-                bs->cf_32[bl+i] = mat->cf_32[poly[COEFFS]];
-                break;
-        }
         bs->hm[bl+i] = poly;
         if (poly[DEG] == 0) {
             bs->constant  = 1;
         }
 #if 1
+        printf("LENGTH %u\n", bs->hm[bl+i][LENGTH]);
         if (st->ff_bits == 32) {
             printf("new element (%u): length %u | degree %d | ", bl+i, bs->hm[bl+i][LENGTH], bs->hm[bl+i][DEG]);
             int kk = 0;
+            printf("bscf %p\n", bs->cf_32[bl+i]);
             for (int kk=0; kk<bs->hm[bl+i][LENGTH]; ++kk) {
             printf("%u | ", bs->cf_32[bl+i][kk]);
             for (int jj=0; jj < ht->evl; ++jj) {
