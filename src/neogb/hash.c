@@ -438,6 +438,7 @@ static void enlarge_hash_table(
      * enlarge the hash table size any further and have to live with more
      * than 50% fill in. */
     if (ht->hsz < (hl_t)pow(2,32)) {
+        const hl_t hszo = ht->hsz;
         ht->hsz = 2 * ht->hsz;
         const hl_t hsz  = ht->hsz;
         ht->div  = realloc(ht->div, hsz * sizeof(len_t));
@@ -445,13 +446,13 @@ static void enlarge_hash_table(
             fprintf(stderr, "Enlarging hash table failed for hsz = %lu,\n", (unsigned long)hsz);
             fprintf(stderr, "segmentation fault will follow.\n");
         }
-        memset(ht->div, 0, hsz * sizeof(len_t));
+        memset(ht->div+hszo, 0, (hsz-hszo) * sizeof(len_t));
         ht->idx  = realloc(ht->idx, hsz * sizeof(len_t));
         if (ht->idx == NULL) {
             fprintf(stderr, "Enlarging hash table failed for hsz = %lu,\n", (unsigned long)hsz);
             fprintf(stderr, "segmentation fault will follow.\n");
         }
-        memset(ht->idx, 0, hsz * sizeof(len_t));
+        memset(ht->idx+hszo, 0, (hsz-hszo) * sizeof(len_t));
         ht->hmap  = realloc(ht->hmap, hsz * sizeof(hi_t));
         if (ht->hmap == NULL) {
             fprintf(stderr, "Enlarging hash table failed for hsz = %lu,\n", (unsigned long)hsz);

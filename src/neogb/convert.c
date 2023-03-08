@@ -309,6 +309,7 @@ static void convert_hashes_to_columns_no_matrix(
 
     ht->lh   = realloc(ht->lh, (unsigned long)ht->lhld * sizeof(len_t));
     ht->lhsz = ht->lhld;
+    /* printf("lhld %u\n", ht->lhld); */
     /* for (int ii = 0; ii < ht->lhld; ++ii) {
         printf("lh[%d] = %u\n", ii, ht->lh[ii]);
     } */
@@ -374,16 +375,16 @@ static void generate_matrix_row(
     cd_t *cd   = (cd_t *)(row + OFFSET);
     len_t *lcd = row + (rlen - len);
     for (i = 0; i < len; ++i) {
-        const len_t idx  = hi[get_multiplied_monomial(
+        const len_t id  = hi[get_multiplied_monomial(
                                 mul, emul, poly[OFFSET+i], ht)];
-        d = idx - k;
+        d = id - k;
         if (d < SCD) {
             cd[i] = (cd_t)d;
         } else {
             cd[i]    = (cd_t)SCD;
             lcd[j++] = d;
         }
-        k = idx;
+        k = id;
     }
     /* get rid of unused space for long column differences */
     row = realloc(row, (rlen - (len - j)) * sizeof(len_t));
@@ -408,6 +409,7 @@ static void generate_matrix_row(
         k      = idx;
     }
 #endif
+    /* printf("idx %u / %u\n", idx, mat->nc); */
     mat->row[idx] = row;
 }
 
@@ -459,7 +461,6 @@ static void generate_reducer_matrix_part(
             break;
         case 32:
             mat->cf_32 = calloc((unsigned long)mat->nc, sizeof(cf32_t *));
-    double st = 0, tt = 0;
             for (i = 0; i < mat->nru; ++i) {
                 const hm_t mul    = rrd[2*i];
                 const exp_t *emul = ht->ev[mul];
@@ -467,13 +468,10 @@ static void generate_reducer_matrix_part(
                 /* get multiplied leading term to insert at right place */
                 const len_t idx = hi[get_multiplied_monomial(
                                         mul, emul, poly[OFFSET], ht)];
-                tt = realtime();
                 generate_matrix_row(mat, idx, mul, emul, poly, ht, bs);
-                st += realtime() - tt;
                 mat->cf_32[idx] = bs->cf_32[mat->row[idx][COEFFS]];
                 mat->op[j++] = mat->row[idx];
             }
-    printf("get mul poly time %13.2f\n", st);
             break;
         default:
             fprintf(stderr, "ff_bits not correctly set in generate_reducer_matrix_part().\n");
@@ -931,7 +929,6 @@ static void convert_sparse_cd_matrix_rows_to_basis_elements(
 
     const len_t * const lh = ht->lh;
 
-    printf("bs->ld %u / %u\ // %un", bs->ld, bs->sz, mat->np);
     check_enlarge_basis(bs, mat->np, st);
 
 #pragma omp parallel for num_threads(st->nthrds) private(i)

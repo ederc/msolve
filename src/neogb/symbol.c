@@ -209,7 +209,7 @@ static void select_spairs(
     hi_t lcm;
     len_t *gens;
     exp_t *elcm, *eb;
-    exp_t *etmp = ht->ev[0];
+    exp_t etmp[ht->evl];
 
     /* timings */
     double ct = cputime();
@@ -346,7 +346,6 @@ static void select_spairs(
 
     /* memory stuff */
     mat->nrl = mat->nr - mat->nc;
-    printf("nr %u , nc %u, nrl%u\n", mat->nr, mat->nc, mat->nrl);
     mat->nru = mat->nc;
     trd = realloc(trd, (unsigned long)2*mat->nrl * sizeof(hm_t));
 

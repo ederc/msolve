@@ -42,8 +42,6 @@ static inline void generate_dense_row_from_multiplied_polynomial_ff_32(
     const hm_t *poly       = bs->hm[trd[2*pos+1]];
     const len_t len        = poly[LENGTH];
     const cf32_t *cf       = bs->cf_32[poly[COEFFS]];
-    printf("gen lens[%d] = %d\n", trd[2*pos+1], len);
-    printf("cf index %u\n", poly[COEFFS]);
 
     /* start colum index for dense row */
     *sc = hi[get_multiplied_monomial(mul, emul, poly[OFFSET], ht)];
@@ -4003,7 +4001,6 @@ static void exact_sparse_linear_algebra_cd_ff_32(
     /* reduce w.r.t. known pivots */
 #pragma omp parallel for num_threads(st->nthrds) private(i)
     for (i = 0; i < nrl; ++i) {
-        printf("i %u / %u nrl\n", i, nrl);
         len_t k = 0;
         len_t lc = 0;  /* leading columns */
         /* construct dense row from (multiplier, poly) data */
@@ -4051,7 +4048,6 @@ static void exact_sparse_linear_algebra_cd_ff_32(
 			mat->cp[i] = mat->row[lc];
             mat->cf_32[lc] = cfs;
 		}
-        printf("%u / %u done -> lc %u\n", i, nrl, lc);
     }
 
     /* prepare interreduction of new pivots */

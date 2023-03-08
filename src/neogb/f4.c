@@ -472,12 +472,8 @@ int core_f4(
         select_spairs(mat, ht, ps, bs, st);
         symbolic_preprocessing_new(mat, ht, bs, st);
         convert_hashes_to_columns_no_matrix(ht, bs, st);
-        double tt = realtime();
         generate_reducer_matrix_part(mat, ht, bs, st);
-        printf("gen time %13.2f\n", realtime()-tt);
-        tt = realtime();
         exact_sparse_linear_algebra_cd_ff_32(mat, bs, ht, st);
-        printf("la time %13.2f\n", realtime()-tt);
         reset_hash_table_index_data(ht);
         /* columns indices are mapped back to exponent hashes */
         if (mat->np > 0) {
