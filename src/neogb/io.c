@@ -341,6 +341,7 @@ void import_input_data(
         case 32:
             cfs_ff  =   (int32_t *)vcfs;
             for (i = 0; i < ngens_input; ++i) {
+                printf("input lens[%d] = %d\n", i, lens[i]);
                 if (invalid_gens[i] == 0) {
                     cf32    = (cf32_t *)malloc((unsigned long)(lens[i]) * sizeof(cf32_t));
                     bs->cf_32[i] = cf32;

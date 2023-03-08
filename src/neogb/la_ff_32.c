@@ -42,6 +42,8 @@ static inline void generate_dense_row_from_multiplied_polynomial_ff_32(
     const hm_t *poly       = bs->hm[trd[2*pos+1]];
     const len_t len        = poly[LENGTH];
     const cf32_t *cf       = bs->cf_32[poly[COEFFS]];
+    printf("gen lens[%d] = %d\n", trd[2*pos+1], len);
+    printf("cf index %u\n", poly[COEFFS]);
 
     /* start colum index for dense row */
     *sc = hi[get_multiplied_monomial(mul, emul, poly[OFFSET], ht)];
@@ -1047,7 +1049,7 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
             j++;
         }
     }
-    row[COEFFS]   = cd[0];
+    row[COEFFS]   = cd[0] != SCD ? cd[0] : lcd[0];
     row[PRELOOP]  = j % UNROLL;
     row[LENGTH]   = j;
 #else

@@ -931,6 +931,7 @@ static void convert_sparse_cd_matrix_rows_to_basis_elements(
 
     const len_t * const lh = ht->lh;
 
+    printf("bs->ld %u / %u\ // %un", bs->ld, bs->sz, mat->np);
     check_enlarge_basis(bs, mat->np, st);
 
 #pragma omp parallel for num_threads(st->nthrds) private(i)
@@ -998,7 +999,7 @@ static void convert_sparse_cd_matrix_rows_to_basis_elements(
         if (poly[DEG] == 0) {
             bs->constant  = 1;
         }
-#if 0
+#if 1
         printf("LENGTH %u\n", bs->hm[bl+i][LENGTH]);
         if (st->ff_bits == 32) {
             printf("new element (%u): length %u | degree %d | ", bl+i, bs->hm[bl+i][LENGTH], bs->hm[bl+i][DEG]);
