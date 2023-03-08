@@ -73,7 +73,7 @@ static inline void generate_dense_row_from_sparse_row_ff_32(
 
     len_t pos = 0;
     for (j = 0, i = 0; i < len; ++i) {
-        pos = cd[i] != 0 ? pos + cd[i] : pos + lcd[j++];
+        pos = cd[i] != SCD ? pos + cd[i] : pos + lcd[j++];
         dr[pos] = cf[i];
     }
 #else
@@ -4001,6 +4001,7 @@ static void exact_sparse_linear_algebra_cd_ff_32(
     /* reduce w.r.t. known pivots */
 #pragma omp parallel for num_threads(st->nthrds) private(i)
     for (i = 0; i < nrl; ++i) {
+        printf("i %u / %u nrl\n", i, nrl);
         len_t k = 0;
         len_t lc = 0;  /* leading columns */
         /* construct dense row from (multiplier, poly) data */
@@ -4035,6 +4036,10 @@ static void exact_sparse_linear_algebra_cd_ff_32(
             }
 #if EIGHTBIT
             lc = ((cd_t *)(npiv + OFFSET))[0];
+            if (lc == SCD) {
+                lc = (npiv+OFFSET+npiv[LENGTH]/RATIO + (npiv[LENGTH]%RATIO > 0))[0];
+            }
+
 #else
             lc = npiv[OFFSET];
 #endif
@@ -4044,6 +4049,7 @@ static void exact_sparse_linear_algebra_cd_ff_32(
 			mat->cp[i] = mat->row[lc];
             mat->cf_32[lc] = cfs;
 		}
+        printf("%u / %u done -> lc %u\n", i, nrl, lc);
     }
 
     /* prepare interreduction of new pivots */
@@ -4071,7 +4077,11 @@ static void exact_sparse_linear_algebra_cd_ff_32(
 
     const len_t np = mat->np;
     for (i = 0; i < np; ++i) {
-        const len_t sc = ((cd_t *)(mat->cp[i] + OFFSET))[0];
+        j = ((cd_t *)(mat->cp[i] + OFFSET))[0];
+        if (j == SCD) {
+            j = (mat->cp[i]+OFFSET+mat->cp[i][LENGTH]/RATIO + (mat->cp[i][LENGTH]%RATIO > 0))[0];
+        }
+        const len_t sc = j;
         generate_dense_row_from_sparse_row_ff_32(dr, mat, sc);
         free(mat->row[sc]);
         mat->row[sc] = NULL;
