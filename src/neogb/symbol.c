@@ -684,11 +684,11 @@ static inline void find_multiplied_reducer_data(
 
     const hm_t m = ht->lh[idx];
 
-    printf("searching reducer for ");
+    /* printf("searching reducer for ");
     for (int j = 0; j < ht->evl; ++j) {
         printf("%d ", ht->ev[m][j]);
     }
-    printf("\n");
+    printf("\n"); */
 
     const len_t evl = ht->evl;
 
@@ -706,7 +706,6 @@ static inline void find_multiplied_reducer_data(
     exp_t * const * const evb = ht->ev;
 
     dp = ht->div[m];
-    printf("dp %u - > red? %u\n", dp, bs->red[dp]);
     i  = 0;
     if (dp > 0 && bs->red[dp] == 0) {
         b = bs->hm[dp];
@@ -732,9 +731,7 @@ start:
             dp = lmps[i];
         }
     }
-    printf("dp %u | i %u | lml %u\n", dp, i, lml);
     if (i < lml) {
-        printf("reducer found: bs[%u]\n", dp);
         const hi_t h  = hdm.val - hdb[b[OFFSET]].val;
 #if PARALLEL_HASHING
         hm_t mul = check_insert_in_hash_table(etmp, h, ht);

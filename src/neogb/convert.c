@@ -309,18 +309,18 @@ static void convert_hashes_to_columns_no_matrix(
 
     ht->lh   = realloc(ht->lh, (unsigned long)ht->lhld * sizeof(len_t));
     ht->lhsz = ht->lhld;
-    for (int ii = 0; ii < ht->lhld; ++ii) {
+    /* for (int ii = 0; ii < ht->lhld; ++ii) {
         printf("lh[%d] = %u\n", ii, ht->lh[ii]);
-    }
+    } */
     sort_r(ht->lh, (unsigned long)ht->lhld, sizeof(hi_t), hcm_cmp, ht);
-    printf("sorted\n-------------------\n");
+    /* printf("sorted\n-------------------\n");
     for (int ii = 0; ii < ht->lhld; ++ii) {
         printf("lh[%d] = %u | ", ii, ht->lh[ii]);
         for (int jj = 0; jj < ht->evl; ++jj) {
             printf("%u ", ht->ev[ht->lh[ii]][jj]);
         }
         printf("\n");
-    }
+    } */
 
     /* store the other direction (hash -> column) */
     for (len_t i = 0; i < ht->lhld; ++i) {
@@ -356,6 +356,7 @@ static void generate_matrix_row(
         - len for possible long column differences
         - len/RATIO for column differences
         - len%RATIO > 0 for len not divisible by RATIO */
+#if EIGHTBIT
     const unsigned long rlen = OFFSET + len + len/RATIO + (len%RATIO > 0);
     len_t *row = calloc(rlen, sizeof(len_t));
 
@@ -384,18 +385,29 @@ static void generate_matrix_row(
         }
         k = idx;
     }
-    printf("cd = ");
-    for (i = 0; i < len; ++i) {
-        printf("%u ", cd[i]);
-    }
-    printf("\n");
     /* get rid of unused space for long column differences */
-    printf("len%ratio %d --> %d\n", len%RATIO, len%RATIO>0);
-    printf("row[LENGTH] %d\n", row[LENGTH]);
-    printf("rlen %lu\n", rlen);
-    printf("j %d\n", j);
     row = realloc(row, (rlen - (len - j)) * sizeof(len_t));
-    printf("new length %d\n",(rlen - (len - j)));
+#else
+    const len_t rlen = len + OFFSET;
+    len_t *row = calloc(rlen, sizeof(len_t));
+
+    /* set meta data */
+    row[DEG]     = ht->hd[mul].deg + poly[DEG];
+    row[BINDEX]  = poly[BINDEX];
+    row[MULT]    = mul;
+    row[COEFFS]  = poly[COEFFS];
+    row[PRELOOP] = poly[PRELOOP];
+    row[LENGTH]  = poly[LENGTH];
+
+    /* write column difference data */
+    k = 0;
+    for (i = OFFSET; i < rlen; ++i) {
+        const len_t idx  = hi[get_multiplied_monomial(mul, emul, poly[i], ht)];
+        d      = idx - k;
+        row[i] = d;
+        k      = idx;
+    }
+#endif
     mat->row[idx] = row;
 }
 
@@ -447,6 +459,7 @@ static void generate_reducer_matrix_part(
             break;
         case 32:
             mat->cf_32 = calloc((unsigned long)mat->nc, sizeof(cf32_t *));
+    double st = 0, tt = 0;
             for (i = 0; i < mat->nru; ++i) {
                 const hm_t mul    = rrd[2*i];
                 const exp_t *emul = ht->ev[mul];
@@ -454,10 +467,13 @@ static void generate_reducer_matrix_part(
                 /* get multiplied leading term to insert at right place */
                 const len_t idx = hi[get_multiplied_monomial(
                                         mul, emul, poly[OFFSET], ht)];
+                tt = realtime();
                 generate_matrix_row(mat, idx, mul, emul, poly, ht, bs);
+                st += realtime() - tt;
                 mat->cf_32[idx] = bs->cf_32[mat->row[idx][COEFFS]];
                 mat->op[j++] = mat->row[idx];
             }
+    printf("get mul poly time %13.2f\n", st);
             break;
         default:
             fprintf(stderr, "ff_bits not correctly set in generate_reducer_matrix_part().\n");
@@ -915,32 +931,39 @@ static void convert_sparse_cd_matrix_rows_to_basis_elements(
 
     const len_t * const lh = ht->lh;
 
-    printf("bld %u, bsz %u\n", bs->ld, bs->sz);
     check_enlarge_basis(bs, mat->np, st);
-    printf("mat->np %u\n", mat->np);
-    printf("bld %u, bsz %u\n", bs->ld, bs->sz);
 
 #pragma omp parallel for num_threads(st->nthrds) private(i)
     for (i = 0; i < np; ++i) {
-        printf("cp[%d] = %p\n", i, mat->cp[i]);
         len_t k = 0;
         len_t pos = 0;
 
         const len_t len = mat->cp[i][LENGTH];
         const len_t cfi = mat->cp[i][COEFFS];
 
+#if EIGHTBIT
         const cd_t * const cd   = (cd_t *)(mat->cp[i] + OFFSET);
         const len_t * const lcd = mat->cp[i] + (OFFSET + len/RATIO + (len%RATIO > 0));
 
         hm_t *poly = calloc((unsigned long)len + OFFSET, sizeof(hm_t));
         hm_t *p = poly + OFFSET;
         for (len_t j = 0; j < len; ++j) {
-            printf("cd[%u] = %u\n", j, cd[j]);
-            pos = cd[j] != SCD ? pos + cd[j] : pos + lcd[k++];
-            printf("lh[%u] = %u\n", pos, lh[pos]);
+            pos  = cd[j] != SCD ? pos + cd[j] : pos + lcd[k++];
             p[j] = lh[pos];
-            printf("poly[%u] = %u\n", j, poly[j]);
         }
+        poly[LENGTH] = len;
+        poly[PRELOOP] = mat->cp[i][PRELOOP];
+        free(mat->cp[i]);
+        mat->cp[i] = NULL;
+#else
+        hm_t *poly = mat->cp[i];
+        mat->cp[i] = NULL;
+        hm_t *p = poly + OFFSET;
+        for (len_t j = 0; j < len; ++j) {
+            pos  += p[j];
+            p[j] = lh[pos];
+        }
+#endif
         switch (st->ff_bits) {
             case 0:
                 bs->cf_qq[bl+i] = mat->cf_qq[cfi];
@@ -958,9 +981,6 @@ static void convert_sparse_cd_matrix_rows_to_basis_elements(
                 bs->cf_32[bl+i] = mat->cf_32[cfi];
                 break;
         }
-        printf("len convert %u\n", len);
-        poly[LENGTH]  = len;
-        poly[PRELOOP] = mat->cp[i][PRELOOP];
         poly[COEFFS]  = bl+i;
         poly[DEG]     = ht->hd[poly[OFFSET]].deg;
 
@@ -973,14 +993,12 @@ static void convert_sparse_cd_matrix_rows_to_basis_elements(
             }
             poly[DEG] = deg;
         }
-        free(mat->cp[i]);
-        mat->cp[i] = NULL;
 
         bs->hm[bl+i] = poly;
         if (poly[DEG] == 0) {
             bs->constant  = 1;
         }
-#if 1
+#if 0
         printf("LENGTH %u\n", bs->hm[bl+i][LENGTH]);
         if (st->ff_bits == 32) {
             printf("new element (%u): length %u | degree %d | ", bl+i, bs->hm[bl+i][LENGTH], bs->hm[bl+i][DEG]);

@@ -817,16 +817,23 @@ static inline int32_t is_contained_in_hash_table(
      * const hl_t hsz = ht->hsz; */
     /* ht->hsz <= 2^32 => mod is always uint32_t */
     const hi_t mod = (hi_t)(ht->hsz - 1);
+    /* printf("e = ");
+    for (int ii = 0; ii < ht->evl; ++ii) {
+        printf("%d ", a[ii]);
+    }
+    printf("\n"); */
 
     /* probing */
     k = h;
     i = 0;
+    /* printf("ht ld %u / %u sz\n", ht->eld, ht->esz); */
 restart:
     for (; i < ht->hsz; ++i) {
         k = (hi_t)((k+i) & mod);
         const hi_t hm = ht->hmap[k];
         if (!hm) {
             *kp = k;
+        /* printf("add to ht with i %u\n", i); */
             return 0;
         }
         if (ht->hd[hm].val != h) {
@@ -843,6 +850,7 @@ restart:
             i++;
             goto restart;
         }
+        /* printf("found via i %u -> pos %u\n", i, hm); */
         *kp = hm;
         return 1;
     }
@@ -1178,7 +1186,14 @@ static inline hm_t find_in_hash_table(
         const ht_t * const ht
         )
 {
-    len_t i = 0, j = 0, k = 0;
+    /* printf("e = ");
+    for (int ii = 0; ii < ht->evl; ++ii) {
+        printf("%d ", ev[ii]);
+    }
+    printf("\n");
+    printf("ht->ld %u | ht->sz %u / %u\n", ht->eld, ht->esz, ht->hsz); */
+    len_t i = 0, j = 0;
+    len_t k = val;
     const hi_t mod = (hi_t)(ht->hsz - 1);
 restart:
     for (; i < ht->hsz; ++i) {
@@ -1198,6 +1213,7 @@ restart:
             i++;
             goto restart;
         }
+        /* printf("i %u -> pos %u\n", i, hm); */
         return hm;
     }
     return -1;
@@ -1219,7 +1235,7 @@ static inline hm_t get_multiplied_monomial(
     hd_t *hd   = ht->hd;
 
     const exp_t * const emon = ht->ev[mon];
-    exp_t *ev = ht->ev[0];
+    exp_t ev[evl];
     for (i = 0; i < evl; ++i) {
         ev[i] = emul[i] + emon[i];
     }
@@ -1263,7 +1279,6 @@ static inline void insert_multiplied_poly_in_hash_table_no_row(
         t = insert_in_hash_table(n, ht);
 #endif
         if (ht->idx[t] == 0) {
-            printf("lhld %u / %u lhsz\n", ht->lhld, ht->lhsz);
             ht->lh[ht->lhld++] = t;
             ht->idx[t]++;
             /* mark leading terms as done for symbolic preprocessing */

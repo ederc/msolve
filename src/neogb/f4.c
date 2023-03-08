@@ -226,6 +226,93 @@ static void intermediate_reduce_basis(
 }
 #endif
 
+static void reduce_basis_cd(
+        bs_t *bs,
+        mat_t *mat,
+        ht_t **htp,
+        stat_t *st
+        )
+{
+    /* timings for one round */
+    double rt, ct;
+    ct = cputime();
+    rt = realtime();
+
+    len_t i, j, k;
+#if 0
+    ht_t *ht   = *htp;
+    exp_t *etmp = ht->ev[0];
+    memset(etmp, 0, (unsigned long)(ht->evl) * sizeof(exp_t));
+
+    mat->rr = (hm_t **)malloc((unsigned long)bs->lml * 2 * sizeof(hm_t *));
+    mat->nr = 0;
+    mat->sz = 2 * bs->lml;
+
+    /* add all non-redundant basis elements as matrix rows */
+    for (i = 0; i < bs->lml; ++i) {
+        mat->rr[mat->nr] = multiplied_poly_to_matrix_row(
+                sht, bht, 0, etmp, bs->hm[bs->lmps[i]]);
+        sht->idx[mat->rr[mat->nr][OFFSET]]  = 1;
+        mat->nr++;
+    }
+    mat->nc = mat->nr; /* needed for correct counting in symbol */
+    symbolic_preprocessing(mat, bs, st, sht, NULL, bht);
+    /* no known pivots, we need mat->ncl = 0, so set all indices to 1 */
+    for (i = 0; i < sht->eld; ++i) {
+        sht->idx[i]= 1;
+    }
+
+    /* generate hash <-> column mapping */
+    if (st->info_level > 1) {
+        printf("reduce final basis ");
+        fflush(stdout);
+    }
+    convert_hashes_to_columns(&hcm, mat, st, sht);
+    mat->nc = mat->ncl + mat->ncr;
+    /* sort rows */
+    sort_matrix_rows_decreasing(mat->rr, mat->nru);
+    /* do the linear algebra reduction and free basis data afterwards */
+    interreduce_matrix_rows(mat, bs, st, 1);
+    /* remap rows to basis elements (keeping their position in bs) */
+    convert_sparse_matrix_rows_to_basis_elements_use_sht(1, mat, bs, sht, hcm, st);
+
+    bs->ld  = mat->np;
+
+    /* clean_hash_table(sht); */
+    clear_matrix(mat);
+
+    /* we may have added some multiples of reduced basis polynomials
+     * from the matrix, so we get rid of them. */
+    k = 0;
+    i = 0;
+start:
+    for (; i < bs->ld; ++i) {
+        for (j = 0; j < k; ++j) {
+            if (check_monomial_division(
+                        bs->hm[bs->ld-1-i][OFFSET],
+                        bs->hm[bs->lmps[j]][OFFSET], ht)) {
+                ++i;
+                goto start;
+            }
+        }
+        bs->lmps[k] = bs->ld-1-i;
+        bs->lm[k++] = ht->hd[bs->hm[bs->ld-1-i][OFFSET]].sdm;
+    }
+    bs->lml = k;
+#endif
+    /* timings */
+    st->reduce_gb_ctime = cputime() - ct;
+    st->reduce_gb_rtime = realtime() - rt;
+    if (st->info_level > 1) {
+        printf("%13.2f sec\n", st->reduce_gb_rtime);
+    }
+
+    if (st->info_level > 1) {
+        printf("-------------------------------------------------\
+----------------------------------------\n");
+    }
+}
+
 static void reduce_basis(
         bs_t *bs,
         mat_t *mat,
@@ -345,6 +432,8 @@ int core_f4(
 
     int32_t round;
 
+    len_t i, j;
+
     /* timings for one round */
     double rrt, crt;
 
@@ -383,12 +472,16 @@ int core_f4(
         select_spairs(mat, ht, ps, bs, st);
         symbolic_preprocessing_new(mat, ht, bs, st);
         convert_hashes_to_columns_no_matrix(ht, bs, st);
+        double tt = realtime();
         generate_reducer_matrix_part(mat, ht, bs, st);
+        printf("gen time %13.2f\n", realtime()-tt);
+        tt = realtime();
         exact_sparse_linear_algebra_cd_ff_32(mat, bs, ht, st);
+        printf("la time %13.2f\n", realtime()-tt);
         reset_hash_table_index_data(ht);
         /* columns indices are mapped back to exponent hashes */
         if (mat->np > 0) {
-        convert_sparse_cd_matrix_rows_to_basis_elements(mat, bs, ht, st);
+            convert_sparse_cd_matrix_rows_to_basis_elements(mat, bs, ht, st);
         }
         /* all rows in mat are now polynomials in the basis,
         * so we do not need the rows anymore */
@@ -411,8 +504,65 @@ int core_f4(
         printf("-------------------------------------------------\
 ----------------------------------------\n");
     }
+    /* remove possible redudant elements */
+    for (i = 0; i < bs->lml; ++i) {
+        for (j = i+1; j < bs->lml; ++j) {
+            if (bs->red[bs->lmps[j]] == 0 && check_monomial_division(bs->hm[bs->lmps[i]][OFFSET], bs->hm[bs->lmps[j]][OFFSET], ht)) {
+                bs->red[bs->lmps[i]]  =   1;
+                break;
+            }
+        }
+    }
+    j = 0;
+    for (i = 0; i < bs->lml; ++i) {
+        if (bs->red[bs->lmps[i]] == 0) {
+            bs->lm[j]   = bs->lm[i];
+            bs->lmps[j] = bs->lmps[i];
+            ++j;
+        }
+    }
+    bs->lml = j;
 
-    return 0;
+    /* At the moment we do not directly remove the eliminated polynomials from
+     * the resulting basis. */
+#if 0
+    if (st->nev > 0) {
+        j = 0;
+        for (i = 0; i < bs->lml; ++i) {
+            if (ht->ev[bs->hm[bs->lmps[i]][OFFSET]][0] == 0) {
+                bs->lm[j]   = bs->lm[i];
+                bs->lmps[j] = bs->lmps[i];
+                ++j;
+            }
+        }
+        bs->lml = j;
+    }
+#endif
+
+    /* reduce final basis? */
+    if (st->reduce_gb == 1) {
+        /* note: bht will become sht, and sht will become NULL,
+         * thus we need pointers */
+        /* reduce_basis(bs, mat, &hcm, &bht, &sht, st); */
+    }
+
+    *bsp  = bs;
+    *htp  = ht;
+    *stp  = st;
+
+    if (st->info_level > 1) {
+        print_final_statistics(stdout, st);
+    }
+    /* free and clean up */
+    /* note that all rows kept from mat during the overall computation are
+     * basis elements and thus we do not need to free the rows itself, but
+     * just the matrix structure */
+    free(mat);
+    if (ps != NULL) {
+        free_pairset(&ps);
+    }
+
+    return 1;
 }
 
 int core_f4_old(
