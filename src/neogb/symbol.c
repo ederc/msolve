@@ -892,7 +892,7 @@ static void symbolic_preprocessing_new(
     len_t i = 0, j = 0;
 
     while (i < ht->lhld) {
-        while (mat->sz < ht->lhld - i) {
+        while (mat->sz - mat->nru < ht->lhld - i) {
             mat->sz *= 2;
             mat->rrd = realloc(mat->rrd,
                     (unsigned long)2 * mat->sz * sizeof(hm_t));
