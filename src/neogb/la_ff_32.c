@@ -78,10 +78,8 @@ static inline void generate_dense_row_from_sparse_row_ff_32(
     }
 #else
     const len_t *r = row + OFFSET;
-    len_t pos = 0;
     for (j = 0, i = 0; i < len; ++i) {
-        pos += r[i];
-        dr[pos] = cf[i];
+        dr[r[i]] = cf[i];
     }
 #endif
 }
@@ -988,21 +986,21 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
         const len_t * const row = mat->row[i] + OFFSET;
         len_t pos  = 0;
         for (j = 0; j < os; ++j) {
-            pos += row[j];
+            pos = row[j];
             dr[pos]   -=  mul * pcf[j];
             dr[pos]   +=  (dr[pos] >> 63) & mod2;
         }
         for (; j < len; j += UNROLL) {
-            pos += row[j];
+            pos = row[j];
             dr[pos]   -=  mul * pcf[j];
             dr[pos]   +=  (dr[pos] >> 63) & mod2;
-            pos += row[j+1];
+            pos = row[j+1];
             dr[pos]   -=  mul * pcf[j+1];
             dr[pos]   +=  (dr[pos] >> 63) & mod2;
-            pos += row[j+2];
+            pos = row[j+2];
             dr[pos]   -=  mul * pcf[j+2];
             dr[pos]   +=  (dr[pos] >> 63) & mod2;
-            pos += row[j+3];
+            pos = row[j+3];
             dr[pos]   -=  mul * pcf[j+3];
             dr[pos]   +=  (dr[pos] >> 63) & mod2;
         }
@@ -1062,9 +1060,9 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
     len_t diff = 0;
     for (i = np; i < ncols; ++i) {
         if (dr[i] != 0) {
-            diff = i - prev;
-                r[j] = diff;
-            prev = i;
+            /* diff = i - prev; */
+                r[j] = i;
+            /* prev = i; */
             cfs[j] = (cf32_t)dr[i];
             j++;
         }
@@ -4075,11 +4073,15 @@ static void exact_sparse_linear_algebra_cd_ff_32(
 
     const len_t np = mat->np;
     for (i = 0; i < np; ++i) {
+#if EIGHTBIT
         j = ((cd_t *)(mat->cp[i] + OFFSET))[0];
         if (j == SCD) {
             j = (mat->cp[i]+OFFSET+mat->cp[i][LENGTH]/RATIO + (mat->cp[i][LENGTH]%RATIO > 0))[0];
         }
         const len_t sc = j;
+#else
+        const len_t sc = mat->cp[i][OFFSET];
+#endif
         generate_dense_row_from_sparse_row_ff_32(dr, mat, sc);
         free(mat->row[sc]);
         mat->row[sc] = NULL;

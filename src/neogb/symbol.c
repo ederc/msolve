@@ -700,7 +700,7 @@ static inline void find_multiplied_reducer_data(
     const sdm_t * const lms = bs->lm;
     const bl_t * const lmps = bs->lmps;
 
-    exp_t *etmp = ht->ev[0];
+    exp_t etmp[evl];
     const hd_t * const hdb  = ht->hd;
     exp_t * const * const evb = ht->ev;
 

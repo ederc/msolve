@@ -403,13 +403,9 @@ static void generate_matrix_row(
     /* write column difference data */
     k = 0;
     for (i = OFFSET; i < rlen; ++i) {
-        const len_t idx  = hi[get_multiplied_monomial(mul, emul, poly[i], ht)];
-        d      = idx - k;
-        row[i] = d;
-        k      = idx;
+        row[i]  = hi[get_multiplied_monomial(mul, emul, poly[i], ht)];
     }
 #endif
-    /* printf("idx %u / %u\n", idx, mat->nc); */
     mat->row[idx] = row;
 }
 
@@ -958,8 +954,7 @@ static void convert_sparse_cd_matrix_rows_to_basis_elements(
         mat->cp[i] = NULL;
         hm_t *p = poly + OFFSET;
         for (len_t j = 0; j < len; ++j) {
-            pos  += p[j];
-            p[j] = lh[pos];
+            p[j] = lh[p[j]];
         }
 #endif
         switch (st->ff_bits) {
