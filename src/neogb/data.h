@@ -212,20 +212,6 @@ struct bs_t
                        the denominator is 1) */
 };
 
-/* typedef struct row_t;
-struct row_t
-{
-    len_t cf;
-    len_t pre;
-    len_t len;
-    len_t bidx;
-    hm_t mul;
-    deg_t deg;
-
-    cd_t *cd;
-    len_t *lcd;
-};
-*/
 /* matrix stuff */
 typedef struct mat_t mat_t;
 struct mat_t
