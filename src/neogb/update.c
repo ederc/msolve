@@ -78,6 +78,7 @@ static void insert_and_update_spairs(
     const int nthrds = st->nthrds;
 #endif
 
+
     const int pl  = psl->ld;
     const int bl  = bs->ld;
 

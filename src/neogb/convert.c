@@ -416,7 +416,7 @@ static void generate_reducer_matrix_part(
         stat_t *st
         )
 {
-    len_t i = 0, j = 0;
+    len_t i = 0;
 
     const len_t *rrd       = mat->rrd;
     const len_t * const hi = ht->idx;
@@ -428,7 +428,7 @@ static void generate_reducer_matrix_part(
 
     switch (st->ff_bits) {
         case 8:
-            mat->cf_8 = calloc((unsigned long)mat->nc, sizeof(cf8_t *));
+            mat->cf_8 = calloc((unsigned long)mat->nr, sizeof(cf8_t *));
             for (i = 0; i < mat->nru; ++i) {
                 const hm_t mul    = rrd[2*i];
                 const exp_t *emul = ht->ev[mul];
@@ -437,12 +437,13 @@ static void generate_reducer_matrix_part(
                 const len_t idx = hi[get_multiplied_monomial(
                                         mul, emul, poly[OFFSET], ht)];
                 generate_matrix_row(mat, idx, mul, emul, poly, ht, bs);
-                mat->cf_8[idx] = bs->cf_8[mat->row[idx][COEFFS]];
-                mat->op[j++] = mat->row[idx];
+                mat->cf_8[i]       = bs->cf_8[poly[COEFFS]];
+                mat->op[i]         = mat->row[idx];
+                mat->op[i][COEFFS] = i;
             }
             break;
         case 16:
-            mat->cf_16 = calloc((unsigned long)mat->nc, sizeof(cf16_t *));
+            mat->cf_16 = calloc((unsigned long)mat->nr, sizeof(cf16_t *));
             for (i = 0; i < mat->nru; ++i) {
                 const hm_t mul    = rrd[2*i];
                 const exp_t *emul = ht->ev[mul];
@@ -451,12 +452,13 @@ static void generate_reducer_matrix_part(
                 const len_t idx = hi[get_multiplied_monomial(
                                         mul, emul, poly[OFFSET], ht)];
                 generate_matrix_row(mat, idx, mul, emul, poly, ht, bs);
-                mat->cf_16[idx] = bs->cf_16[mat->row[idx][COEFFS]];
-                mat->op[j++] = mat->row[idx];
+                mat->cf_16[i]      = bs->cf_16[poly[COEFFS]];
+                mat->op[i]         = mat->row[idx];
+                mat->op[i][COEFFS] = i;
             }
             break;
         case 32:
-            mat->cf_32 = calloc((unsigned long)mat->nc, sizeof(cf32_t *));
+            mat->cf_32 = calloc((unsigned long)mat->nr, sizeof(cf32_t *));
             for (i = 0; i < mat->nru; ++i) {
                 const hm_t mul    = rrd[2*i];
                 const exp_t *emul = ht->ev[mul];
@@ -465,13 +467,29 @@ static void generate_reducer_matrix_part(
                 const len_t idx = hi[get_multiplied_monomial(
                                         mul, emul, poly[OFFSET], ht)];
                 generate_matrix_row(mat, idx, mul, emul, poly, ht, bs);
-                mat->cf_32[idx] = bs->cf_32[mat->row[idx][COEFFS]];
-                mat->op[j++] = mat->row[idx];
+                mat->cf_32[i]      = bs->cf_32[poly[COEFFS]];
+                mat->op[i]         = mat->row[idx];
+                mat->op[i][COEFFS] = i;
             }
             break;
         default:
             fprintf(stderr, "ff_bits not correctly set in generate_reducer_matrix_part().\n");
             exit(1);
+    }
+
+    /* print matrix meta data */
+    if (st->info_level > 1) { 
+        int64_t nterms = 0;
+        for (i = 0; i < mat->nru; ++i) {
+            nterms += bs->hm[rrd[2*i+1]][LENGTH];
+        }
+        for (i = 0; i < mat->nrl; ++i) {
+            nterms += bs->hm[mat->trd[2*i+1]][LENGTH];
+        }
+        nterms  *=  100; /* for percentage */
+        double density = (double)nterms / (double)(mat->nr) / (double)mat->nc;
+        printf(" %7u x %-7u %8.2f%%", mat->nr, mat->nc, density);
+        fflush(stdout);
     }
 }
 
@@ -918,7 +936,7 @@ static void convert_sparse_cd_matrix_rows_to_basis_elements(
     double ct = cputime();
     double rt = realtime();
 
-    len_t i;
+    len_t i, j;
 
     const len_t np = mat->np;
     const len_t bl = bs->ld;
@@ -927,17 +945,18 @@ static void convert_sparse_cd_matrix_rows_to_basis_elements(
 
     check_enlarge_basis(bs, mat->np, st);
 
-#pragma omp parallel for num_threads(st->nthrds) private(i)
+#pragma omp parallel for num_threads(st->nthrds) private(i) schedule(dynamic)
     for (i = 0; i < np; ++i) {
+        len_t l = np - 1 - i;
         len_t k = 0;
         len_t pos = 0;
 
-        const len_t len = mat->cp[i][LENGTH];
-        const len_t cfi = mat->cp[i][COEFFS];
+        const len_t len = mat->cp[l][LENGTH];
+        const len_t cfi = mat->cp[l][COEFFS];
 
 #if EIGHTBIT
-        const cd_t * const cd   = (cd_t *)(mat->cp[i] + OFFSET);
-        const len_t * const lcd = mat->cp[i] + (OFFSET + len/RATIO + (len%RATIO > 0));
+        const cd_t * const cd   = (cd_t *)(mat->cp[l] + OFFSET);
+        const len_t * const lcd = mat->cp[l] + (OFFSET + len/RATIO + (len%RATIO > 0));
 
         hm_t *poly = calloc((unsigned long)len + OFFSET, sizeof(hm_t));
         hm_t *p = poly + OFFSET;
@@ -946,12 +965,12 @@ static void convert_sparse_cd_matrix_rows_to_basis_elements(
             p[j] = lh[pos];
         }
         poly[LENGTH] = len;
-        poly[PRELOOP] = mat->cp[i][PRELOOP];
-        free(mat->cp[i]);
-        mat->cp[i] = NULL;
+        poly[PRELOOP] = mat->cp[l][PRELOOP];
+        free(mat->cp[l]);
+        mat->cp[l] = NULL;
 #else
-        hm_t *poly = mat->cp[i];
-        mat->cp[i] = NULL;
+        hm_t *poly = mat->cp[l];
+        mat->cp[l] = NULL;
         hm_t *p = poly + OFFSET;
         for (len_t j = 0; j < len; ++j) {
             p[j] = lh[p[j]];
@@ -992,18 +1011,16 @@ static void convert_sparse_cd_matrix_rows_to_basis_elements(
             bs->constant  = 1;
         }
 #if 0
-        printf("LENGTH %u\n", bs->hm[bl+i][LENGTH]);
         if (st->ff_bits == 32) {
             printf("new element (%u): length %u | degree %d | ", bl+i, bs->hm[bl+i][LENGTH], bs->hm[bl+i][DEG]);
             int kk = 0;
-            printf("bscf %p\n", bs->cf_32[bl+i]);
-            for (int kk=0; kk<bs->hm[bl+i][LENGTH]; ++kk) {
+/*             for (int kk=0; kk<bs->hm[bl+i][LENGTH]; ++kk) { */
             printf("%u | ", bs->cf_32[bl+i][kk]);
             for (int jj=0; jj < ht->evl; ++jj) {
                 printf("%u ", ht->ev[bs->hm[bl+i][OFFSET+kk]][jj]);
             }
-            printf(" || ");
-            }
+            /* printf(" || ");
+            } */
             printf("\n");
         }
 #endif

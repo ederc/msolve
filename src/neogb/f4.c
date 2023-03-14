@@ -456,9 +456,9 @@ int core_f4(
        are left in the pairset or if we found a constant in the basis. */
     if (st->info_level > 1) {
         printf("\ndeg     sel   pairs        mat          density \
-           new data             time(rd)\n");
+           new data         time(rd) in sec (real|cpu)\n");
         printf("-------------------------------------------------\
-----------------------------------------\n");
+--------------------------------------------------------\n");
     }
     for (round = 1; ps->ld > 0; ++round) {
         /* get meta data */
@@ -492,7 +492,7 @@ int core_f4(
         /* check redundancy only if input is not homogeneous */
         update_basis_f4(ps, bs, ht, st, mat->np, 1-st->homogeneous);
         if (st->info_level > 1) {
-            printf("real: %13.2f sec | cpu: %13.2f sec\n",
+            printf("%13.2f | %-13.2f\n",
                     realtime() - rrt, cputime() - crt);
         }
     }

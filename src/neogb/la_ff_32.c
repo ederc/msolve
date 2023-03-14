@@ -65,7 +65,7 @@ static inline void generate_dense_row_from_sparse_row_ff_32(
     memset(dr, 0, (unsigned long)mat->nc * sizeof(int64_t));
 
     const len_t *row = mat->row[idx];
-    const cf32_t *cf = mat->cf_32[idx];
+    const cf32_t *cf = mat->cf_32[row[COEFFS]];
     const len_t len  = row[LENGTH];
 #if EIGHTBIT
     const cd_t * const cd   = (cd_t *)(row + OFFSET);
@@ -876,7 +876,7 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
         int64_t *dr,
         mat_t *mat,
         const len_t dpiv, /* pivot of dense row at the beginning */
-        cf32_t **cfsp,
+        const len_t cfp,  /* position of new coeffs array in tmpcf */
         stat_t *st
         )
 {
@@ -910,7 +910,7 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
 
         /* found reducer row, get multiplier */
         const int64_t mul        = (int64_t)dr[i];
-        const cf32_t * const pcf = mat->cf_32[i];
+        const cf32_t * const pcf = mat->cf_32[mat->row[i][COEFFS]];
 
 #ifdef HAVE_AVX2
         const len_t len = dts[LENGTH];
@@ -1067,11 +1067,11 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
             j++;
         }
     }
-    row[COEFFS]   = r[0];
+    row[COEFFS]   = cfp;
     row[PRELOOP]  = j % UNROLL;
     row[LENGTH]   = j;
 #endif
-    *cfsp = cfs;
+    mat->cf_32[cfp] = cfs;
     return row;
 }
 
@@ -3981,13 +3981,11 @@ static void exact_sparse_linear_algebra_cd_ff_32(
     double ct = cputime();
     double rt = realtime();
 
-    len_t i = 0;
+    len_t i;
 
     const len_t nc  = mat->nc;
     const len_t nrl = mat->nrl;
     const len_t nru = mat->nru;
-
-    printf("--- matrix data: nc %u | nrl %u | nru %u ---\n", nc, nrl, nru);
 
     /* allocate memory of dense row(s) */
     int64_t *dr = (int64_t *)malloc(
@@ -3997,7 +3995,7 @@ static void exact_sparse_linear_algebra_cd_ff_32(
     mat->cp = calloc((unsigned long)nrl, sizeof(len_t *));
 
     /* reduce w.r.t. known pivots */
-#pragma omp parallel for num_threads(st->nthrds) private(i)
+#pragma omp parallel for num_threads(st->nthrds) private(i) schedule(dynamic)
     for (i = 0; i < nrl; ++i) {
         len_t k = 0;
         len_t lc = 0;  /* leading columns */
@@ -4019,7 +4017,7 @@ static void exact_sparse_linear_algebra_cd_ff_32(
             cfs = NULL;
 			/* printf("i+nru = %d | nr = %d | i = %d\n", i+mat->nru, mat->nr, i); */
             npiv  = reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
-                    drl, mat, sc, &cfs, st);
+                    drl, mat, sc, i+nru, st);
             if (!npiv) {
                 break;
             }
@@ -4027,9 +4025,9 @@ static void exact_sparse_linear_algebra_cd_ff_32(
              * NOTE: this has to be done here, otherwise the reduction may
              * lead to wrong results in a parallel computation since other
              * threads might directly use the new pivot once it is synced. */
-            if (cfs[0] != 1) {
+            if (mat->cf_32[npiv[COEFFS]][0] != 1) {
                 normalize_sparse_matrix_row_ff_32(
-                        cfs, npiv[PRELOOP], npiv[LENGTH], st->fc);
+                        mat->cf_32[npiv[COEFFS]], npiv[PRELOOP], npiv[LENGTH], st->fc);
             }
 #if EIGHTBIT
             lc = ((cd_t *)(npiv + OFFSET))[0];
@@ -4044,7 +4042,6 @@ static void exact_sparse_linear_algebra_cd_ff_32(
         } while (!k);
 		if (npiv != NULL) {
 			mat->cp[i] = mat->row[lc];
-            mat->cf_32[lc] = cfs;
 		}
     }
 
@@ -4082,12 +4079,14 @@ static void exact_sparse_linear_algebra_cd_ff_32(
 #else
         const len_t sc = mat->cp[i][OFFSET];
 #endif
+        const len_t cfp = mat->row[sc][COEFFS];
         generate_dense_row_from_sparse_row_ff_32(dr, mat, sc);
         free(mat->row[sc]);
         mat->row[sc] = NULL;
-        free(mat->cf_32[sc]);
+        free(mat->cf_32[cfp]);
+        mat->cf_32[cfp] == NULL;
         mat->row[sc] =reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
-                dr, mat, sc, mat->cf_32+sc, st);
+                dr, mat, sc, cfp, st);
         mat->cp[i] = mat->row[sc];
     }
 
