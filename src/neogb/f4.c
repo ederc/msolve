@@ -229,7 +229,7 @@ static void intermediate_reduce_basis(
 static void reduce_basis_cd(
         bs_t *bs,
         mat_t *mat,
-        ht_t **htp,
+        ht_t *ht,
         stat_t *st
         )
 {
@@ -239,11 +239,43 @@ static void reduce_basis_cd(
     rt = realtime();
 
     len_t i, j, k;
-#if 0
-    ht_t *ht   = *htp;
-    exp_t *etmp = ht->ev[0];
+
+    exp_t etmp[ht->evl];
     memset(etmp, 0, (unsigned long)(ht->evl) * sizeof(exp_t));
 
+    /* allocate memory for  a list of already fully reduced basis elements */
+    len_t frp[bs->lml];
+    len_t frpld = 0;
+
+    /* find those non-redundant basis elements which are not fully
+    tail reduced */
+
+#if 0
+
+/* 
+
+    needs goto right here
+
+
+ */
+    i = 0;
+restart:
+    for (; i < bs->lml; ++i) {
+        const hm_t *p   = bs->hm[bs->lmps[i]];
+        const len_t len = p[LENGTH];
+        j = OFFSET + 1;
+        for (; j < len+OFFSET; ++j) {
+            for (k = 0; k < bs->lml; ++k) {
+                if (check_monomial_division(p[j], bs->hm[bs->lmps[k]][OFFSET], ht) == 1) {
+                    /* add p to matrix */
+                    i++;
+                    goto restart;
+                }
+            }
+        }
+        /* add p to temporary place holder */
+        frp[frpld++] = bs->lmps[i];
+    }
     mat->rr = (hm_t **)malloc((unsigned long)bs->lml * 2 * sizeof(hm_t *));
     mat->nr = 0;
     mat->sz = 2 * bs->lml;
@@ -299,7 +331,6 @@ start:
         bs->lm[k++] = ht->hd[bs->hm[bs->ld-1-i][OFFSET]].sdm;
     }
     bs->lml = k;
-#endif
     /* timings */
     st->reduce_gb_ctime = cputime() - ct;
     st->reduce_gb_rtime = realtime() - rt;
@@ -311,6 +342,7 @@ start:
         printf("-------------------------------------------------\
 ----------------------------------------\n");
     }
+#endif
 }
 
 static void reduce_basis(

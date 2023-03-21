@@ -1264,6 +1264,26 @@ static inline void insert_multiplied_poly_in_hash_table_no_row(
     exp_t **ev = ht->ev;
 
     l = OFFSET;
+    const exp_t * const eb = ev[b[l]];
+
+    n = ev[ht->eld];
+    for (j = 0; j < evl; ++j) {
+        n[j]  = (exp_t)(ea[j] + eb[j]);
+    }
+
+#if PARALLEL_HASHING
+    const val_t h   = h1 + hd[b[l]].val;
+    t = check_insert_in_hash_table(n, h, ht);
+#else
+    t = insert_in_hash_table(n, ht);
+#endif
+    if (ht->idx[t] == 0) {
+        ht->lh[ht->lhld++] = t;
+        /* mark leading terms as done for symbolic preprocessing */
+        ht->idx[t] += 2;
+    }
+
+    l++;
 
     for (; l < len; ++l) {
         const exp_t * const eb = ev[b[l]];
@@ -1532,6 +1552,25 @@ static inline hi_t get_lcm(
 #else
     return insert_in_hash_table(etmp, ht2);
 #endif
+}
+
+static inline void poly_to_hash_table(
+    ht_t *ht,
+    const hm_t *poly
+    )
+{
+    /* hash table product insertions appear only here:
+     * we check for hash table enlargements first and then do the insertions
+     * without further elargment checks there */
+    while (ht->eld+poly[LENGTH] >= ht->esz) {
+        enlarge_hash_table(ht);
+    }
+    while (ht->lhsz - ht->lhld < poly[LENGTH]) {
+        ht->lhsz *= 2;
+        ht->lh = realloc(ht->lh, (unsigned long)ht->lhsz * sizeof(len_t));
+    }
+
+    /* insert_multiplied_poly_in_hash_table_no_row(hm, em, poly, ht); */
 }
 
 static inline void multiplied_poly_to_hash_table(
