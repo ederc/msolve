@@ -1302,10 +1302,6 @@ static inline void insert_multiplied_poly_in_hash_table_no_row(
         if (ht->idx[t] == 0) {
             ht->lh[ht->lhld++] = t;
             ht->idx[t]++;
-            /* mark leading terms as done for symbolic preprocessing */
-            if (l == OFFSET) {
-                ht->idx[t]++; 
-            }
         }
     }
 }
@@ -1559,18 +1555,41 @@ static inline void poly_to_hash_table(
     const hm_t *poly
     )
 {
+    len_t i;
     /* hash table product insertions appear only here:
      * we check for hash table enlargements first and then do the insertions
      * without further elargment checks there */
-    while (ht->eld+poly[LENGTH] >= ht->esz) {
+    hm_t t;
+    val_t val;
+    exp_t *ev;
+
+    const len_t len = poly[LENGTH];
+    while (ht->eld+len >= ht->esz) {
         enlarge_hash_table(ht);
     }
-    while (ht->lhsz - ht->lhld < poly[LENGTH]) {
+    while (ht->lhsz - ht->lhld < len) {
         ht->lhsz *= 2;
         ht->lh = realloc(ht->lh, (unsigned long)ht->lhsz * sizeof(len_t));
     }
 
-    /* insert_multiplied_poly_in_hash_table_no_row(hm, em, poly, ht); */
+    i = OFFSET;
+    val = ht->hd[poly[i]].val;
+    ev  = ht->ev[poly[i]];
+    t   = find_in_hash_table(val, ev, ht);
+    if (ht->idx[t] == 0) {
+        ht->lh[ht->lhld++] = t;
+        ht->idx[t] += 2;
+    }
+    i++;
+    for (; i < len+OFFSET; ++i) {
+        val = ht->hd[poly[i]].val;
+        ev  = ht->ev[poly[i]];
+        t   = find_in_hash_table(val, ev, ht);
+        if (ht->idx[t] == 0) {
+            ht->lh[ht->lhld++] = t;
+            ht->idx[t]++;
+        }
+    }
 }
 
 static inline void multiplied_poly_to_hash_table(
