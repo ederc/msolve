@@ -308,6 +308,7 @@ static void reduce_basis_cd(
 
     prepare_final_matrix(mat, ht, bs);
     symbolic_preprocessing_new(mat, ht, bs, st);
+
     if (st->info_level > 1) {
         printf("reduce final basis ");
         fflush(stdout);

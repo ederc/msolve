@@ -1564,9 +1564,6 @@ static inline void poly_to_hash_table(
     exp_t *ev;
 
     const len_t len = poly[LENGTH];
-    while (ht->eld+len >= ht->esz) {
-        enlarge_hash_table(ht);
-    }
     while (ht->lhsz - ht->lhld < len) {
         ht->lhsz *= 2;
         ht->lh = realloc(ht->lh, (unsigned long)ht->lhsz * sizeof(len_t));
@@ -1578,8 +1575,14 @@ static inline void poly_to_hash_table(
     t   = find_in_hash_table(val, ev, ht);
     if (ht->idx[t] == 0) {
         ht->lh[ht->lhld++] = t;
-        ht->idx[t] += 2;
     }
+    /* Always set lead term hash monomials' indices to 2, since the index
+    might be earlier set to 1 as a non leading term from another basis
+    element, BUT we need to ensure that there is no other copy of the
+    current element added. This would lead to wrong final reduction of the
+    basis. */
+    ht->idx[t] += 2;
+
     i++;
     for (; i < len+OFFSET; ++i) {
         val = ht->hd[poly[i]].val;
