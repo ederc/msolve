@@ -1280,8 +1280,11 @@ static inline void insert_multiplied_poly_in_hash_table_no_row(
     if (ht->idx[t] == 0) {
         ht->lh[ht->lhld++] = t;
         /* mark leading terms as done for symbolic preprocessing */
-        ht->idx[t] += 2;
     }
+    /* Always set lead term hash monomials' indices to 2, since the index
+    might be earlier set to 1 as a non leading term from another basis
+    element. */
+    ht->idx[t] = 2;
 
     l++;
 
@@ -1581,7 +1584,7 @@ static inline void poly_to_hash_table(
     element, BUT we need to ensure that there is no other copy of the
     current element added. This would lead to wrong final reduction of the
     basis. */
-    ht->idx[t] += 2;
+    ht->idx[t] = 2;
 
     i++;
     for (; i < len+OFFSET; ++i) {
