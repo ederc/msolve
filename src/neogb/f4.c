@@ -18,7 +18,6 @@
  * Christian Eder
  * Mohab Safey El Din */
 
-
 #include "f4.h"
 
 /* The parameters themselves are handled by julia, thus we only
@@ -226,6 +225,75 @@ static void intermediate_reduce_basis(
 }
 #endif
 
+static void prepare_final_basis(
+        bs_t *bs,
+        const len_t ld,
+        const ht_t * const ht,
+        const stat_t * const st
+        )
+{
+    len_t i;
+
+    bs->ld = ld;
+    bs->sz = ld;
+    bs->hm = realloc(bs->hm, (unsigned long)ld * sizeof(hm_t *));
+
+    switch (st->ff_bits) {
+        case 8:
+            bs->cf_8  = realloc(bs->cf_8, (unsigned long)ld * sizeof(cf8_t *));
+            break;
+        case 16:
+            bs->cf_16  = realloc(bs->cf_16, (unsigned long)ld * sizeof(cf16_t *));
+            break;
+        case 32:
+            bs->cf_32  = realloc(bs->cf_32, (unsigned long)ld * sizeof(cf32_t *));
+            break;
+        default:
+            exit(1);
+    }
+    bs->lm   = realloc(bs->lm, (unsigned long)ld * sizeof(sdm_t));
+    bs->lmps = realloc(bs->lmps, (unsigned long)ld * sizeof(len_t));
+    bs->lml  = ld;
+
+    for (i = 0; i < ld; ++i) {
+        bs->lmps[i] = ld-i-1;
+        bs->lm[i]   = ht->hd[bs->hm[ld-i-1][OFFSET]].sdm;
+    }
+}
+
+static void prepare_final_matrix(
+        mat_t *mat,
+        ht_t *ht,
+        const bs_t * const bs
+        )
+{
+    len_t i, j;
+
+    /* reset local hashes load */
+    ht->lhld = 0;
+
+    exp_t zero[ht->evl];
+    memset(zero, 0, (unsigned long)ht->evl * sizeof(exp_t));
+    hm_t zm = find_in_hash_table(0, zero, ht);
+
+    mat->nr = mat->nrl = mat->nru = mat->nc = mat->np = 0;
+
+    mat->sz = bs->lml;
+
+    mat->trd = realloc(mat->trd, (unsigned long)2 * bs->lml * sizeof(len_t));
+    j = 0;
+    for (i = 0; i < bs->lml; ++i) {
+        mat->nc++;
+        const hm_t *p   = bs->hm[bs->lmps[i]];
+        poly_to_hash_table(ht, p);
+        mat->trd[j++] = zm;
+        mat->trd[j++] = bs->lmps[i];
+    }
+    mat->nr  = bs->lml;
+    mat->nrl = mat->nc;
+    mat->nru = 0;
+}
+
 static void reduce_basis_cd(
         bs_t *bs,
         mat_t *mat,
@@ -238,111 +306,30 @@ static void reduce_basis_cd(
     ct = cputime();
     rt = realtime();
 
-    len_t i, j, k;
-
-    exp_t etmp[ht->evl];
-    memset(etmp, 0, (unsigned long)(ht->evl) * sizeof(exp_t));
-
-    /* allocate memory for  a list of already fully reduced basis elements */
-    len_t frp[bs->lml];
-    len_t frpld = 0;
-
-    /* find those non-redundant basis elements which are not fully
-    tail reduced */
-
-#if 0
-
-/* 
-
-    needs goto right here
-
-
- */
-    i = 0;
-restart:
-    for (; i < bs->lml; ++i) {
-        const hm_t *p   = bs->hm[bs->lmps[i]];
-        const len_t len = p[LENGTH];
-        j = OFFSET + 1;
-        for (; j < len+OFFSET; ++j) {
-            for (k = 0; k < bs->lml; ++k) {
-                if (check_monomial_division(p[j], bs->hm[bs->lmps[k]][OFFSET], ht) == 1) {
-                    /* add p to matrix */
-                    i++;
-                    goto restart;
-                }
-            }
-        }
-        /* add p to temporary place holder */
-        frp[frpld++] = bs->lmps[i];
-    }
-    mat->rr = (hm_t **)malloc((unsigned long)bs->lml * 2 * sizeof(hm_t *));
-    mat->nr = 0;
-    mat->sz = 2 * bs->lml;
-
-    /* add all non-redundant basis elements as matrix rows */
-    for (i = 0; i < bs->lml; ++i) {
-        mat->rr[mat->nr] = multiplied_poly_to_matrix_row(
-                sht, bht, 0, etmp, bs->hm[bs->lmps[i]]);
-        sht->idx[mat->rr[mat->nr][OFFSET]]  = 1;
-        mat->nr++;
-    }
-    mat->nc = mat->nr; /* needed for correct counting in symbol */
-    symbolic_preprocessing(mat, bs, st, sht, NULL, bht);
-    /* no known pivots, we need mat->ncl = 0, so set all indices to 1 */
-    for (i = 0; i < sht->eld; ++i) {
-        sht->idx[i]= 1;
-    }
-
-    /* generate hash <-> column mapping */
+    prepare_final_matrix(mat, ht, bs);
+    symbolic_preprocessing_new(mat, ht, bs, st);
     if (st->info_level > 1) {
         printf("reduce final basis ");
         fflush(stdout);
     }
-    convert_hashes_to_columns(&hcm, mat, st, sht);
-    mat->nc = mat->ncl + mat->ncr;
-    /* sort rows */
-    sort_matrix_rows_decreasing(mat->rr, mat->nru);
-    /* do the linear algebra reduction and free basis data afterwards */
-    interreduce_matrix_rows(mat, bs, st, 1);
-    /* remap rows to basis elements (keeping their position in bs) */
-    convert_sparse_matrix_rows_to_basis_elements_use_sht(1, mat, bs, sht, hcm, st);
+    convert_hashes_to_columns_no_matrix(ht, bs, st);
+    generate_reducer_matrix_part(mat, ht, bs, st);
+    exact_sparse_linear_algebra_cd_ff_32(mat, bs, ht, st);
+    reset_hash_table_index_data(ht);
 
-    bs->ld  = mat->np;
+    free_basis_elements(bs);
 
-    /* clean_hash_table(sht); */
+    convert_sparse_cd_matrix_rows_to_basis_elements(mat, bs, ht, st);
+
+    prepare_final_basis(bs, mat->np, ht, st);
+
     clear_matrix(mat);
-
-    /* we may have added some multiples of reduced basis polynomials
-     * from the matrix, so we get rid of them. */
-    k = 0;
-    i = 0;
-start:
-    for (; i < bs->ld; ++i) {
-        for (j = 0; j < k; ++j) {
-            if (check_monomial_division(
-                        bs->hm[bs->ld-1-i][OFFSET],
-                        bs->hm[bs->lmps[j]][OFFSET], ht)) {
-                ++i;
-                goto start;
-            }
-        }
-        bs->lmps[k] = bs->ld-1-i;
-        bs->lm[k++] = ht->hd[bs->hm[bs->ld-1-i][OFFSET]].sdm;
-    }
-    bs->lml = k;
-    /* timings */
-    st->reduce_gb_ctime = cputime() - ct;
-    st->reduce_gb_rtime = realtime() - rt;
     if (st->info_level > 1) {
-        printf("%13.2f sec\n", st->reduce_gb_rtime);
-    }
-
-    if (st->info_level > 1) {
+        printf("%13.2f | %-13.2f\n",
+                realtime() - rt, cputime() - ct);
         printf("-------------------------------------------------\
-----------------------------------------\n");
+----------------------------------------------------------\n");
     }
-#endif
 }
 
 static void reduce_basis(
@@ -448,7 +435,7 @@ start:
 
     if (st->info_level > 1) {
         printf("-------------------------------------------------\
-----------------------------------------\n");
+                ----------------------------------------\n");
     }
 }
 
@@ -488,9 +475,9 @@ int core_f4(
        are left in the pairset or if we found a constant in the basis. */
     if (st->info_level > 1) {
         printf("\ndeg     sel   pairs        mat          density \
-           new data         time(rd) in sec (real|cpu)\n");
+                new data         time(rd) in sec (real|cpu)\n");
         printf("-------------------------------------------------\
---------------------------------------------------------\n");
+----------------------------------------------------------\n");
     }
     for (round = 1; ps->ld > 0; ++round) {
         /* get meta data */
@@ -512,7 +499,7 @@ int core_f4(
             convert_sparse_cd_matrix_rows_to_basis_elements(mat, bs, ht, st);
         }
         /* all rows in mat are now polynomials in the basis,
-        * so we do not need the rows anymore */
+         * so we do not need the rows anymore */
         clear_matrix(mat);
 
         /* if we found a constant we are done, so remove all remaining pairs */
@@ -530,7 +517,7 @@ int core_f4(
     }
     if (st->info_level > 1) {
         printf("-------------------------------------------------\
-----------------------------------------\n");
+----------------------------------------------------------\n");
     }
     /* remove possible redudant elements */
     for (i = 0; i < bs->lml; ++i) {
@@ -569,6 +556,7 @@ int core_f4(
 
     /* reduce final basis? */
     if (st->reduce_gb == 1) {
+        reduce_basis_cd(bs, mat, ht, st);
         /* note: bht will become sht, and sht will become NULL,
          * thus we need pointers */
         /* reduce_basis(bs, mat, &hcm, &bht, &sht, st); */
