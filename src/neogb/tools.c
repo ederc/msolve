@@ -39,6 +39,119 @@ double realtime(void)
 	return (1. + (double)t.tv_usec + ((double)t.tv_sec*1000000.)) / 1000000.;
 }
 
+static void add_trace_step(
+        trace_t *trace,
+        mat_t *mat
+        )
+{
+    len_t i, j;
+    len_t ctr = 0;
+
+    const len_t ld  = trace->ltd;
+    const len_t nru = mat->nru;
+    const len_t nrl = mat->nrl;
+    rba_t **rba     = mat->rba;
+
+    /* check if there are any non zero new elements, otherwise we
+     * do not need to do this matrix at all in the application steps. */
+    i = 0;
+    while (i < nrl && mat->tr[i] == NULL) {
+        ++i;
+    }
+    if (i == nrl) {
+        return;
+    }
+
+    /* non zero new elements exist */
+    if (trace->ltd == trace->std) {
+        trace->std  *=  2;
+        trace->td   =   realloc(trace->td,
+                (unsigned long)trace->std * sizeof(td_t));
+        memset(trace->td+trace->std/2, 0,
+                (unsigned long)trace->std/2 * sizeof(td_t));
+    }
+
+    const unsigned long lrba = nru / 32 + ((nru % 32) != 0);
+
+    rba_t *reds = (rba_t *)calloc(lrba, sizeof(rba_t));
+
+    for (i = 0; i < nrl; ++i) {
+        if (mat->tr[i] != NULL) {
+            rba[ctr]  = rba[i];
+            ctr++;
+        } else {
+            free(rba[i]);
+            rba[i]  = NULL;
+        }
+    }
+    mat->rbal = ctr;
+    mat->rba  = rba = realloc(rba, (unsigned long)mat->rbal * sizeof(rba_t *));
+
+    const len_t ntr = ctr;
+
+    /* construct rows to be reduced */
+    trace->td[ld].tri  = realloc(trace->td[ld].tri,
+            (unsigned long)ntr * 2 * sizeof(len_t));
+    trace->td[ld].tld = 2 * ntr;
+
+    ctr = 0;
+    for (i = 0; i < nrl; ++i) {
+        if (mat->tr[i] != NULL) {
+            trace->td[ld].tri[ctr++]  = mat->tr[i][BINDEX];
+            trace->td[ld].tri[ctr++]  = mat->tr[i][MULT];
+        }
+    }
+    /* get all needed reducers */
+    for (i = 0; i < ntr; ++i) {
+        for (j = 0; j < lrba; ++j) {
+            reds[j] |= rba[i][j];
+        }
+    }
+
+    /* construct rows to reduce with */
+    trace->td[ld].rri  = realloc(trace->td[ld].rri,
+            (unsigned long)nru * 2 * sizeof(len_t));
+    trace->td[ld].rld = 2 * nru;
+
+    ctr = 0;
+    for (i = 0; i < nru; ++i) {
+        if (reds[i/32] >> (i%32) & 1U) {
+            trace->td[ld].rri[ctr++]  = mat->rr[i][BINDEX];
+            trace->td[ld].rri[ctr++]  = mat->rr[i][MULT];
+        }
+    }
+    trace->td[ld].rri = realloc(trace->td[ld].rri,
+            (unsigned long)ctr * sizeof(len_t));
+    trace->td[ld].rld = ctr;
+    const len_t nrr   = ctr;
+
+    /* new length of rbas, useless reducers removed,
+     * we only need nrr/2 since we do not store the
+     * multipliers in rba */
+    const unsigned long nlrba = nrr / 2 / 32 + (((nrr / 2) % 32) != 0);
+
+    /* construct rba information */
+    trace->td[ld].rba = realloc(trace->td[ld].rba,
+            (unsigned long)ntr * sizeof(rba_t *));
+    /* allocate memory     */
+    for (i = 0; i < ntr; ++i) {
+        trace->td[ld].rba[i]  = calloc(nlrba, sizeof(rba_t));
+    }
+
+    ctr = 0;
+    /* write new rbas for tracer with useless reducers removed */
+    for (i = 0; i < nru; ++i) {
+        if (reds[i/32] >> (i%32) & 1U) {
+            for (j = 0; j < ntr; ++j) {
+                trace->td[ld].rba[j][ctr/32] |=
+                    ((rba[j][i/32] >> i%32) & 1U) << ctr%32;
+            }
+            ctr++;
+        }
+    }
+    free(reds);
+}
+
 static void construct_trace(
         trace_t *trace,
         mat_t *mat

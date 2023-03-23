@@ -188,93 +188,6 @@ struct crit_t
     len_t sz;   // allocated memory / size of the corresponding arrays
 };
 
-/* basis stuff */
-typedef struct bs_t bs_t;
-struct bs_t
-{
-    bl_t ld;        /* load of basis */
-    bl_t sz;        /* size allocated for basis */
-    bl_t lo;        /* load before current update */
-    bl_t constant;  /* 1 if constant is found in basis */
-    deg_t mltdeg;   /* maximal appearing degree in lead term in basis */
-    bl_t *lmps;     /* position of non-redundant lead monomials in basis */
-    sdm_t *lm;      /* non-redundant lead monomials as short divmask */
-    bl_t lml;       /* number of lead monomials of non redundant
-                       elements in basis */
-    int8_t *red;    /* tracks redundancy of basis elements */
-    hm_t **hm;      /* hashed monomials representing exponents */
-    sm_t *sm;       /* signatures for F5-style computations */
-    si_t *si;       /* signatures index for F5-style computations */
-    cf8_t **cf_8;   /* coefficients for finite fields (8 bit) */
-    cf16_t **cf_16; /* coefficients for finite fields (16 bit) */
-    cf32_t **cf_32; /* coefficients for finite fields (32 bit) */
-    mpz_t **cf_qq;  /* coefficients for rationals (always multiplied such that
-                       the denominator is 1) */
-};
-
-/* matrix stuff */
-typedef struct mat_t mat_t;
-struct mat_t
-{
-    len_t *trd;         /* pre data for tr rows consisting of tuples
-                           (multiplier, basis_index) */
-    len_t *rrd;         /* pre data for rr rows consisting of tuples
-                           (multiplier, basis_index) */
-    len_t **row;        /* row in matrix */
-    len_t **op;         /* keeps track of old, i.e. known pivots, i.e.
-                           reducers found during symbolic preprocessing,
-                           for this linear algebra step. Needed to easily
-                           free memory before the interreduction step of the
-                           current pivots (newly found) start. */
-    len_t **cp;         /* keeps track of current pivots in order to extract
-                           them more efficiently when writing to the basis */
-    hm_t **tr;          /* rows to be reduced of the matrix, only column */
-                        /* entries, coefficients are handled via linking */
-                        /* to coefficient arrays */
-    rba_t **rba;        /* bit array for each row to be reduced storing */
-                        /* if a reducer row is used during reduction. */
-                        /* Thus we can reconstruct the trace for the */
-                        /* rows not reduced to zero easily by bitwise */
-                        /* AND operations on these bit arrays. */
-    hm_t **rr;          /* reducer rows of the matrix, only column */
-                        /* entries, coefficients are handled via linking */
-                        /* to coefficient arrays. */
-    cf8_t **cf_8;       /* coefficients for finite fields (8 bit) */
-    cf16_t **cf_16;     /* coefficients for finite fields (16 bit) */
-    cf32_t **cf_32;     /* coefficients for finite fields (32 bit) */
-    mpz_t **cf_qq;      /* coefficients for rationals */
-    mpz_t **cf_ab_qq;   /* coefficients for rationals */
-    len_t sz;           /* number of rows allocated resp. size */
-    len_t np;           /* number of new pivots */
-    len_t nr;           /* number of rows set */
-    len_t nc;           /* number of columns */
-    len_t nru;          /* number of upper rows (in ABCD splicing) */
-    len_t nrl;          /* number of lower rows (in ABCD splicing) */
-    len_t ncl;          /* number of left columns (in ABCD splicing) */
-    len_t ncr;          /* number of right columns (in ABCD splicing) */
-    len_t rbal;         /* length of reducer binary array */
-};
-
-/* signature matrix stuff, stores information from previous and current step */
-typedef struct smat_t smat_t;
-struct smat_t
-{
-    hm_t **cr;     /* current matrix rows, hashes resp. columns */
-    hm_t **pr;     /* previous matrix rows, hashes resp. columns */
-    cf32_t **cc32; /* current matrix coefficients */
-    cf32_t **pc32; /* previous matrix coefficients */
-    deg_t cd;      /* current degree */
-    len_t nlm;     /* number of new leading monomials for basis from */
-                   /* current matrix */
-    len_t csz;     /* number of rows memory is allocated */
-                   /* for in current matrix */
-    len_t cld;     /* number of rows stored in current matrix */
-    len_t pld;     /* number of rows stored in previous matrix */
-    len_t nc;      /* number of columns in current matrix */
-    len_t nz;      /* number of zero reductions during linear algebra */
-                   /* on current matrix */
-};
-
 /* tracer stuff */
 typedef struct primes_t primes_t;
 struct primes_t
@@ -345,6 +258,94 @@ struct trace_t
 };
 
 
+/* basis stuff */
+typedef struct bs_t bs_t;
+struct bs_t
+{
+    bl_t ld;        /* load of basis */
+    bl_t sz;        /* size allocated for basis */
+    bl_t lo;        /* load before current update */
+    bl_t constant;  /* 1 if constant is found in basis */
+    deg_t mltdeg;   /* maximal appearing degree in lead term in basis */
+    bl_t *lmps;     /* position of non-redundant lead monomials in basis */
+    sdm_t *lm;      /* non-redundant lead monomials as short divmask */
+    bl_t lml;       /* number of lead monomials of non redundant
+                       elements in basis */
+    int8_t *red;    /* tracks redundancy of basis elements */
+    hm_t **hm;      /* hashed monomials representing exponents */
+    sm_t *sm;       /* signatures for F5-style computations */
+    si_t *si;       /* signatures index for F5-style computations */
+    cf8_t **cf_8;   /* coefficients for finite fields (8 bit) */
+    cf16_t **cf_16; /* coefficients for finite fields (16 bit) */
+    cf32_t **cf_32; /* coefficients for finite fields (32 bit) */
+    mpz_t **cf_qq;  /* coefficients for rationals (always multiplied such that
+                       the denominator is 1) */
+    trace_t *tr;    /* trace of computation */
+};
+
+/* matrix stuff */
+typedef struct mat_t mat_t;
+struct mat_t
+{
+    len_t *trd;         /* pre data for tr rows consisting of tuples
+                           (multiplier, basis_index) */
+    len_t *rrd;         /* pre data for rr rows consisting of tuples
+                           (multiplier, basis_index) */
+    len_t **row;        /* row in matrix */
+    len_t **op;         /* keeps track of old, i.e. known pivots, i.e.
+                           reducers found during symbolic preprocessing,
+                           for this linear algebra step. Needed to easily
+                           free memory before the interreduction step of the
+                           current pivots (newly found) start. */
+    len_t **cp;         /* keeps track of current pivots in order to extract
+                           them more efficiently when writing to the basis */
+    hm_t **tr;          /* rows to be reduced of the matrix, only column */
+                        /* entries, coefficients are handled via linking */
+                        /* to coefficient arrays */
+    rba_t **rba;        /* bit array for each row to be reduced storing */
+                        /* if a reducer row is used during reduction. */
+                        /* Thus we can reconstruct the trace for the */
+                        /* rows not reduced to zero easily by bitwise */
+                        /* AND operations on these bit arrays. */
+    hm_t **rr;          /* reducer rows of the matrix, only column */
+                        /* entries, coefficients are handled via linking */
+                        /* to coefficient arrays. */
+    cf8_t **cf_8;       /* coefficients for finite fields (8 bit) */
+    cf16_t **cf_16;     /* coefficients for finite fields (16 bit) */
+    cf32_t **cf_32;     /* coefficients for finite fields (32 bit) */
+    mpz_t **cf_qq;      /* coefficients for rationals */
+    mpz_t **cf_ab_qq;   /* coefficients for rationals */
+    len_t sz;           /* number of rows allocated resp. size */
+    len_t np;           /* number of new pivots */
+    len_t nr;           /* number of rows set */
+    len_t nc;           /* number of columns */
+    len_t nru;          /* number of upper rows (in ABCD splicing) */
+    len_t nrl;          /* number of lower rows (in ABCD splicing) */
+    len_t ncl;          /* number of left columns (in ABCD splicing) */
+    len_t ncr;          /* number of right columns (in ABCD splicing) */
+    len_t rbal;         /* length of reducer binary array */
+};
+
+/* signature matrix stuff, stores information from previous and current step */
+typedef struct smat_t smat_t;
+struct smat_t
+{
+    hm_t **cr;     /* current matrix rows, hashes resp. columns */
+    hm_t **pr;     /* previous matrix rows, hashes resp. columns */
+    cf32_t **cc32; /* current matrix coefficients */
+    cf32_t **pc32; /* previous matrix coefficients */
+    deg_t cd;      /* current degree */
+    len_t nlm;     /* number of new leading monomials for basis from */
+                   /* current matrix */
+    len_t csz;     /* number of rows memory is allocated */
+                   /* for in current matrix */
+    len_t cld;     /* number of rows stored in current matrix */
+    len_t pld;     /* number of rows stored in previous matrix */
+    len_t nc;      /* number of columns in current matrix */
+    len_t nz;      /* number of zero reductions during linear algebra */
+                   /* on current matrix */
+};
+
 /* statistic stuff */
 typedef struct stat_t stat_t;
 struct stat_t
@@ -358,6 +359,7 @@ struct stat_t
     double overall_ctime;
     double reduce_gb_ctime;
     double rht_ctime;
+    double f4_ctime;
 
     double round_rtime;
     double select_rtime;
@@ -368,6 +370,7 @@ struct stat_t
     double overall_rtime;
     double reduce_gb_rtime;
     double rht_rtime;
+    double f4_rtime;
 
     int64_t num_pairsred;
     int64_t num_gb_crit;

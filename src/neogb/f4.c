@@ -325,9 +325,12 @@ static void reduce_basis_cd(
     prepare_final_basis(bs, mat->np, ht, st);
 
     clear_matrix(mat);
+
+    st->reduce_gb_rtime = realtime() - rt;
+    st->reduce_gb_ctime = cputime() - ct;
     if (st->info_level > 1) {
         printf("%13.2f | %-13.2f\n",
-                realtime() - rt, cputime() - ct);
+                st->reduce_gb_rtime, st->reduce_gb_ctime);
         printf("-------------------------------------------------\
 ----------------------------------------------------------\n");
     }
@@ -446,6 +449,9 @@ int core_f4(
         stat_t **stp  /* statistics storing meta data */
         )
 {
+    double ct = cputime();
+    double rt = realtime();
+
     bs_t *bs   = *bsp;
     ht_t *ht   = *htp;
     stat_t *st = *stp;
@@ -567,6 +573,8 @@ int core_f4(
     *htp  = ht;
     *stp  = st;
 
+    st->f4_rtime = realtime() - rt;
+    st->f4_ctime = cputime() - ct;
     if (st->info_level > 1) {
         print_final_statistics(stdout, st);
     }

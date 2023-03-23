@@ -945,6 +945,8 @@ static void convert_sparse_cd_matrix_rows_to_basis_elements(
 
     check_enlarge_basis(bs, mat->np, st);
 
+    st->num_zerored += (mat->nrl - mat->np);
+
 #pragma omp parallel for num_threads(st->nthrds) private(i) schedule(dynamic)
     for (i = 0; i < np; ++i) {
         len_t l = np - 1 - i;

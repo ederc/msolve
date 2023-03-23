@@ -875,6 +875,7 @@ static hm_t *sba_reduce_dense_row_by_known_pivots_sparse_31_bit(
 static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
         int64_t *dr,
         mat_t *mat,
+        rba_t *rba,
         const len_t dpiv, /* pivot of dense row at the beginning */
         const len_t cfp,  /* position of new coeffs array in tmpcf */
         stat_t *st
@@ -911,6 +912,9 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
         /* found reducer row, get multiplier */
         const int64_t mul        = (int64_t)dr[i];
         const cf32_t * const pcf = mat->cf_32[mat->row[i][COEFFS]];
+
+        /* track trace data */
+        rba[i/32] |= 1U << (i % 32);
 
 #ifdef HAVE_AVX2
         const len_t len = dts[LENGTH];
@@ -1060,13 +1064,12 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
     len_t diff = 0;
     for (i = np; i < ncols; ++i) {
         if (dr[i] != 0) {
-            /* diff = i - prev; */
-                r[j] = i;
-            /* prev = i; */
+            r[j] = i;
             cfs[j] = (cf32_t)dr[i];
             j++;
         }
     }
+    row[MULT]     = 0; /* to specify a new pivot when trying to generate trace */
     row[COEFFS]   = cfp;
     row[PRELOOP]  = j % UNROLL;
     row[LENGTH]   = j;
@@ -3986,6 +3989,13 @@ static void exact_sparse_linear_algebra_cd_ff_32(
     const len_t nc  = mat->nc;
     const len_t nrl = mat->nrl;
     const len_t nru = mat->nru;
+    /* length for rba if we trace computation */
+    const len_t rl  = nc / 32 + ((nc % 32) != 0);
+
+    /* do we trace the computation? */
+    if (bs->tr != NULL) {
+        mat->rba = calloc((unsigned long)nrl, sizeof(rba_t *));
+    }
 
     /* allocate memory of dense row(s) */
     int64_t *dr = (int64_t *)malloc(
@@ -4009,6 +4019,7 @@ static void exact_sparse_linear_algebra_cd_ff_32(
         mess around with it in the following */
         cf32_t *cfs = NULL;
         len_t *npiv = NULL;
+        rba_t *rba  = calloc((unsigned long)rl, sizeof(rba_t));
 
         do {
             free(npiv);
@@ -4017,7 +4028,7 @@ static void exact_sparse_linear_algebra_cd_ff_32(
             cfs = NULL;
 			/* printf("i+nru = %d | nr = %d | i = %d\n", i+mat->nru, mat->nr, i); */
             npiv  = reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
-                    drl, mat, sc, i+nru, st);
+                    drl, mat, rba, sc, i+nru, st);
             if (!npiv) {
                 break;
             }
@@ -4042,7 +4053,15 @@ static void exact_sparse_linear_algebra_cd_ff_32(
         } while (!k);
 		if (npiv != NULL) {
 			mat->cp[i] = mat->row[lc];
+            if (bs->tr != NULL) {
+                mat->rba[i] = rba;
+            }
 		}
+    }
+
+    /* add this step of F4 to tracer */
+    if (bs->tr != NULL) {
+        add_trace_step(bs->tr, mat);
     }
 
     /* prepare interreduction of new pivots */
@@ -4068,7 +4087,8 @@ static void exact_sparse_linear_algebra_cd_ff_32(
     /* sort for optimal interreduction step */
     sort_matrix_rows_increasing(mat->cp, mat->np);
 
-    const len_t np = mat->np;
+    const len_t np  = mat->np;
+    rba_t *rba      = calloc((unsigned long)rl, sizeof(rba_t));
     for (i = 0; i < np; ++i) {
 #if EIGHTBIT
         j = ((cd_t *)(mat->cp[i] + OFFSET))[0];
@@ -4086,7 +4106,7 @@ static void exact_sparse_linear_algebra_cd_ff_32(
         free(mat->cf_32[cfp]);
         mat->cf_32[cfp] == NULL;
         mat->row[sc] =reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
-                dr, mat, sc, cfp, st);
+                dr, mat, rba, sc, cfp, st);
         mat->cp[i] = mat->row[sc];
     }
 
