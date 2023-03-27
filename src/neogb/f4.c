@@ -444,9 +444,9 @@ start:
 }
 
 int core_f4(
-        bs_t **bsp,   /* input data -> becomes basis */
-        ht_t **htp,   /* hash table */
-        stat_t **stp  /* statistics storing meta data */
+        bs_t **bsp,     /* input data -> becomes basis */
+        ht_t **htp,     /* hash table */
+        stat_t **stp   /* statistics storing meta data */
         )
 {
     double ct = cputime();
@@ -456,7 +456,7 @@ int core_f4(
     ht_t *ht   = *htp;
     stat_t *st = *stp;
 
-    int32_t round;
+    int32_t nrd; /* number of rounds */
 
     len_t i, j;
 
@@ -473,6 +473,13 @@ int core_f4(
     /* reset bs->ld for first update process */
     bs->ld  = 0;
 
+    /* link tracer into basis */
+#if 0
+    bs->tr = trace;
+#else
+    bs->tr = initialize_trace();
+#endif
+
     /* move input generators to basis and generate first spairs.
        always check redundancy since input generators may be redundant
        even so they are homogeneous. */
@@ -486,13 +493,13 @@ int core_f4(
         printf("-------------------------------------------------\
 ----------------------------------------------------------\n");
     }
-    for (round = 1; ps->ld > 0; ++round) {
+    for (nrd= 1; ps->ld > 0; ++nrd) {
         /* get meta data */
         rrt = realtime();
         crt = cputime();
         st->max_bht_size = st->max_bht_size > ht->esz ?
             st->max_bht_size :ht->esz;
-        st->current_rd = round;
+        st->current_rd = nrd;
 
         /* preprocess data for next reduction round */
         select_spairs(mat, ht, ps, bs, st);

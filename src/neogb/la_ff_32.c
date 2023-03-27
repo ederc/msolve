@@ -4105,9 +4105,7 @@ static void exact_sparse_linear_algebra_cd_ff_32(
     compactify_new_pivots(mat, bs);
 
     /* add this step of F4 to tracer */
-    if (bs->tr != NULL) {
-        add_trace_step(bs->tr, mat);
-    }
+    add_trace_step(bs->tr, mat, bs);
 
     /* prepare interreduction of new pivots */
 
