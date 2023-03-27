@@ -24,6 +24,48 @@
 #include <immintrin.h>
 #endif
 
+static inline void free_old_pivots(
+        mat_t *mat
+        )
+{
+    len_t i = 0;
+    const len_t nru = mat->nru;
+    for (i = 0; i < nru; ++i) {
+        free(mat->op[i]);
+        mat->op[i] = NULL;
+    }
+}
+
+static void compactify_new_pivots(
+        mat_t *mat,
+        const bs_t * const bs
+        )
+{
+    len_t i;
+    len_t j = 0;
+
+    const len_t nrl = mat->nrl;
+
+    if (bs->tr != NULL) {
+        for (i = 0; i < nrl; ++i) {
+            if (mat->cp[i] != NULL) {
+                mat->cp[j]    = mat->cp[i];
+                mat->rba[j]   = mat->rba[i];
+                mat->trd[j++] = mat->trd[i];
+            }
+        }
+    } else {
+        for (i = 0; i < nrl; ++i) {
+            if (mat->cp[i] != NULL) {
+                mat->cp[j++] = mat->cp[i];
+            }
+        }
+    }
+    mat->np  = j;
+    mat->cp  = realloc(mat->cp, (unsigned long)mat->np * sizeof(len_t *));
+    mat->rba = realloc(mat->rba, (unsigned long)mat->np * sizeof(rba_t *));
+}
+
 static inline void generate_dense_row_from_multiplied_polynomial_ff_32(
         int64_t *dr,
         len_t *sc,
@@ -60,7 +102,7 @@ static inline void generate_dense_row_from_sparse_row_ff_32(
         const len_t idx
         )
 {
-    len_t i, j;
+    len_t i;
 
     memset(dr, 0, (unsigned long)mat->nc * sizeof(int64_t));
 
@@ -68,6 +110,7 @@ static inline void generate_dense_row_from_sparse_row_ff_32(
     const cf32_t *cf = mat->cf_32[row[COEFFS]];
     const len_t len  = row[LENGTH];
 #if EIGHTBIT
+    len_t j = 0;
     const cd_t * const cd   = (cd_t *)(row + OFFSET);
     const len_t * const lcd = row + (OFFSET + len/RATIO + (len%RATIO > 0));
 
@@ -78,7 +121,7 @@ static inline void generate_dense_row_from_sparse_row_ff_32(
     }
 #else
     const len_t *r = row + OFFSET;
-    for (j = 0, i = 0; i < len; ++i) {
+    for (i = 0; i < len; ++i) {
         dr[r[i]] = cf[i];
     }
 #endif
@@ -881,7 +924,7 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
         stat_t *st
         )
 {
-    hi_t i, j, k, l;
+    hi_t i, j, k;
     int64_t np = -1;
     const int64_t mod  = (int64_t)st->fc;
     const int64_t mod2 = (int64_t)st->fc * st->fc;
@@ -1020,6 +1063,8 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
         return NULL;
     }
 #if EIGHTBIT
+    len_t l = 0;
+
     /* allocate memory for row:
         - OFFSET for meta data
         - k for possible long column differences
@@ -1032,7 +1077,6 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
     len_t *lcd  = row + (rlen - k);
     cf32_t *cfs = (cf32_t *)malloc((unsigned long)k * sizeof(cf32_t));
     j = 0;
-    l = 0;
     len_t prev = 0;
     len_t diff = 0;
     for (i = np; i < ncols; ++i) {
@@ -1059,9 +1103,6 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
     cf32_t *cfs = (cf32_t *)malloc((unsigned long)k * sizeof(cf32_t));
     len_t *r = row + OFFSET;
     j = 0;
-    l = 0;
-    len_t prev = 0;
-    len_t diff = 0;
     for (i = np; i < ncols; ++i) {
         if (dr[i] != 0) {
             r[j] = i;
@@ -4030,6 +4071,8 @@ static void exact_sparse_linear_algebra_cd_ff_32(
             npiv  = reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
                     drl, mat, rba, sc, i+nru, st);
             if (!npiv) {
+                free(rba);
+                rba = NULL;
                 break;
             }
             /* normalize coefficient array
@@ -4059,6 +4102,8 @@ static void exact_sparse_linear_algebra_cd_ff_32(
 		}
     }
 
+    compactify_new_pivots(mat, bs);
+
     /* add this step of F4 to tracer */
     if (bs->tr != NULL) {
         add_trace_step(bs->tr, mat);
@@ -4067,22 +4112,9 @@ static void exact_sparse_linear_algebra_cd_ff_32(
     /* prepare interreduction of new pivots */
 
     /* free memory for old pivots */
-    for (i = 0; i < nru; ++i) {
-        free(mat->op[i]);
-        mat->op[i] = NULL;
-    }
+    free_old_pivots(mat);
 
     dr = realloc(dr, (unsigned long)nc * sizeof(int64_t));
-
-    /* compactify new pivots */
-    len_t j = 0;
-    for (i = 0; i < nrl; ++i) {
-        if (mat->cp[i] != NULL) {
-            mat->cp[j++] = mat->cp[i];
-        }
-    }
-    mat->np = j; /* number of new pivots */
-    mat->cp = realloc(mat->cp, (unsigned long)mat->np * sizeof(len_t *));
 
     /* sort for optimal interreduction step */
     sort_matrix_rows_increasing(mat->cp, mat->np);
@@ -4104,7 +4136,7 @@ static void exact_sparse_linear_algebra_cd_ff_32(
         free(mat->row[sc]);
         mat->row[sc] = NULL;
         free(mat->cf_32[cfp]);
-        mat->cf_32[cfp] == NULL;
+        mat->cf_32[cfp] = NULL;
         mat->row[sc] =reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
                 dr, mat, rba, sc, cfp, st);
         mat->cp[i] = mat->row[sc];
