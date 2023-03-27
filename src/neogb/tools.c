@@ -83,10 +83,8 @@ static void add_trace_step(
 
     ctr = 0;
     for (i = 0; i < np; ++i) {
-        if (mat->tr[i] != NULL) {
-            trace->td[ld].tri[ctr++]  = mat->trd[2*i];
-            trace->td[ld].tri[ctr++]  = mat->trd[2*i+1];
-        }
+        trace->td[ld].tri[ctr++]  = mat->trd[2*i];
+        trace->td[ld].tri[ctr++]  = mat->trd[2*i+1];
     }
     /* get all needed reducers */
     for (i = 0; i < np; ++i) {
@@ -104,8 +102,8 @@ static void add_trace_step(
     for (i = 0; i < nc; ++i) {
         if (reds[i/32] >> (i%32) & 1U) {
             if (mat->row[i][MULT] != 0) {
-            trace->td[ld].rri[ctr++]  = mat->rrd[2*i];
-            trace->td[ld].rri[ctr++]  = mat->rrd[2*i+1];
+                trace->td[ld].rri[ctr++]  = mat->row[i][MULT];
+                trace->td[ld].rri[ctr++]  = mat->row[i][BINDEX];
             }
         }
     }
