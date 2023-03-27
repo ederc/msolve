@@ -348,7 +348,7 @@ static void generate_matrix_row(
         const bs_t * const bs
         )
 {
-    len_t i, j, k, d;
+    len_t i;
     const len_t len = poly[LENGTH];
     const len_t * const hi = ht->idx;
 
@@ -358,6 +358,7 @@ static void generate_matrix_row(
         - len/RATIO for column differences
         - len%RATIO > 0 for len not divisible by RATIO */
 #if EIGHTBIT
+    len_t j, k, d;
     const unsigned long rlen = OFFSET + len + len/RATIO + (len%RATIO > 0);
     len_t *row = calloc(rlen, sizeof(len_t));
 
@@ -401,7 +402,6 @@ static void generate_matrix_row(
     row[LENGTH]  = poly[LENGTH];
 
     /* write column difference data */
-    k = 0;
     for (i = OFFSET; i < rlen; ++i) {
         row[i]  = hi[get_multiplied_monomial(mul, emul, poly[i], ht)];
     }
@@ -454,7 +454,7 @@ static void generate_reducer_matrix_part(
                 generate_matrix_row(mat, idx, mul, emul, poly, ht, bs);
                 mat->cf_16[i]      = bs->cf_16[poly[COEFFS]];
                 mat->op[i]         = mat->row[idx];
-                mat->op[i][COEFFS] = i;
+                mat->op[i][COEFFS] = i;
             }
             break;
         case 32:
@@ -936,7 +936,7 @@ static void convert_sparse_cd_matrix_rows_to_basis_elements(
     double ct = cputime();
     double rt = realtime();
 
-    len_t i, j;
+    len_t i;
 
     const len_t np = mat->np;
     const len_t bl = bs->ld;
@@ -950,13 +950,14 @@ static void convert_sparse_cd_matrix_rows_to_basis_elements(
 #pragma omp parallel for num_threads(st->nthrds) private(i) schedule(dynamic)
     for (i = 0; i < np; ++i) {
         len_t l = np - 1 - i;
-        len_t k = 0;
-        len_t pos = 0;
 
         const len_t len = mat->cp[l][LENGTH];
         const len_t cfi = mat->cp[l][COEFFS];
 
 #if EIGHTBIT
+        len_t j   = 0;
+        len_t k   = 0;
+        len_t pos = 0;
         const cd_t * const cd   = (cd_t *)(mat->cp[l] + OFFSET);
         const len_t * const lcd = mat->cp[l] + (OFFSET + len/RATIO + (len%RATIO > 0));
 
