@@ -458,8 +458,6 @@ static void select_spairs_by_minimal_degree(
     mat->nc = mat->ncl = mat->ncr = 0;
     mat->nr = 0;
 
-    int ctr = 0;
-
     i = 0;
 
     while (i < nps) {
@@ -554,7 +552,6 @@ static void select_spairs_by_minimal_degree(
 
             mat->nr++;
         }
-        ctr++;
         i = j;
     }
     /* printf("%u pairs in degree %u\n", ctr, md); */
