@@ -195,7 +195,7 @@ static void select_all_spairs(
 
 static inline void sort_spairs_by_degree(
         ps_t *ps,
-        const ht_t * const ht
+        ht_t *ht
         )
 {
     /* sort pair set */
@@ -999,6 +999,35 @@ static void symbolic_preprocessing(
     st->symbol_ctime  +=  ct1 - ct0;
     st->symbol_rtime  +=  rt1 - rt0;
 #endif
+}
+
+static void get_matrix_data_from_trace(
+        mat_t *mat,
+        ht_t *ht,
+        const bs_t * const bs,
+        const len_t idx,
+        stat_t *st
+        )
+{
+    /* timings */
+    double ct = cputime();
+    double rt = realtime();
+
+    td_t td  = bs->tr->td[idx];
+    mat->rrd = td.rri;
+    mat->trd = td.tri;
+
+    mat->nru = td.rld;
+    mat->nrl = td.tld;
+
+    mat->nr = mat->nru + mat->nrl;
+
+    /* construct local hash map */
+    construct_local_hash_map_from_trace(ht, mat, bs);
+
+    /* timings */
+    st->symbol_ctime  +=  cputime() - ct;
+    st->symbol_rtime  +=  realtime() - rt;
 }
 
 static void generate_matrix_from_trace(

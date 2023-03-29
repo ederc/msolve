@@ -235,6 +235,8 @@ struct td_t
     len_t nlm;    /* number of new leading monomials in this step */
 };
 
+/* possible trace levels */
+typedef enum {NO_TRACER, LEARN_TRACER, APPLY_TRACER} tl_t;
 typedef struct trace_t trace_t;
 struct trace_t
 {
@@ -404,6 +406,7 @@ struct stat_t
     int64_t nterms_basis;
     int32_t size_basis;
     int32_t ff_bits;
+    tl_t trace_level;
     int32_t use_signatures; /* module monomial ordering:
                                0 = off,
                                1=SCHREYER,

@@ -1619,6 +1619,24 @@ static inline void multiplied_poly_to_hash_table(
     insert_multiplied_poly_in_hash_table_no_row(hm, em, poly, ht);
 }
 
+static void construct_local_hash_map_from_trace(
+        ht_t *ht,
+        const mat_t * const mat,
+        const bs_t * const bs
+        )
+{
+
+    len_t i;
+    for (i = 0; i < mat->nru; ++i) {
+        const hm_t mul   = mat->rrd[2*i];
+        const hm_t *poly = bs->hm[mat->rrd[2*i+1]];
+        const exp_t * const em = ht->ev[mul];
+        const val_t hm = ht->hd[mul].val;
+
+        multiplied_poly_to_hash_table(ht, hm, em, poly);
+    }
+}
+
 static inline hm_t *multiplied_poly_to_matrix_row(
     ht_t *sht,
     const ht_t *bht,

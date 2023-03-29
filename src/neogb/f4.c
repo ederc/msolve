@@ -456,9 +456,14 @@ int core_f4(
     ht_t *ht   = *htp;
     stat_t *st = *stp;
 
-    int32_t nrd; /* number of rounds */
+    int32_t not_done = 1; /* number of rounds */
 
     len_t i, j;
+
+    /* pair set, if available */
+    ps_t *ps = NULL;
+    /* tracer round, if available */
+    len_t tr_rd = 0;
 
     /* timings for one round */
     double rrt, crt;
@@ -467,11 +472,15 @@ int core_f4(
        during symbolic preprocessing */
     mat_t *mat = (mat_t *)calloc(1, sizeof(mat_t));
 
-    /* pair set */
-    ps_t *ps = initialize_pairset();
+    if (st->trace_level != APPLY_TRACER) {
+        /* pair set */
+        ps = initialize_pairset();
+    }
 
     /* reset bs->ld for first update process */
     bs->ld  = 0;
+
+    st->max_gb_degree = INT32_MAX;
 
     /* link tracer into basis */
 #if 0
@@ -480,10 +489,15 @@ int core_f4(
     bs->tr = initialize_trace();
 #endif
 
+    printf("st->trace_level %d\n", st->trace_level);
+    printf("APPLY TRACER %d\n", APPLY_TRACER);
     /* move input generators to basis and generate first spairs.
        always check redundancy since input generators may be redundant
        even so they are homogeneous. */
-    update_basis_f4(ps, bs, ht, st, st->ngens, 1-st->homogeneous);
+    if (st->trace_level != APPLY_TRACER) {
+        update_basis_f4(ps, bs, ht, st, st->ngens, 1-st->homogeneous);
+        not_done = ps->ld == 0 ? 0 : 1;
+    }
 
     /* let's start the f4 rounds, we are done when no more spairs
        are left in the pairset or if we found a constant in the basis. */
@@ -493,22 +507,26 @@ int core_f4(
         printf("-------------------------------------------------\
 ------------------------------------------------------\n");
     }
-    for (nrd= 1; ps->ld > 0; ++nrd) {
+    while (not_done) {
+    /* for (nrd= 1; ps->ld > 0; ++nrd) { */
         /* get meta data */
         rrt = realtime();
         crt = cputime();
         st->max_bht_size = st->max_bht_size > ht->esz ?
             st->max_bht_size :ht->esz;
-        st->current_rd = nrd;
 
-        /* preprocess data for next reduction round */
-        sort_spairs_by_degree(ps, ht);
-        if (st->max_gb_degree < ps->p[0].deg) {
-            ps->ld = 0;
-            continue;
+        if (st->trace_level != APPLY_TRACER) {
+            /* preprocess data for next reduction round */
+            sort_spairs_by_degree(ps, ht);
+            if (st->max_gb_degree < ps->p[0].deg) {
+                not_done = 0;
+                continue;
+            }
+            select_spairs(mat, ht, ps, bs, st);
+            symbolic_preprocessing_new(mat, ht, bs, st);
+        } else {
+            get_matrix_data_from_trace(mat, ht, bs, tr_rd, st);
         }
-        select_spairs(mat, ht, ps, bs, st);
-        symbolic_preprocessing_new(mat, ht, bs, st);
         convert_hashes_to_columns_no_matrix(ht, bs, st);
         generate_reducer_matrix_part(mat, ht, bs, st);
         exact_sparse_linear_algebra_cd_ff_32(mat, bs, ht, st);
@@ -521,14 +539,20 @@ int core_f4(
          * so we do not need the rows anymore */
         clear_matrix(mat);
 
-        /* if we found a constant we are done, so remove all remaining pairs */
-        if (bs->constant  == 1) {
-            ps->ld =  0;
-            bs->ld += mat->np;
-            continue;
+        if (st->trace_level != APPLY_TRACER) {
+            /* if we found a constant we are done, so remove all remaining pairs */
+            if (bs->constant  == 1) {
+                not_done =  0;
+                bs->ld += mat->np;
+                continue;
+            }
+            /* check redundancy only if input is not homogeneous */
+            update_basis_f4(ps, bs, ht, st, mat->np, 1-st->homogeneous);
+            not_done = ps->ld == 0 ? 0 : 1;
+        } else {
+            tr_rd++;
+            not_done = tr_rd >= bs->tr->ltd ? 0 : 1;
         }
-        /* check redundancy only if input is not homogeneous */
-        update_basis_f4(ps, bs, ht, st, mat->np, 1-st->homogeneous);
         if (st->info_level > 1) {
             printf("%13.2f | %-13.2f\n",
                     realtime() - rrt, cputime() - crt);
