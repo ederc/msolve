@@ -410,6 +410,7 @@ struct stat_t
                                2=POT,
                                3=DPOT */
     int32_t reduce_gb;
+    int32_t max_gb_degree; /* maximal degree for gb computation */
 
     uint32_t prime_start;
     int32_t nprimes;

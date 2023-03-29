@@ -193,8 +193,19 @@ static void select_all_spairs(
 }
 #endif
 
+static inline void sort_spairs_by_degree(
+        ps_t *ps,
+        const ht_t * const ht
+        )
+{
+    /* sort pair set */
+    sort_r(ps->p, (unsigned long)ps->ld, sizeof(spair_t), spair_cmp, ht);
+}
+
 /* selection of spairs, at the moment only selection
-by minial degree of the spairs is supported */
+by minial degree of the spairs is supported
+
+NOTE: The pair list is already sorted! */
 static void select_spairs(
         mat_t *mat,
         ht_t *ht,
@@ -222,9 +233,6 @@ static void select_spairs(
     const len_t evl = ht->evl;
 
     const len_t pld = ps->ld;
-
-    /* sort pair set */
-    sort_r(p, (unsigned long)pld, sizeof(spair_t), spair_cmp, ht);
 
     /* get minimal degree */
     const deg_t md = p[0].deg;

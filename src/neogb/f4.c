@@ -502,6 +502,11 @@ int core_f4(
         st->current_rd = nrd;
 
         /* preprocess data for next reduction round */
+        sort_spairs_by_degree(ps, ht);
+        if (st->max_gb_degree < ps->p[0].deg) {
+            ps->ld = 0;
+            continue;
+        }
         select_spairs(mat, ht, ps, bs, st);
         symbolic_preprocessing_new(mat, ht, bs, st);
         convert_hashes_to_columns_no_matrix(ht, bs, st);
