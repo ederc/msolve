@@ -489,8 +489,6 @@ int core_f4(
     bs->tr = initialize_trace();
 #endif
 
-    printf("st->trace_level %d\n", st->trace_level);
-    printf("APPLY TRACER %d\n", APPLY_TRACER);
     /* move input generators to basis and generate first spairs.
        always check redundancy since input generators may be redundant
        even so they are homogeneous. */
