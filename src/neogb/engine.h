@@ -49,6 +49,14 @@ int initialize_gba_input_data(
         int32_t info_level
         );
 
+bs_t *core_gba_new(
+        bs_t **bsp,
+        ht_t **htp,
+        stat_t **stp,
+        int32_t *errp,
+        const len_t fc
+        );
+
 int core_gba(
         bs_t **bsp,
         ht_t **bhtp,
