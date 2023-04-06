@@ -443,21 +443,33 @@ start:
     }
 }
 
-int core_f4(
+bs_t *core_f4(
         bs_t **bsp,     /* input data -> becomes basis */
         ht_t **htp,     /* hash table */
-        stat_t **stp   /* statistics storing meta data */
+        stat_t **stp,   /* statistics storing meta data */
+        int32_t *errp,  /* error */
+        const len_t fc
         )
 {
     double ct = cputime();
     double rt = realtime();
 
-    bs_t *bs   = *bsp;
+    bs_t *bs;
+    stat_t *st;
     ht_t *ht   = *htp;
-    stat_t *st = *stp;
 
     int32_t not_done = 1; /* number of rounds */
 
+
+    if ((*stp)->fc != fc) {
+        st = copy_statistics(*stp, fc);
+        reset_function_pointers(fc, st->laopt);
+        bs = copy_basis_mod_p(*bsp, st);
+        normalize_initial_basis(bs, fc);
+    } else {
+        bs = *bsp;
+        st = *stp;
+    }
     len_t i, j;
 
     /* pair set, if available */
@@ -621,7 +633,8 @@ int core_f4(
         free_pairset(&ps);
     }
 
-    return 1;
+    *errp = 0;
+    return bs;
 }
 
 int core_f4_old(
@@ -865,7 +878,7 @@ int64_t f4_julia(
         exit(1);
     }
 
-    success = core_f4(&bs, &bht, &st);
+    bs = core_f4(&bs, &bht, &st, &success, field_char);
 
     if (!success) {
         printf("Problem with F4, stopped computation.\n");
