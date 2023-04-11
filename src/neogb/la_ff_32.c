@@ -38,7 +38,8 @@ static inline void free_old_pivots(
 
 static void compactify_new_pivots(
         mat_t *mat,
-        const bs_t * const bs
+        const bs_t * const bs,
+        const stat_t * const st
         )
 {
     len_t i;
@@ -46,7 +47,7 @@ static void compactify_new_pivots(
 
     const len_t nrl = mat->nrl;
 
-    if (bs->tr != NULL) {
+    if (st->trace_level == LEARN_TRACER) {
         for (i = 0; i < nrl; ++i) {
             if (mat->cp[i] != NULL) {
                 mat->cp[j]    = mat->cp[i];
@@ -4034,7 +4035,7 @@ static void exact_sparse_linear_algebra_cd_ff_32(
     const len_t rl  = nc / 32 + ((nc % 32) != 0);
 
     /* do we trace the computation? */
-    if (bs->tr != NULL) {
+    if (st->trace_level == LEARN_TRACER) {
         mat->rba = calloc((unsigned long)nrl, sizeof(rba_t *));
     }
 
@@ -4096,16 +4097,18 @@ static void exact_sparse_linear_algebra_cd_ff_32(
         } while (!k);
 		if (npiv != NULL) {
 			mat->cp[i] = mat->row[lc];
-            if (bs->tr != NULL) {
+            if (st->trace_level == LEARN_TRACER) {
                 mat->rba[i] = rba;
             }
 		}
     }
 
-    compactify_new_pivots(mat, bs);
+    compactify_new_pivots(mat, bs, st);
 
     /* add this step of F4 to tracer */
-    add_trace_step(bs->tr, mat, bs);
+    if (st->trace_level == LEARN_TRACER) {
+        add_trace_step(bs->tr, mat, bs);
+    }
 
     /* prepare interreduction of new pivots */
 

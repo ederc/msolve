@@ -211,7 +211,7 @@ static inline void duplicate_data_mthread_trace(int nthreads,
     }
   }
 
-  duplicate_tracer(nthreads, btrace);
+  /* duplicate_tracer(nthreads, btrace); */
 
   duplicate_linear_data(nthreads, st->nvars, nlins,
                         blinvars, blineqs,

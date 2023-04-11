@@ -1627,6 +1627,10 @@ static void construct_local_hash_map_from_trace(
 {
 
     len_t i;
+
+    /* reset local hashes load */
+    ht->lhld = 0;
+
     for (i = 0; i < mat->nru; ++i) {
         const hm_t mul   = mat->rrd[2*i];
         const hm_t *poly = bs->hm[mat->rrd[2*i+1]];

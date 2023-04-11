@@ -79,7 +79,7 @@ static void add_trace_step(
     /* construct rows to be reduced */
     trace->td[ld].tri  = realloc(trace->td[ld].tri,
             (unsigned long)np * 2 * sizeof(len_t));
-    trace->td[ld].tld = 2 * np;
+    trace->td[ld].tld = np;
 
     ctr = 0;
     for (i = 0; i < np; ++i) {
@@ -109,9 +109,10 @@ static void add_trace_step(
     }
     trace->td[ld].rri = realloc(trace->td[ld].rri,
             (unsigned long)ctr * sizeof(len_t));
-    trace->td[ld].rld = ctr;
+    trace->td[ld].rld = ctr/2;
 
     free(reds);
+    trace->ltd++;
 }
 
 static void construct_trace(

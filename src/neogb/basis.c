@@ -378,6 +378,7 @@ bs_t *copy_basis_mod_p(
     bs->lm          = (sdm_t *)malloc((unsigned long)bs->sz * sizeof(sdm_t));
     bs->lmps        = (bl_t *)malloc((unsigned long)bs->sz * sizeof(bl_t));
     bs->red         = (int8_t *)calloc((unsigned long)bs->sz, sizeof(int8_t));
+    bs->tr          = gbs->tr;
 
     /* copy data */
     memcpy(bs->lm, gbs->lm, (unsigned long)bs->sz * sizeof(sdm_t));

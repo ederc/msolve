@@ -344,6 +344,7 @@ static void generate_matrix_row(
         const hm_t mul,
         const exp_t * const emul,
         const hm_t * const poly,
+        const len_t bidx,
         const ht_t * const ht,
         const bs_t * const bs
         )
@@ -364,7 +365,7 @@ static void generate_matrix_row(
 
     /* set meta data */
     row[DEG]     = ht->hd[mul].deg + poly[DEG];
-    row[BINDEX]  = poly[BINDEX];
+    row[BINDEX]  = bidx;
     row[MULT]    = mul;
     row[COEFFS]  = poly[COEFFS];
     row[PRELOOP] = poly[PRELOOP];
@@ -395,7 +396,7 @@ static void generate_matrix_row(
 
     /* set meta data */
     row[DEG]     = ht->hd[mul].deg + poly[DEG];
-    row[BINDEX]  = poly[BINDEX];
+    row[BINDEX]  = bidx;
     row[MULT]    = mul;
     row[COEFFS]  = poly[COEFFS];
     row[PRELOOP] = poly[PRELOOP];
@@ -432,11 +433,12 @@ static void generate_reducer_matrix_part(
             for (i = 0; i < mat->nru; ++i) {
                 const hm_t mul    = rrd[2*i];
                 const exp_t *emul = ht->ev[mul];
-                const hm_t *poly  = bs->hm[rrd[2*i+1]];
+                const len_t bidx  = rrd[2*i+1];
+                const hm_t *poly  = bs->hm[bidx];
                 /* get multiplied leading term to insert at right place */
                 const len_t idx = hi[get_multiplied_monomial(
                                         mul, emul, poly[OFFSET], ht)];
-                generate_matrix_row(mat, idx, mul, emul, poly, ht, bs);
+                generate_matrix_row(mat, idx, mul, emul, poly, bidx, ht, bs);
                 mat->cf_8[i]       = bs->cf_8[poly[COEFFS]];
                 mat->op[i]         = mat->row[idx];
                 mat->op[i][COEFFS] = i;
@@ -447,11 +449,12 @@ static void generate_reducer_matrix_part(
             for (i = 0; i < mat->nru; ++i) {
                 const hm_t mul    = rrd[2*i];
                 const exp_t *emul = ht->ev[mul];
-                const hm_t *poly  = bs->hm[rrd[2*i+1]];
+                const len_t bidx  = rrd[2*i+1];
+                const hm_t *poly  = bs->hm[bidx];
                 /* get multiplied leading term to insert at right place */
                 const len_t idx = hi[get_multiplied_monomial(
                                         mul, emul, poly[OFFSET], ht)];
-                generate_matrix_row(mat, idx, mul, emul, poly, ht, bs);
+                generate_matrix_row(mat, idx, mul, emul, poly, bidx, ht, bs);
                 mat->cf_16[i]      = bs->cf_16[poly[COEFFS]];
                 mat->op[i]         = mat->row[idx];
                 mat->op[i][COEFFS] = i;
@@ -462,11 +465,12 @@ static void generate_reducer_matrix_part(
             for (i = 0; i < mat->nru; ++i) {
                 const hm_t mul    = rrd[2*i];
                 const exp_t *emul = ht->ev[mul];
-                const hm_t *poly  = bs->hm[rrd[2*i+1]];
+                const len_t bidx  = rrd[2*i+1];
+                const hm_t *poly  = bs->hm[bidx];
                 /* get multiplied leading term to insert at right place */
                 const len_t idx = hi[get_multiplied_monomial(
                                         mul, emul, poly[OFFSET], ht)];
-                generate_matrix_row(mat, idx, mul, emul, poly, ht, bs);
+                generate_matrix_row(mat, idx, mul, emul, poly, bidx, ht, bs);
                 mat->cf_32[i]      = bs->cf_32[poly[COEFFS]];
                 mat->op[i]         = mat->row[idx];
                 mat->op[i][COEFFS] = i;

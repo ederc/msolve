@@ -2370,10 +2370,11 @@ static int32_t * modular_trace_learning(sp_matfglm_t **bmatrix,
     ca0 = realtime();
 
     bs_t *bs = NULL;
+    int32_t err = 0;
     if(gens->field_char){
-      bs = bs_qq;
-      int boo = core_gba(&bs, &bht, &st);
-      if (!boo) {
+      /* bs = bs_qq; */
+      bs = core_gba_new(&bs_qq, &bht, &st, &err, gens->field_char);
+      if (err != 0) {
         printf("Problem with F4, stopped computation.\n");
         exit(1);
       }
@@ -2384,7 +2385,8 @@ static int32_t * modular_trace_learning(sp_matfglm_t **bmatrix,
         bs = modular_f4(bs_qq, bht, st, fc);
       }
       else{
-        bs = gba_trace_learning_phase(trace, tht, bs_qq, bht, st, fc);
+        bs = core_gba_new(&bs_qq, &bht, &st, &err, fc);
+        /* bs = gba_trace_learning_phase(trace, tht, bs_qq, bht, st, fc); */
       }
     }
     rt = realtime()-ca0;
@@ -2707,9 +2709,9 @@ static void modular_trace_application(sp_matfglm_t **bmatrix,
 
                                    uint64_t bsz,
                                    param_t **nmod_params,
-                                   trace_t **btrace,
+                                   trace_t *btrace,
                                    ht_t **btht,
-                                   const bs_t *bs_qq,
+                                   bs_t *bs_qq,
                                    ht_t **bht,
                                    stat_t *st,
                                    const int32_t fc,
@@ -2734,6 +2736,7 @@ static void modular_trace_application(sp_matfglm_t **bmatrix,
   const int nthrds = st->nthrds;
   st->nthrds = 1 ;
 
+  int32_t err = 0;
   memset(bad_primes, 0, (unsigned long)st->nprimes * sizeof(int));
   #pragma omp parallel for num_threads(nthrds)  \
     private(i) schedule(static)
@@ -2743,7 +2746,8 @@ static void modular_trace_application(sp_matfglm_t **bmatrix,
       bs[i] = modular_f4(bs_qq, bht[i], st, lp->p[i]);
     }
     else{
-      bs[i] = gba_trace_application_phase(btrace[i], btht[i], bs_qq, bht[i], st, lp->p[i]);
+      bs[i] = core_gba_new(&bs_qq, bht, &st, &err, lp->p[i]);
+      /* bs[i] = gba_trace_application_phase(btrace[i], btht[i], bs_qq, bht[i], st, lp->p[i]); */
     }
     *stf4 = realtime()-ca0;
     /* printf("F4 trace timing %13.2f\n", *stf4); */
@@ -2942,7 +2946,7 @@ int msolve_trace_qq(mpz_param_t mpz_param,
   ht_t *bht = initialize_hash_table(st);
   /* hash table to store the hashes of the multiples of
     * the basis elements stored in the trace */
-  ht_t *tht = initialize_secondary_hash_table(bht, st);
+  ht_t *tht = NULL;
   /* read in ideal, move coefficients to integers */
   import_input_data(bs_qq, bht, st, lens, exps, cfs, invalid_gens);
   free(invalid_gens);
@@ -2980,9 +2984,7 @@ int msolve_trace_qq(mpz_param_t mpz_param,
   int *bad_primes = calloc((unsigned long)st->nthrds, sizeof(int));
 
   /* initialize tracers */
-  trace_t **btrace = (trace_t **)calloc(st->nthrds,
-                                       sizeof(trace_t *));
-  btrace[0]  = initialize_trace();
+  trace_t *btrace  = initialize_trace();
   /* initialization of other tracers is done through duplication */
 
   uint32_t prime = next_prime(1<<30);
@@ -3031,6 +3033,8 @@ int msolve_trace_qq(mpz_param_t mpz_param,
   int success = 1;
   int squares = 1;
 
+  st->trace_level = LEARN_TRACER;
+  
   int32_t *lmb_ori = modular_trace_learning(bmatrix, bdiv_xn, blen_gb_xn,
                                             bstart_cf_gb_xn,
 
@@ -3041,7 +3045,7 @@ int msolve_trace_qq(mpz_param_t mpz_param,
 
                                             num_gb, leadmons_ori,
 
-                                            &bsz, nmod_params, btrace[0],
+                                            &bsz, nmod_params, btrace,
                                             tht, bs_qq, bht, st,
                                             lp->p[0], //prime,
                                             info_level,
@@ -3067,9 +3071,6 @@ int msolve_trace_qq(mpz_param_t mpz_param,
 
   if(lmb_ori == NULL || success == 0 || print_gb || gens->field_char) {
       /* print_msolve_message(stderr, 1); */
-    for(int i = 0; i < st->nthrds; i++){
-      /* free_trace(&btrace[i]); */
-    }
     free(btrace);
     if(gens->field_char==0){
       free_shared_hash_data(bht);
@@ -3078,10 +3079,10 @@ int msolve_trace_qq(mpz_param_t mpz_param,
       }
       free(bht);
     }
-    if(tht!=NULL){
+    /* if(tht!=NULL){
       free_hash_table(&tht);
     }
-    free(tht);
+    /* free(tht); */
     /* for (i = 0; i < st->nthrds; ++i) { */
     /*   free_basis(&(bs[i])); */
     /* } */
@@ -3145,10 +3146,12 @@ int msolve_trace_qq(mpz_param_t mpz_param,
   mpz_matfglm_initset(mpz_mat, *bmatrix);
 #endif
 
+  st->trace_level = APPLY_TRACER;
+
   /* duplicate data for multi-threaded multi-mod computation */
   duplicate_data_mthread_trace(st->nthrds, st, num_gb,
                                leadmons_ori, leadmons_current,
-                               btrace,
+                               &btrace,
                                bdata_bms, bdata_fglm,
                                bstart_cf_gb_xn, blen_gb_xn, bdiv_xn, bmatrix,
                                nmod_params, nlins, bnlins,
@@ -3162,10 +3165,10 @@ int msolve_trace_qq(mpz_param_t mpz_param,
     ht_t *lht = copy_hash_table(bht, st);
     blht[i] = lht;
   }
-  ht_t **btht = (ht_t **)malloc((st->nthrds) * sizeof(ht_t *));
+ht_t **btht = (ht_t **)malloc((st->nthrds) * sizeof(ht_t *));
   btht[0] = tht;
   for(int i = 1; i < st->nthrds; i++){
-    btht[i] = copy_hash_table(tht, st);
+    btht[i] = NULL;
   }
 
   normalize_nmod_param(nmod_params[0]);
@@ -3467,8 +3470,8 @@ int msolve_trace_qq(mpz_param_t mpz_param,
   free_shared_hash_data(bht);
   for(int i = 0; i < st->nthrds; i++){
     free_hash_table(blht+i);
-    free_hash_table(btht+i);
   }
+  free(btht);
 
   //here we should clean nmod_params
 
@@ -3489,7 +3492,7 @@ int msolve_trace_qq(mpz_param_t mpz_param,
     free(bmatrix[i]);
     free(leadmons_ori[i]);
     free(leadmons_current[i]);
-    free_trace(&btrace[i]);
+    /* free_trace(&btrace[i]); */
     free(nmod_params[i]);
 
     free(blinvars[i]);

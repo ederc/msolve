@@ -1025,6 +1025,8 @@ static void get_matrix_data_from_trace(
     /* construct local hash map */
     construct_local_hash_map_from_trace(ht, mat, bs);
 
+    mat->nc = ht->lhld;
+
     /* timings */
     st->symbol_ctime  +=  cputime() - ct;
     st->symbol_rtime  +=  realtime() - rt;
