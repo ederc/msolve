@@ -313,8 +313,8 @@ static void reduce_basis_cd(
         printf("reduce final basis ");
         fflush(stdout);
     }
-    convert_hashes_to_columns_no_matrix(ht, bs, st);
-    generate_reducer_matrix_part(mat, ht, bs, st);
+    convert_hashes_to_columns_with_matrix(ht, mat, bs, st);
+    /* generate_reducer_matrix_part(mat, ht, bs, st); */
     exact_sparse_linear_algebra_cd_ff_32(mat, bs, ht, st);
     reset_hash_table_index_data(ht);
 
@@ -470,6 +470,7 @@ bs_t *core_f4(
         st = *stp;
     }
     len_t i, j;
+    st->info_level = 2;
 
     /* pair set, if available */
     ps_t *ps = NULL;
@@ -536,8 +537,8 @@ bs_t *core_f4(
         } else {
             get_matrix_data_from_trace(mat, ht, bs, tr_rd, st);
         }
-        convert_hashes_to_columns_no_matrix(ht, bs, st);
-        generate_reducer_matrix_part(mat, ht, bs, st);
+        convert_hashes_to_columns_with_matrix(ht, mat, bs, st);
+        /* generate_reducer_matrix_part(mat, ht, bs, st); */
         exact_sparse_linear_algebra_cd_ff_32(mat, bs, ht, st);
         reset_hash_table_index_data(ht);
         /* columns indices are mapped back to exponent hashes */

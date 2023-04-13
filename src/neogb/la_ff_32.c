@@ -52,7 +52,9 @@ static void compactify_new_pivots(
             if (mat->cp[i] != NULL) {
                 mat->cp[j]    = mat->cp[i];
                 mat->rba[j]   = mat->rba[i];
-                mat->trd[j++] = mat->trd[i];
+                mat->trd[2*j] = mat->trd[2*i];
+                mat->trd[2*j+1] = mat->trd[2*i+1];
+                j++;
             }
         }
     } else {
@@ -4031,8 +4033,21 @@ static void exact_sparse_linear_algebra_cd_ff_32(
     const len_t nc  = mat->nc;
     const len_t nrl = mat->nrl;
     const len_t nru = mat->nru;
+
+    const len_t * const hi = ht->idx;
     /* length for rba if we trace computation */
     const len_t rl  = nc / 32 + ((nc % 32) != 0);
+
+    /* prepare matrix */
+    mat->row   = calloc((unsigned long)nc, sizeof(len_t *));
+    mat->cf_32 = calloc((unsigned long)mat->nr, sizeof(cf32_t *));
+
+#pragma omp parallel for num_threads(st->nthrds) private(i) schedule(dynamic)
+    for (i = 0; i < nru; ++i) {
+        mat->cf_32[i] = bs->cf_32[mat->op[i][COEFFS]];
+        mat->op[i][COEFFS] = i;
+        mat->row[mat->op[i][OFFSET]] = mat->op[i];
+    }
 
     /* do we trace the computation? */
     if (st->trace_level == LEARN_TRACER) {

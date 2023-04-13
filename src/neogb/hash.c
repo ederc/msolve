@@ -1246,6 +1246,86 @@ static inline hm_t get_multiplied_monomial(
 }
 
 
+static inline len_t *insert_multiplied_poly_in_hash_table_and_row(
+    const hm_t mul,
+    const val_t h1,
+    const exp_t * const ea,
+    const hm_t * const b,
+    const len_t bidx,
+    ht_t *ht
+    )
+{
+    len_t j, l;
+    exp_t *n;
+    hm_t t;
+
+    const len_t len = b[LENGTH]+OFFSET;
+    const len_t evl = ht->evl;
+
+    hd_t *hd   = ht->hd;
+    exp_t **ev = ht->ev;
+
+    len_t *row = (len_t *)malloc((unsigned long)len * sizeof(len_t));
+
+    /* set meta data */
+    row[DEG]     = ht->hd[mul].deg + b[DEG];
+    row[BINDEX]  = bidx;
+    row[MULT]    = mul;
+    row[COEFFS]  = b[COEFFS];
+    row[PRELOOP] = b[PRELOOP];
+    row[LENGTH]  = b[LENGTH];
+
+    l = OFFSET;
+    const exp_t * const eb = ev[b[l]];
+
+    n = ev[ht->eld];
+    for (j = 0; j < evl; ++j) {
+        n[j]  = (exp_t)(ea[j] + eb[j]);
+    }
+
+#if PARALLEL_HASHING
+    const val_t h   = h1 + hd[b[l]].val;
+    t = check_insert_in_hash_table(n, h, ht);
+#else
+    t = insert_in_hash_table(n, ht);
+#endif
+    row[l] = t;
+    if (ht->idx[t] == 0) {
+        ht->lh[ht->lhld++] = t;
+        /* mark leading terms as done for symbolic preprocessing */
+    }
+    /* Always set lead term hash monomials' indices to 2, since the index
+    might be earlier set to 1 as a non leading term from another basis
+    element. */
+    ht->idx[t] = 2;
+
+    l++;
+
+    for (; l < len; ++l) {
+        const exp_t * const eb = ev[b[l]];
+
+        n = ev[ht->eld];
+        for (j = 0; j < evl; ++j) {
+            n[j]  = (exp_t)(ea[j] + eb[j]);
+        }
+        
+
+#if PARALLEL_HASHING
+        const val_t h   = h1 + hd[b[l]].val;
+        t = check_insert_in_hash_table(n, h, ht);
+#else
+        t = insert_in_hash_table(n, ht);
+#endif
+        row[l] = t;
+        if (ht->idx[t] == 0) {
+            ht->lh[ht->lhld++] = t;
+            ht->idx[t]++;
+        }
+    }
+    return row;
+}
+
+
 static inline void insert_multiplied_poly_in_hash_table_no_row(
     const val_t h1,
     const exp_t * const ea,
@@ -1295,6 +1375,7 @@ static inline void insert_multiplied_poly_in_hash_table_no_row(
         for (j = 0; j < evl; ++j) {
             n[j]  = (exp_t)(ea[j] + eb[j]);
         }
+        
 
 #if PARALLEL_HASHING
         const val_t h   = h1 + hd[b[l]].val;
@@ -1598,6 +1679,29 @@ static inline void poly_to_hash_table(
     }
 }
 
+static inline len_t *multiplied_poly_to_hash_table_and_row(
+    ht_t *ht,
+    const hm_t hm,
+    const val_t hv,
+    const exp_t * const em,
+    const hm_t *poly,
+    const len_t bidx
+    )
+{
+    /* hash table product insertions appear only here:
+     * we check for hash table enlargements first and then do the insertions
+     * without further elargment checks there */
+    while (ht->eld+poly[LENGTH] >= ht->esz) {
+        enlarge_hash_table(ht);
+    }
+    while (ht->lhsz - ht->lhld < poly[LENGTH]) {
+        ht->lhsz *= 2;
+        ht->lh = realloc(ht->lh, (unsigned long)ht->lhsz * sizeof(len_t));
+    }
+
+    return insert_multiplied_poly_in_hash_table_and_row(hm, hv, em, poly, bidx, ht);
+}
+
 static inline void multiplied_poly_to_hash_table(
     ht_t *ht,
     const val_t hm,
@@ -1621,7 +1725,7 @@ static inline void multiplied_poly_to_hash_table(
 
 static void construct_local_hash_map_from_trace(
         ht_t *ht,
-        const mat_t * const mat,
+        mat_t *mat,
         const bs_t * const bs
         )
 {
@@ -1631,9 +1735,19 @@ static void construct_local_hash_map_from_trace(
     /* reset local hashes load */
     ht->lhld = 0;
 
+    mat->op = (len_t **)calloc((unsigned long)mat->nru, sizeof(len_t *));
+
     for (i = 0; i < mat->nru; ++i) {
         const hm_t mul   = mat->rrd[2*i];
         const hm_t *poly = bs->hm[mat->rrd[2*i+1]];
+        const exp_t * const em = ht->ev[mul];
+        const val_t hm = ht->hd[mul].val;
+
+        mat->op[i] = multiplied_poly_to_hash_table_and_row(ht, mul, hm, em, poly, mat->rrd[2*i+1]);
+    }
+    for (i = 0; i < mat->nrl; ++i) {
+        const hm_t mul   = mat->trd[2*i];
+        const hm_t *poly = bs->hm[mat->trd[2*i+1]];
         const exp_t * const em = ht->ev[mul];
         const val_t hm = ht->hd[mul].val;
 

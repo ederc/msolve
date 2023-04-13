@@ -266,13 +266,13 @@ static void select_spairs(
     gens  = (len_t *)malloc(2 * (unsigned long)nps * sizeof(len_t));
 
     /* preset matrix meta data, tuples of (multiplier, basis index) */
-    mat->rrd  = (len_t *)malloc(4 * (unsigned long)nps * sizeof(len_t));
-    mat->trd  = (len_t *)malloc(4 * (unsigned long)nps * sizeof(len_t));
-    hm_t *rrd = mat->rrd;
-    hm_t *trd = mat->trd;
-    mat->sz   = 2 * nps;
-    mat->nc   = mat->ncl = mat->ncr = 0;
-    mat->nr   = 0;
+    mat->op    = (len_t **)calloc(2 *(unsigned long)nps, sizeof(len_t *));
+    mat->trd   = (len_t *)malloc(4 * (unsigned long)nps * sizeof(len_t));
+    len_t **op = mat->op;
+    hm_t *trd  = mat->trd;
+    mat->sz    = 2 * nps;
+    mat->nc    = mat->ncl = mat->ncr = 0;
+    mat->nr    = 0;
 
     len_t rpos = 0, tpos = 0;
 
@@ -312,14 +312,12 @@ static void select_spairs(
         const hi_t h    = ht->hd[lcm].val - ht->hd[b[OFFSET]].val;
         /* note that we use index mat->nc and not mat->nr since for each new
          * lcm we add exactly one row to mat->rr */
-        multiplied_poly_to_hash_table(ht, h, etmp, b);
 #if PARALLEL_HASHING
         hm_t mul = check_insert_in_hash_table(etmp, h, ht);
 #else
         hm_t mul = insert_in_hash_table(etmp, ht);
 #endif
-        rrd[rpos++] = mul;
-        rrd[rpos++] = prev;
+        op[rpos++] = multiplied_poly_to_hash_table_and_row(ht, mul, h, etmp, b, prev);
         mat->nr++;
 
         for (k = 1; k < load; ++k) {
@@ -711,7 +709,8 @@ static inline void find_multiplied_reducer_data(
 
     dp = ht->div[m];
     i  = 0;
-    if (dp > 0 && bs->red[dp] == 0) {
+    if (dp > 0) {
+    /* if (dp > 0 && bs->red[dp] == 0) { */
         b = bs->hm[dp];
         f = evb[b[OFFSET]];
         for (k=0; k < evl; ++k) {
@@ -742,10 +741,7 @@ start:
 #else
         hm_t mul = insert_in_hash_table(etmp, ht);
 #endif
-        multiplied_poly_to_hash_table(ht, h, etmp, b);
-        mat->rrd[2*mat->nru]   = mul;
-        mat->rrd[2*mat->nru+1] = dp;
-        mat->nru++;
+        mat->op[mat->nru++] = multiplied_poly_to_hash_table_and_row(ht, mul, h, etmp, b, dp);
         ht->div[m] = dp;
     }
 }
@@ -898,8 +894,8 @@ static void symbolic_preprocessing_new(
     while (i < ht->lhld) {
         while (mat->sz - mat->nru < ht->lhld - i) {
             mat->sz *= 2;
-            mat->rrd = realloc(mat->rrd,
-                    (unsigned long)2 * mat->sz * sizeof(hm_t));
+            mat->op = realloc(mat->op,
+                    (unsigned long)mat->sz * sizeof(hm_t *));
         }
         j = i;
         i = ht->lhld;
@@ -913,7 +909,7 @@ static void symbolic_preprocessing_new(
             }
         }
     }
-    mat->rrd = realloc(mat->rrd, (unsigned long)2*mat->nru * sizeof(hm_t));
+    mat->op = realloc(mat->op, (unsigned long)mat->nru * sizeof(hm_t *));
     mat->nr  = mat->nrl + mat->nru;
     mat->sz  = mat->nr;
 

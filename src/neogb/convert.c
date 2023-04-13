@@ -309,11 +309,16 @@ static void convert_hashes_to_columns_no_matrix(
 
     ht->lh   = realloc(ht->lh, (unsigned long)ht->lhld * sizeof(len_t));
     ht->lhsz = ht->lhld;
+
+    const len_t lhld = ht->lhld;
+
+    len_t *hi  = ht->idx;
+
     /* printf("lhld %u\n", ht->lhld); */
     /* for (int ii = 0; ii < ht->lhld; ++ii) {
         printf("lh[%d] = %u\n", ii, ht->lh[ii]);
     } */
-    sort_r(ht->lh, (unsigned long)ht->lhld, sizeof(hi_t), hcm_cmp, ht);
+    sort_r(ht->lh, (unsigned long)lhld, sizeof(hi_t), hcm_cmp, ht);
     /* printf("sorted\n-------------------\n");
     for (int ii = 0; ii < ht->lhld; ++ii) {
         printf("lh[%d] = %u | ", ii, ht->lh[ii]);
@@ -324,8 +329,75 @@ static void convert_hashes_to_columns_no_matrix(
     } */
 
     /* store the other direction (hash -> column) */
-    for (len_t i = 0; i < ht->lhld; ++i) {
-        ht->idx[ht->lh[i]]  = (hi_t)i;
+    for (len_t i = 0; i < lhld; ++i) {
+        hi[ht->lh[i]]  = (hi_t)i;
+    }
+
+    /* timings */
+    st->convert_ctime += cputime() - ct;
+    st->convert_rtime += realtime() - rt;
+}
+
+static void convert_hashes_to_columns_with_matrix(
+        ht_t *ht,
+        mat_t *mat,
+        const bs_t * const bs,
+        stat_t *st
+        )
+{
+    /* timings */
+    double ct = cputime();
+    double rt = realtime();
+
+    ht->lh   = realloc(ht->lh, (unsigned long)ht->lhld * sizeof(len_t));
+    ht->lhsz = ht->lhld;
+
+    const len_t lhld = ht->lhld;
+    const len_t nru  = mat->nru;
+
+    len_t *hi  = ht->idx;
+
+    /* printf("lhld %u\n", ht->lhld); */
+    /* for (int ii = 0; ii < ht->lhld; ++ii) {
+        printf("lh[%d] = %u\n", ii, ht->lh[ii]);
+    } */
+    sort_r(ht->lh, (unsigned long)lhld, sizeof(hi_t), hcm_cmp, ht);
+    /* printf("sorted\n-------------------\n");
+    for (int ii = 0; ii < ht->lhld; ++ii) {
+        printf("lh[%d] = %u | ", ii, ht->lh[ii]);
+        for (int jj = 0; jj < ht->evl; ++jj) {
+            printf("%u ", ht->ev[ht->lh[ii]][jj]);
+        }
+        printf("\n");
+    } */
+
+    /* store the other direction (hash -> column) */
+    for (len_t i = 0; i < lhld; ++i) {
+        hi[ht->lh[i]]  = (hi_t)i;
+    }
+
+    /* apply hashes -> column map to reducer part of matrix */
+#pragma omp parallel for num_threads(st->nthrds)
+    for (len_t i = 0; i < nru; ++i) {
+        len_t *row = mat->op[i];
+        len_t len  = row[LENGTH] + OFFSET;
+        for (len_t j = OFFSET; j < len; ++j) {
+            row[j] = hi[row[j]];
+        }
+    }
+    /* print matrix meta data */
+    if (st->info_level > 1) { 
+        int64_t nterms = 0;
+        for (len_t i = 0; i < mat->nru; ++i) {
+            nterms += mat->op[i][LENGTH];
+        }
+        for (len_t i = 0; i < mat->nrl; ++i) {
+            nterms += bs->hm[mat->trd[2*i+1]][LENGTH];
+        }
+        nterms  *=  100; /* for percentage */
+        double density = (double)nterms / (double)(mat->nr) / (double)mat->nc;
+        printf(" %7u x %-7u %8.2f%%", mat->nr, mat->nc, density);
+        fflush(stdout);
     }
 
     /* timings */
@@ -417,6 +489,10 @@ static void generate_reducer_matrix_part(
         stat_t *st
         )
 {
+    /* timings */
+    double ct = cputime();
+    double rt = realtime();
+
     len_t i = 0;
 
     const len_t *rrd       = mat->rrd;
@@ -495,6 +571,10 @@ static void generate_reducer_matrix_part(
         printf(" %7u x %-7u %8.2f%%", mat->nr, mat->nc, density);
         fflush(stdout);
     }
+
+    /* timings */
+    st->convert_ctime += cputime() - ct;
+    st->convert_rtime += realtime() - rt;
 }
 
 
@@ -953,7 +1033,7 @@ static void convert_sparse_cd_matrix_rows_to_basis_elements(
 
 #pragma omp parallel for num_threads(st->nthrds) private(i) schedule(dynamic)
     for (i = 0; i < np; ++i) {
-        len_t l = np - 1 - i;
+        len_t l = np-i-1;
 
         const len_t len = mat->cp[l][LENGTH];
         const len_t cfi = mat->cp[l][COEFFS];
