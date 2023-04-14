@@ -443,46 +443,41 @@ start:
     }
 }
 
-bs_t *core_f4(
-        bs_t **bsp,     /* input data -> becomes basis */
-        ht_t **htp,     /* hash table */
-        stat_t **stp,   /* statistics storing meta data */
-        int32_t *errp,  /* error */
-        const len_t fc
+static void initialize_f4(
+        stat_t **lstp,
+        bs_t **lbsp,
+        ht_t **lhtp,
+        ps_t **psp,
+        mat_t **matp,
+        int32_t *not_donep,
+        stat_t **gstp,
+        bs_t **gbsp,
+        ht_t **ghtp,
+        len_t fc
         )
 {
-    double ct = cputime();
-    double rt = realtime();
+    stat_t *st       = *lstp;
+    bs_t *bs         = *lbsp;
+    ht_t *ht         = *lhtp;
+    ps_t *ps         = *psp;
+    mat_t *mat       = *matp;
+    int32_t not_done = *not_donep;
 
-    bs_t *bs;
-    stat_t *st;
-    ht_t *ht   = *htp;
+    ht  = *ghtp;
 
-    int32_t not_done = 1; /* number of rounds */
-
-    if ((*stp)->fc != fc) {
-        st = copy_statistics(*stp, fc);
+    if ((*gstp)->fc != fc) {
+        st = copy_statistics(*gstp, fc);
         reset_function_pointers(fc, st->laopt);
-        bs = copy_basis_mod_p(*bsp, st);
+        bs = copy_basis_mod_p(*gbsp, st);
         normalize_initial_basis(bs, fc);
     } else {
-        bs = *bsp;
-        st = *stp;
+        bs = *gbsp;
+        st = *gstp;
     }
-    len_t i, j;
-    st->info_level = 2;
-
-    /* pair set, if available */
-    ps_t *ps = NULL;
-    /* tracer round, if available */
-    len_t tr_rd = 0;
-
-    /* timings for one round */
-    double rrt, crt;
 
     /* matrix holding sparse information generated
        during symbolic preprocessing */
-    mat_t *mat = (mat_t *)calloc(1, sizeof(mat_t));
+    mat = (mat_t *)calloc(1, sizeof(mat_t));
 
     if (st->trace_level != APPLY_TRACER) {
         /* pair set */
@@ -494,6 +489,7 @@ bs_t *core_f4(
         bs->ld = st->ngens;
     }
 
+    /* TODO: make this a command line argument */
     st->max_gb_degree = INT32_MAX;
 
     /* link tracer into basis */
@@ -508,6 +504,47 @@ bs_t *core_f4(
         update_basis_f4(ps, bs, ht, st, st->ngens, 1-st->homogeneous);
         not_done = ps->ld == 0 ? 0 : 1;
     }
+
+    /* TO BE REMOVED */
+    st->info_level = 2;
+
+    *lstp      = st;
+    *lbsp      = bs;
+    *lhtp      = ht;
+    *psp       = ps;
+    *matp      = mat;
+    *not_donep = not_done;
+}
+
+bs_t *core_f4(
+        bs_t **bsp,     /* input data -> becomes basis */
+        ht_t **htp,     /* hash table */
+        stat_t **stp,   /* statistics storing meta data */
+        int32_t *errp,  /* error */
+        const len_t fc
+        )
+{
+    double ct = cputime();
+    double rt = realtime();
+
+    len_t i, j;
+
+    bs_t *bs   = NULL;
+    stat_t *st = NULL;
+    ht_t *ht   = NULL;
+    ps_t *ps   = NULL;
+    mat_t *mat = NULL;
+
+    /* marker for end of computation */
+    int32_t not_done = 1;
+
+    /* tracer round, if available */
+    len_t tr_rd = 0;
+
+    /* timings for one round */
+    double rrt, crt;
+
+    initialize_f4(&st, &bs, &ht, &ps, &mat, &not_done, stp, bsp, htp, fc);
 
     /* let's start the f4 rounds, we are done when no more spairs
        are left in the pairset or if we found a constant in the basis. */
