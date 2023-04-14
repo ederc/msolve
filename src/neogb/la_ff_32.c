@@ -4033,7 +4033,6 @@ static void exact_sparse_linear_algebra_cd_ff_32(
     const len_t nrl = mat->nrl;
     const len_t nru = mat->nru;
 
-    const len_t * const hi = ht->idx;
     /* length for rba if we trace computation */
     const len_t rl  = nc / 32 + ((nc % 32) != 0);
 

@@ -332,7 +332,7 @@ static void reduce_basis_cd(
         printf("%13.2f | %-13.2f\n",
                 st->reduce_gb_rtime, st->reduce_gb_ctime);
         printf("-------------------------------------------------\
-------------------------------------------------------\n");
+--------------------------------------------------------\n");
     }
 }
 
@@ -549,10 +549,17 @@ bs_t *core_f4(
     /* let's start the f4 rounds, we are done when no more spairs
        are left in the pairset or if we found a constant in the basis. */
     if (st->info_level > 1) {
-        printf("\ndeg     sel   pairs        mat          density \
-          new data         time(rd) in sec (real|cpu)\n");
-        printf("-------------------------------------------------\
-------------------------------------------------------\n");
+        if (st->trace_level != APPLY_TRACER) {
+            printf("\ndeg     sel   pairs        mat          density \
+              new data         time(rd) in sec (real|cpu)\n");
+            printf("-------------------------------------------------\
+--------------------------------------------------------\n");
+        } else {
+            printf("\n   round      deg          mat          density \
+              new data         time(rd) in sec (real|cpu)\n");
+            printf("-------------------------------------------------\
+--------------------------------------------------------\n");
+        }
     }
     while (not_done) {
     /* for (nrd= 1; ps->ld > 0; ++nrd) { */
@@ -611,7 +618,7 @@ bs_t *core_f4(
     }
     if (st->info_level > 1) {
         printf("-------------------------------------------------\
-------------------------------------------------------\n");
+--------------------------------------------------------\n");
     }
     /* remove possible redudant elements */
     for (i = 0; i < bs->lml; ++i) {

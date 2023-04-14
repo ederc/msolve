@@ -709,8 +709,8 @@ static inline void find_multiplied_reducer_data(
 
     dp = ht->div[m];
     i  = 0;
-    if (dp > 0) {
-    /* if (dp > 0 && bs->red[dp] == 0) { */
+    /* if (dp > 0) { */
+    if (dp > 0 && bs->red[dp] == 0) {
         b = bs->hm[dp];
         f = evb[b[OFFSET]];
         for (k=0; k < evl; ++k) {
@@ -1022,6 +1022,12 @@ static void get_matrix_data_from_trace(
     construct_local_hash_map_from_trace(ht, mat, bs);
 
     mat->nc = ht->lhld;
+
+    if (st->info_level > 1) {
+        deg_t deg = ht->hd[mat->trd[0]].deg + ht->hd[bs->hm[mat->trd[1]][OFFSET]].deg;
+        printf(" %3u / %u    %5u", idx, bs->tr->ltd, deg);
+        fflush(stdout);
+    }
 
     /* timings */
     st->symbol_ctime  +=  cputime() - ct;
