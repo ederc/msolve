@@ -962,18 +962,18 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
         /* track trace data */
         rba[i/32] |= 1U << (i % 32);
 
+        const len_t len = mat->row[i][LENGTH];
 #ifdef HAVE_AVX2
-        const len_t len = dts[LENGTH];
         const len_t os  = len % 8;
-        const hm_t * const ds  = dts + OFFSET;
+        const hm_t * const ds  = mat->row[i] + OFFSET;
         const uint32_t mul32 = (uint32_t)(dr[i]);
         mulv  = _mm256_set1_epi32(mul32);
         for (j = 0; j < os; ++j) {
-            dr[ds[j]] -=  mul * cfs[j];
+            dr[ds[j]] -=  mul * pcf[j];
             dr[ds[j]] +=  (dr[ds[j]] >> 63) & mod2;
         }
         for (; j < len; j += 8) {
-            redv  = _mm256_loadu_si256((__m256i*)(cfs+j));
+            redv  = _mm256_loadu_si256((__m256i*)(pcf+j));
             drv   = _mm256_setr_epi64x(
                 dr[ds[j+1]],
                 dr[ds[j+3]],
@@ -1007,7 +1007,6 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
         }
 #else
         const len_t os  = mat->row[i][PRELOOP];
-        const len_t len = mat->row[i][LENGTH];
 #if EIGHTBIT
         const cd_t * const cd   = (cd_t *)(mat->row[i] + OFFSET);
         const len_t * const lcd = mat->row[i] + (OFFSET + len/RATIO + (len%RATIO > 0));
