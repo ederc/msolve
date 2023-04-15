@@ -355,6 +355,7 @@ struct stat_t
     double round_ctime;
     double select_ctime;
     double symbol_ctime;
+    double la_reduce_ctime;
     double la_ctime;
     double update_ctime;
     double convert_ctime;
@@ -367,6 +368,7 @@ struct stat_t
     double select_rtime;
     double symbol_rtime;
     double la_rtime;
+    double la_reduce_rtime;
     double update_rtime;
     double convert_rtime;
     double overall_rtime;

@@ -129,6 +129,10 @@ void print_final_statistics(
             st->la_rtime,
             (double)100*(double)st->la_rtime
             / (double)(st->f4_rtime));
+    fprintf(file, "la reduction     %11.2f sec %5.1f%%\n",
+            st->la_reduce_rtime,
+            (double)100*(double)st->la_reduce_rtime
+            / (double)(st->f4_rtime));
     if (st->reduce_gb == 1) {
         fprintf(file, "reduce gb    %15.2f sec %5.1f%%\n",
                 st->reduce_gb_rtime,

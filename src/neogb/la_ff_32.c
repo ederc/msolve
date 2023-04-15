@@ -4027,6 +4027,8 @@ static void exact_sparse_linear_algebra_cd_ff_32(
     double ct = cputime();
     double rt = realtime();
 
+    double crt = cputime();
+    double rrt = realtime();
     len_t i;
 
     const len_t nc  = mat->nc;
@@ -4082,8 +4084,12 @@ static void exact_sparse_linear_algebra_cd_ff_32(
             free(cfs);
             cfs = NULL;
 			/* printf("i+nru = %d | nr = %d | i = %d\n", i+mat->nru, mat->nr, i); */
+            crt = cputime();
+            rrt = realtime();
             npiv  = reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
                     drl, mat, rba, sc, i+nru, st);
+            st->la_reduce_ctime += (cputime() - crt);
+            st->la_reduce_rtime += (realtime() - rrt);
             if (!npiv) {
                 free(rba);
                 rba = NULL;
@@ -4151,8 +4157,12 @@ static void exact_sparse_linear_algebra_cd_ff_32(
         mat->row[sc] = NULL;
         free(mat->cf_32[cfp]);
         mat->cf_32[cfp] = NULL;
+            crt = cputime();
+            rrt = realtime();
         mat->row[sc] =reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
                 dr, mat, rba, sc, cfp, st);
+            st->la_reduce_ctime += (cputime() - crt);
+            st->la_reduce_rtime += (realtime() - rrt);
         mat->cp[i] = mat->row[sc];
     }
 
