@@ -904,7 +904,7 @@ static void symbolic_preprocessing_new(
         for (; j < lld; ++j) {
             if (ht->idx[ht->lh[j]] == 1) {
                 find_multiplied_reducer_data(j, ht, mat, bs);
-                ht->idx[ht->lh[j]] = 2;
+                ht->idx[ht->lh[j]]++;
                 mat->nc++;
             }
         }

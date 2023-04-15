@@ -275,8 +275,8 @@ static int monomial_cmp_pivots_lex(
     len_t i;
 
 #if ORDER_COLUMNS
-    const hd_t ha = ht->idx[a];
-    const hd_t hb = ht->idx[b];
+    const len_t ha = ht->idx[a];
+    const len_t hb = ht->idx[b];
     /* first known pivots vs. tail terms */
     if (ha!= hb) {
         if (ha< hb) {
@@ -462,18 +462,17 @@ static int monomial_cmp_pivots_drl(
 {
 
 #if ORDER_COLUMNS
-    const hd_t ha = ht->hd[a];
-    const hd_t hb = ht->hd[b];
+    const len_t ha = ht->idx[a];
+    const len_t hb = ht->idx[b];
     /* first known pivots vs. tail terms */
-    if (ha.idx != hb.idx) {
-        if (ha.idx < hb.idx) {
+    if (ha != hb) {
+        if (ha < hb) {
             return 1;
         } else {
             return -1;
         }
     }
 #endif
-
     const exp_t * const ea  = ht->ev[a];
     const exp_t * const eb  = ht->ev[b];
 
@@ -713,8 +712,8 @@ static int monomial_cmp_pivots_be(
     len_t i;
 
 #if ORDER_COLUMNS
-    const hd_t ha = ht->idx[a];
-    const hd_t hb = ht->idx[b];
+    const len_t ha = ht->idx[a];
+    const len_t hb = ht->idx[b];
     /* first known pivots vs. tail terms */
     if (ha != hb) {
         if (ha< hb) {
