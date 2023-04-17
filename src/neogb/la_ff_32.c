@@ -933,8 +933,9 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
     const int64_t mod2 = (int64_t)st->fc * st->fc;
     const len_t ncols  = mat->nc;
 #ifdef HAVE_AVX2
-    int64_t res[4] __attribute__((aligned(32)));
-    __m256i cmpv, redv, drv, mulv, prodv, resv, rresv;
+    int64_t res1[4] __attribute__((aligned(32)));
+    int64_t res2[4] __attribute__((aligned(32)));
+    __m256i cmpv1, cmpv2, redv, drv1, drv2, mulv, prodv1, prodv2, resv1, resv2, rresv1, rresv2;
     __m256i zerov= _mm256_set1_epi64x(0);
     __m256i mod2v = _mm256_set1_epi64x(mod2);
 #endif
@@ -973,37 +974,37 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
             dr[ds[j]] +=  (dr[ds[j]] >> 63) & mod2;
         }
         for (; j < len; j += 8) {
-            redv  = _mm256_loadu_si256((__m256i*)(pcf+j));
-            drv   = _mm256_setr_epi64x(
+            drv1   = _mm256_setr_epi64x(
                 dr[ds[j+1]],
                 dr[ds[j+3]],
                 dr[ds[j+5]],
                 dr[ds[j+7]]);
-            /* first four mult-adds -- lower */
-            prodv = _mm256_mul_epu32(mulv, _mm256_srli_epi64(redv, 32));
-            resv  = _mm256_sub_epi64(drv, prodv);
-            cmpv  = _mm256_cmpgt_epi64(zerov, resv);
-            rresv = _mm256_add_epi64(resv, _mm256_and_si256(cmpv, mod2v));
-            _mm256_store_si256((__m256i*)(res), rresv);
-            dr[ds[j+1]] = res[0];
-            dr[ds[j+3]] = res[1];
-            dr[ds[j+5]] = res[2];
-            dr[ds[j+7]] = res[3];
-            /* second four mult-adds -- higher */
-            prodv = _mm256_mul_epu32(mulv, redv);
-            drv   = _mm256_setr_epi64x(
+            drv2   = _mm256_setr_epi64x(
                 dr[ds[j]],
                 dr[ds[j+2]],
                 dr[ds[j+4]],
                 dr[ds[j+6]]);
-            resv  = _mm256_sub_epi64(drv, prodv);
-            cmpv  = _mm256_cmpgt_epi64(zerov, resv);
-            rresv = _mm256_add_epi64(resv, _mm256_and_si256(cmpv, mod2v));
-            _mm256_store_si256((__m256i*)(res), rresv);
-            dr[ds[j]]   = res[0];
-            dr[ds[j+2]] = res[1];
-            dr[ds[j+4]] = res[2];
-            dr[ds[j+6]] = res[3];
+            redv  = _mm256_loadu_si256((__m256i*)(pcf+j));
+            /* first four mult-adds -- lower */
+            prodv1 = _mm256_mul_epu32(mulv, _mm256_srli_epi64(redv, 32));
+            prodv2 = _mm256_mul_epu32(mulv, redv);
+            resv1  = _mm256_sub_epi64(drv1, prodv1);
+            cmp1v  = _mm256_cmpgt_epi64(zerov, resv1);
+            rresv1 = _mm256_add_epi64(resv1, _mm256_and_si256(cmpv1, mod2v));
+            _mm256_store_si256((__m256i*)(res1), rresv1);
+            /* second four mult-adds -- higher */
+            resv2  = _mm256_sub_epi64(drv2, prodv2);
+            cmpv2  = _mm256_cmpgt_epi64(zerov, resv2);
+            rresv2 = _mm256_add_epi64(resv2, _mm256_and_si256(cmpv2, mod2v));
+            _mm256_store_si256((__m256i*)(res2), rresv)2;
+            dr[ds[j+1]] = res1[0];
+            dr[ds[j+3]] = res1[1];
+            dr[ds[j+5]] = res1[2];
+            dr[ds[j+7]] = res1[3];
+            dr[ds[j]]   = res2[0];
+            dr[ds[j+2]] = res2[1];
+            dr[ds[j+4]] = res2[2];
+            dr[ds[j+6]] = res2[3];
         }
 #else
         const len_t os  = mat->row[i][PRELOOP];
