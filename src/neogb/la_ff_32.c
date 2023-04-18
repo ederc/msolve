@@ -989,14 +989,14 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
             prodv1 = _mm256_mul_epu32(mulv, _mm256_srli_epi64(redv, 32));
             prodv2 = _mm256_mul_epu32(mulv, redv);
             resv1  = _mm256_sub_epi64(drv1, prodv1);
-            cmp1v  = _mm256_cmpgt_epi64(zerov, resv1);
+            cmpv1  = _mm256_cmpgt_epi64(zerov, resv1);
             rresv1 = _mm256_add_epi64(resv1, _mm256_and_si256(cmpv1, mod2v));
             _mm256_store_si256((__m256i*)(res1), rresv1);
             /* second four mult-adds -- higher */
             resv2  = _mm256_sub_epi64(drv2, prodv2);
             cmpv2  = _mm256_cmpgt_epi64(zerov, resv2);
             rresv2 = _mm256_add_epi64(resv2, _mm256_and_si256(cmpv2, mod2v));
-            _mm256_store_si256((__m256i*)(res2), rresv)2;
+            _mm256_store_si256((__m256i*)(res2), rresv2);
             dr[ds[j+1]] = res1[0];
             dr[ds[j+3]] = res1[1];
             dr[ds[j+5]] = res1[2];
