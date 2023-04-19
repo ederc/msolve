@@ -267,9 +267,9 @@ static void select_spairs(
 
     /* preset matrix meta data, tuples of (multiplier, basis index) */
     mat->op    = (len_t **)calloc(2 *(unsigned long)nps, sizeof(len_t *));
-    mat->trd   = (len_t *)malloc(4 * (unsigned long)nps * sizeof(len_t));
+    mat->cp   = (len_t **)malloc(2 * (unsigned long)nps * sizeof(len_t *));
     len_t **op = mat->op;
-    hm_t *trd  = mat->trd;
+    len_t **cp = mat->cp;
     mat->sz    = 2 * nps;
     mat->nc    = mat->ncl = mat->ncr = 0;
     mat->nr    = 0;
@@ -337,25 +337,29 @@ static void select_spairs(
                 etmp[l]   =   (exp_t)(elcm[l] - eb[l]);
             }
             const hi_t h  = ht->hd[lcm].val - ht->hd[b[OFFSET]].val;
-            multiplied_poly_to_hash_table(ht, h, etmp, b);
+            /* multiplied_poly_to_hash_table(ht, h, etmp, b); */
 #if PARALLEL_HASHING
             hm_t mul = check_insert_in_hash_table(etmp, h, ht);
 #else
             hm_t mul = insert_in_hash_table(etmp, ht);
 #endif
-            trd[tpos++] = mul;
-            trd[tpos++] = prev;
+            cp[tpos++] = multiplied_poly_to_hash_table_and_row(ht, mul, h, etmp, b, prev);
             mat->nr++;
+            /* trd[tpos++] = mul;
+            trd[tpos++] = prev;
+            mat->nr++; */
         }
         i = j;
     }
 
+    mat->cp = realloc(mat->cp, (unsigned long)tpos * sizeof(len_t *));
+
     /* memory stuff */
     mat->nrl = mat->nr - mat->nc;
     mat->nru = mat->nc;
-    trd = realloc(trd, (unsigned long)2*mat->nrl * sizeof(hm_t));
+    /* trd = realloc(trd, (unsigned long)2*mat->nrl * sizeof(hm_t));
 
-    mat->trd = trd;
+    mat->trd = trd; */
     memset(ht->ev[0], 0, (unsigned long)evl * sizeof(exp_t));
     /* fix rows to be reduced */
 

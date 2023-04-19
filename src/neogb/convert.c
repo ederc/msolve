@@ -354,6 +354,7 @@ static void convert_hashes_to_columns_with_matrix(
 
     const len_t lhld = ht->lhld;
     const len_t nru  = mat->nru;
+    const len_t nrl  = mat->nrl;
 
     len_t *hi  = ht->idx;
 
@@ -380,7 +381,15 @@ static void convert_hashes_to_columns_with_matrix(
 #pragma omp parallel for num_threads(st->nthrds)
     for (len_t i = 0; i < nru; ++i) {
         len_t *row = mat->op[i];
-        len_t len  = row[LENGTH] + OFFSET;
+        const len_t len  = row[LENGTH] + OFFSET;
+        for (len_t j = OFFSET; j < len; ++j) {
+            row[j] = hi[row[j]];
+        }
+    }
+#pragma omp parallel for num_threads(st->nthrds)
+    for (len_t i = 0; i < nrl; ++i) {
+        len_t *row = mat->cp[i];
+        const len_t len  = row[LENGTH] + OFFSET;
         for (len_t j = OFFSET; j < len; ++j) {
             row[j] = hi[row[j]];
         }
@@ -392,7 +401,7 @@ static void convert_hashes_to_columns_with_matrix(
             nterms += mat->op[i][LENGTH];
         }
         for (len_t i = 0; i < mat->nrl; ++i) {
-            nterms += bs->hm[mat->trd[2*i+1]][LENGTH];
+            nterms += mat->cp[i][LENGTH];
         }
         nterms  *=  100; /* for percentage */
         double density = (double)nterms / (double)(mat->nr) / (double)mat->nc;

@@ -1246,6 +1246,40 @@ static inline hm_t get_multiplied_monomial(
 }
 
 
+static inline void get_multiplied_polynomial(
+    int64_t *dr,
+    const hm_t mul,
+    const exp_t * const emul,
+    const hm_t  *poly,
+    const ht_t * const ht,
+    const cf32_t *cf
+    )
+{
+    len_t i = 0, j = 0;
+
+    /* generate hash value and exponent vector for
+    multiplied monomial */
+    const len_t evl = ht->evl;
+    const len_t len = poly[LENGTH];
+    const len_t * const hi = ht->idx;
+
+    hd_t *hd   = ht->hd;
+
+    exp_t ev[evl];
+
+    const hm_t * const p = poly+OFFSET;
+
+    for (j = 0; j < len; ++j) {
+        for (i = 0; i < evl; ++i) {
+            ev[i] = emul[i] + ht->ev[p[j]][i];
+        }
+        const val_t val = hd[mul].val + hd[p[j]].val;
+
+        dr[hi[find_in_hash_table(val, ev, ht)]] = cf[j];
+    }
+}
+
+
 static inline len_t *insert_multiplied_poly_in_hash_table_and_row(
     const hm_t mul,
     const val_t h1,

@@ -375,6 +375,7 @@ struct stat_t
     double reduce_gb_rtime;
     double rht_rtime;
     double f4_rtime;
+    double trace_rtime;
 
     int64_t num_pairsred;
     int64_t num_gb_crit;

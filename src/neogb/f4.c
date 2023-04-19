@@ -280,14 +280,15 @@ static void prepare_final_matrix(
 
     mat->sz = bs->lml;
 
-    mat->trd = realloc(mat->trd, (unsigned long)2 * bs->lml * sizeof(len_t));
+    mat->cp = realloc(mat->cp, (unsigned long)bs->lml * sizeof(len_t *));
     j = 0;
     for (i = 0; i < bs->lml; ++i) {
         mat->nc++;
         const hm_t *p   = bs->hm[bs->lmps[i]];
-        poly_to_hash_table(ht, p);
+        mat->cp[j++] = multiplied_poly_to_hash_table_and_row(ht, zm, ht->hd[zm].val, zero, p, bs->lmps[i]);
+        /* poly_to_hash_table(ht, p);
         mat->trd[j++] = zm;
-        mat->trd[j++] = bs->lmps[i];
+        mat->trd[j++] = bs->lmps[i]; */
     }
     mat->nr  = bs->lml;
     mat->nrl = mat->nc;

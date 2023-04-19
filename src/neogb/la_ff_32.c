@@ -52,8 +52,8 @@ static void compactify_new_pivots(
             if (mat->cp[i] != NULL) {
                 mat->cp[j]    = mat->cp[i];
                 mat->rba[j]   = mat->rba[i];
-                mat->trd[2*j] = mat->trd[2*i];
-                mat->trd[2*j+1] = mat->trd[2*i+1];
+                /* mat->trd[2*j] = mat->trd[2*i];
+                mat->trd[2*j+1] = mat->trd[2*i+1]; */
                 j++;
             }
         }
@@ -93,23 +93,23 @@ static inline void generate_dense_row_from_multiplied_polynomial_ff_32(
 
     memset(dr, 0, (unsigned long)nc * sizeof(int64_t));
 
-    for (i = 0; i < len; ++i) {
+    get_multiplied_polynomial(dr, mul, emul, poly, ht, cf);
+    /* for (i = 0; i < len; ++i) {
         j     = hi[get_multiplied_monomial(mul, emul, poly[OFFSET+i], ht)];
         dr[j] = cf[i];
-    }
+    } */
 }
 
 static inline void generate_dense_row_from_sparse_row_ff_32(
         int64_t *dr,
-        mat_t *mat,
-        const len_t idx
+        const len_t *row,
+        const mat_t *mat
         )
 {
     len_t i;
 
     memset(dr, 0, (unsigned long)mat->nc * sizeof(int64_t));
 
-    const len_t *row = mat->row[idx];
     const cf32_t *cf = mat->cf_32[row[COEFFS]];
     const len_t len  = row[LENGTH];
 #if EIGHTBIT
@@ -4048,6 +4048,10 @@ static void exact_sparse_linear_algebra_cd_ff_32(
         mat->op[i][COEFFS] = i;
         mat->row[mat->op[i][OFFSET]] = mat->op[i];
     }
+    for (i = 0; i < nrl; ++i) {
+        mat->cf_32[i+nru] = bs->cf_32[mat->cp[i][COEFFS]];
+        mat->cp[i][COEFFS] = i+nru;
+    }
 
     /* do we trace the computation? */
     if (st->trace_level == LEARN_TRACER) {
@@ -4059,7 +4063,7 @@ static void exact_sparse_linear_algebra_cd_ff_32(
                 (unsigned long)st->nthrds * nc * sizeof(int64_t));
 
     /* keep track of current pivots, i.e. new basis elements */
-    mat->cp = calloc((unsigned long)nrl, sizeof(len_t *));
+    /* mat->cp = calloc((unsigned long)nrl, sizeof(len_t *)); */
 
     /* reduce w.r.t. known pivots */
 #pragma omp parallel for num_threads(st->nthrds) private(i) schedule(dynamic)
@@ -4067,10 +4071,15 @@ static void exact_sparse_linear_algebra_cd_ff_32(
         len_t k = 0;
         len_t lc = 0;  /* leading columns */
         /* construct dense row from (multiplier, poly) data */
-        len_t sc = 0; /* starting column for dense row */
+        len_t sc = mat->cp[i][OFFSET]; /* starting column for dense row */
         int64_t *drl = dr + (omp_get_thread_num() * nc);
-        generate_dense_row_from_multiplied_polynomial_ff_32(
-                drl, &sc, mat, i, ht, bs);
+    double ttr = realtime();
+        generate_dense_row_from_sparse_row_ff_32(drl, mat->cp[i], mat);
+        /* generate_dense_row_from_multiplied_polynomial_ff_32(
+                drl, &sc, mat, i, ht, bs); */
+        free(mat->cp[i]);
+        mat->cp[i] = NULL;
+    st->trace_rtime += (realtime() - ttr);
 
         /* remove link to basis elements coefficients in order to not
         mess around with it in the following */
@@ -4152,7 +4161,7 @@ static void exact_sparse_linear_algebra_cd_ff_32(
         const len_t sc = mat->cp[i][OFFSET];
 #endif
         const len_t cfp = mat->row[sc][COEFFS];
-        generate_dense_row_from_sparse_row_ff_32(dr, mat, sc);
+        generate_dense_row_from_sparse_row_ff_32(dr, mat->row[sc], mat);
         free(mat->row[sc]);
         mat->row[sc] = NULL;
         free(mat->cf_32[cfp]);
