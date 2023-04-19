@@ -1760,7 +1760,8 @@ static inline void multiplied_poly_to_hash_table(
 static void construct_local_hash_map_from_trace(
         ht_t *ht,
         mat_t *mat,
-        const bs_t * const bs
+        const bs_t * const bs,
+        const stat_t * const st
         )
 {
 
@@ -1770,7 +1771,8 @@ static void construct_local_hash_map_from_trace(
     ht->lhld = 0;
 
     mat->op = (len_t **)calloc((unsigned long)mat->nru, sizeof(len_t *));
-
+    mat->cp = (len_t **)calloc((unsigned long)mat->nrl, sizeof(len_t *));
+#pragma omp parallel for num_threads(st->nthrds) schedule(dynamic)
     for (i = 0; i < mat->nru; ++i) {
         const hm_t mul   = mat->rrd[2*i];
         const hm_t *poly = bs->hm[mat->rrd[2*i+1]];
@@ -1779,13 +1781,14 @@ static void construct_local_hash_map_from_trace(
 
         mat->op[i] = multiplied_poly_to_hash_table_and_row(ht, mul, hm, em, poly, mat->rrd[2*i+1]);
     }
+#pragma omp parallel for num_threads(st->nthrds) schedule(dynamic)
     for (i = 0; i < mat->nrl; ++i) {
         const hm_t mul   = mat->trd[2*i];
         const hm_t *poly = bs->hm[mat->trd[2*i+1]];
         const exp_t * const em = ht->ev[mul];
         const val_t hm = ht->hd[mul].val;
 
-        multiplied_poly_to_hash_table(ht, hm, em, poly);
+        mat->cp[i] = multiplied_poly_to_hash_table_and_row(ht, mul, hm, em, poly, mat->trd[2*i+1]);
     }
 }
 

@@ -1023,7 +1023,7 @@ static void get_matrix_data_from_trace(
     mat->nr = mat->nru + mat->nrl;
 
     /* construct local hash map */
-    construct_local_hash_map_from_trace(ht, mat, bs);
+    construct_local_hash_map_from_trace(ht, mat, bs, st);
 
     mat->nc = ht->lhld;
 

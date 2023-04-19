@@ -924,6 +924,8 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
         rba_t *rba,
         const len_t dpiv, /* pivot of dense row at the beginning */
         const len_t cfp,  /* position of new coeffs array in tmpcf */
+        const len_t mh,     /* multiplier hash for tracing */
+        const len_t bi,     /* basis index of generating element */
         stat_t *st
         )
 {
@@ -1112,10 +1114,12 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
             j++;
         }
     }
-    row[MULT]     = 0; /* to specify a new pivot when trying to generate trace */
+    row[MULT]     = mh;
+    row[BINDEX]   = bi;
     row[COEFFS]   = cfp;
     row[PRELOOP]  = j % UNROLL;
     row[LENGTH]   = j;
+    row[DEG]      = 0;
 #endif
     mat->cf_32[cfp] = cfs;
     return row;
@@ -4069,9 +4073,10 @@ static void exact_sparse_linear_algebra_cd_ff_32(
 #pragma omp parallel for num_threads(st->nthrds) private(i) schedule(dynamic)
     for (i = 0; i < nrl; ++i) {
         len_t k = 0;
-        len_t lc = 0;  /* leading columns */
         /* construct dense row from (multiplier, poly) data */
-        len_t sc = mat->cp[i][OFFSET]; /* starting column for dense row */
+        len_t lc = mat->cp[i][OFFSET]; /* starting column for dense row */
+        const len_t mh = mat->cp[i][MULT];
+        const len_t bi = mat->cp[i][BINDEX];
         int64_t *drl = dr + (omp_get_thread_num() * nc);
     double ttr = realtime();
         generate_dense_row_from_sparse_row_ff_32(drl, mat->cp[i], mat);
@@ -4096,7 +4101,7 @@ static void exact_sparse_linear_algebra_cd_ff_32(
             crt = cputime();
             rrt = realtime();
             npiv  = reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
-                    drl, mat, rba, sc, i+nru, st);
+                    drl, mat, rba, lc, i+nru, mh, bi, st);
             st->la_reduce_ctime += (cputime() - crt);
             st->la_reduce_rtime += (realtime() - rrt);
             if (!npiv) {
@@ -4156,23 +4161,25 @@ static void exact_sparse_linear_algebra_cd_ff_32(
         if (j == SCD) {
             j = (mat->cp[i]+OFFSET+mat->cp[i][LENGTH]/RATIO + (mat->cp[i][LENGTH]%RATIO > 0))[0];
         }
-        const len_t sc = j;
+        const len_t lc = j;
 #else
-        const len_t sc = mat->cp[i][OFFSET];
+        const len_t lc = mat->cp[i][OFFSET];
 #endif
-        const len_t cfp = mat->row[sc][COEFFS];
-        generate_dense_row_from_sparse_row_ff_32(dr, mat->row[sc], mat);
-        free(mat->row[sc]);
-        mat->row[sc] = NULL;
+        const len_t cfp = mat->row[lc][COEFFS];
+        generate_dense_row_from_sparse_row_ff_32(dr, mat->row[lc], mat);
+        const len_t mh = mat->row[lc][MULT];
+        const len_t bi = mat->row[lc][BINDEX];
+        free(mat->row[lc]);
+        mat->row[lc] = NULL;
         free(mat->cf_32[cfp]);
         mat->cf_32[cfp] = NULL;
             crt = cputime();
             rrt = realtime();
-        mat->row[sc] =reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
-                dr, mat, rba, sc, cfp, st);
+        mat->row[lc] =reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
+                dr, mat, rba, lc, cfp, mh, bi, st);
             st->la_reduce_ctime += (cputime() - crt);
             st->la_reduce_rtime += (realtime() - rrt);
-        mat->cp[i] = mat->row[sc];
+        mat->cp[i] = mat->row[lc];
     }
 
     /* timings */

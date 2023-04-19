@@ -103,7 +103,7 @@ static void add_trace_step(
     ctr = 0;
     for (i = 0; i < nc; ++i) {
         if (reds[i/32] >> (i%32) & 1U) {
-            if (mat->row[i][MULT] != 0) {
+            if (mat->row[i][DEG] != 0) {
                 trace->td[ld].rri[ctr++]  = mat->row[i][MULT];
                 trace->td[ld].rri[ctr++]  = mat->row[i][BINDEX];
             }
