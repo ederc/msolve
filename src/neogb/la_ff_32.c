@@ -4078,7 +4078,7 @@ static void exact_sparse_linear_algebra_cd_ff_32(
         /* generate_dense_row_from_multiplied_polynomial_ff_32(
                 drl, &sc, mat, i, ht, bs); */
         free(mat->cp[i]);
-        mat->cp[i] = NULL;
+        mat->cp[i] = NULL;
     st->trace_rtime += (realtime() - ttr);
 
         /* remove link to basis elements coefficients in order to not
