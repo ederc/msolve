@@ -26,6 +26,14 @@ static void free_basis_elements(
         )
 {
     len_t i, j, len;
+#if HAVE_AVX2
+    if (bs->cf_256) {
+        for (i = 0; i < bs->ld; ++i) {
+            free(bs->cf_256[i]);
+            bs->cf_256[i] = NULL;
+        }
+    }
+#endif
     if (bs->cf_8) {
         for (i = 0; i < bs->ld; ++i) {
             free(bs->cf_8[i]);
@@ -78,6 +86,18 @@ void free_basis(
 {
     len_t i, j, len;
     bs_t *bs  = *bsp;
+#if HAVE_AVX2
+    if (bs->cf_256) {
+        for (i = 0; i < bs->ld; ++i) {
+            free(bs->cf_256[i]);
+            bs->cf_256[i] = NULL;
+        }
+        free(bs->cf_256);
+        bs->cf_256 = NULL;
+        free(bs->hm);
+        bs->hm  = NULL;
+    }
+#endif
     if (bs->cf_8) {
         for (i = 0; i < bs->ld; ++i) {
             free(bs->cf_8[i]);
@@ -172,7 +192,11 @@ bs_t *initialize_basis(
             bs->cf_16  = (cf16_t **)malloc((unsigned long)bs->sz * sizeof(cf16_t *));
             break;
         case 32:
+#if HAVE_AVX2
+            bs->cf_256  = (cf256_t **)malloc((unsigned long)bs->sz * sizeof(cf256_t *));
+#else
             bs->cf_32  = (cf32_t **)malloc((unsigned long)bs->sz * sizeof(cf32_t *));
+#endif
             break;
         case 0:
             bs->cf_qq = (mpz_t **)malloc((unsigned long)bs->sz * sizeof(mpz_t *));
@@ -214,9 +238,15 @@ void check_enlarge_basis(
                 memset(bs->cf_16+bs->ld, 0, (unsigned long)(bs->sz-bs->ld) * sizeof(cf16_t *));
                 break;
             case 32:
+#if HAVE_AVX2
+                bs->cf_256  = realloc(bs->cf_256,
+                        (unsigned long)bs->sz * sizeof(cf256_t *));
+                memset(bs->cf_256+bs->ld, 0, (unsigned long)(bs->sz-bs->ld) * sizeof(cf256_t *));
+#else
                 bs->cf_32  = realloc(bs->cf_32,
                         (unsigned long)bs->sz * sizeof(cf32_t *));
                 memset(bs->cf_32+bs->ld, 0, (unsigned long)(bs->sz-bs->ld) * sizeof(cf32_t *));
+#endif
                 break;
             case 0:
                 bs->cf_qq = realloc(bs->cf_qq,

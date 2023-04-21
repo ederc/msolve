@@ -72,6 +72,7 @@ inline omp_int_t omp_get_max_threads(void) { return 1;}
 typedef uint8_t cf8_t;   /* coefficient type finite field (8 bit) */
 typedef uint16_t cf16_t; /* coefficient type finite field (16 bit) */
 typedef uint32_t cf32_t; /* coefficient type finite field (32 bit) */
+typedef __m256i cf256_t; /* coefficient type finite field (avx2) */
 typedef uint32_t val_t;  /* core values like hashes */
 typedef val_t hi_t;      /* index of hash table entries*/
 typedef hi_t hm_t;       /* hashed monomials for polynomial entries */
@@ -280,6 +281,9 @@ struct bs_t
     cf8_t **cf_8;   /* coefficients for finite fields (8 bit) */
     cf16_t **cf_16; /* coefficients for finite fields (16 bit) */
     cf32_t **cf_32; /* coefficients for finite fields (32 bit) */
+#if HAVE_AVX2
+    cf256_t **cf_256; /* 256-bit coefficient holder for avx2 */
+#endif
     mpz_t **cf_qq;  /* coefficients for rationals (always multiplied such that
                        the denominator is 1) */
     trace_t *tr;    /* trace of computation */
@@ -315,6 +319,9 @@ struct mat_t
     cf8_t **cf_8;       /* coefficients for finite fields (8 bit) */
     cf16_t **cf_16;     /* coefficients for finite fields (16 bit) */
     cf32_t **cf_32;     /* coefficients for finite fields (32 bit) */
+#if HAVE_AVX2
+    cf256_t **cf_256; /* 256-bit coefficient holder for avx2 */
+#endif
     mpz_t **cf_qq;      /* coefficients for rationals */
     mpz_t **cf_ab_qq;   /* coefficients for rationals */
     len_t sz;           /* number of rows allocated resp. size */
