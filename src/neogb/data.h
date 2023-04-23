@@ -40,6 +40,10 @@ inline omp_int_t omp_get_thread_num(void) { return 0;}
 inline omp_int_t omp_get_max_threads(void) { return 1;}
 #endif
 
+#ifdef HAVE_AVX2
+#include <immintrin.h>
+#endif
+
 #define EIGHTBIT 0
 #define PARALLEL_HASHING 1
 #define ORDER_COLUMNS 0

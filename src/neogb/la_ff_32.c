@@ -20,10 +20,6 @@
 
 #include "data.h"
 
-#ifdef HAVE_AVX2
-#include <immintrin.h>
-#endif
-
 static inline void free_old_pivots(
         mat_t *mat
         )
