@@ -4131,14 +4131,6 @@ static void exact_sparse_linear_algebra_cd_ff_32(
                 rba = NULL;
                 break;
             }
-            /* normalize coefficient array
-             * NOTE: this has to be done here, otherwise the reduction may
-             * lead to wrong results in a parallel computation since other
-             * threads might directly use the new pivot once it is synced. */
-            if (mat->cf_32[npiv[COEFFS]][0] != 1) {
-                normalize_sparse_matrix_row_ff_32(
-                        mat->cf_32[npiv[COEFFS]], npiv[PRELOOP], npiv[LENGTH], st->fc);
-            }
 #if EIGHTBIT
             lc = ((cd_t *)(npiv + OFFSET))[0];
             if (lc == SCD) {
