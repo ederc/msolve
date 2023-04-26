@@ -1103,11 +1103,26 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
     cf32_t *cfs = (cf32_t *)malloc((unsigned long)k * sizeof(cf32_t));
     len_t *r = row + OFFSET;
     j = 0;
-    for (i = np; i < ncols; ++i) {
-        if (dr[i] != 0) {
-            r[j] = i;
-            cfs[j] = (cf32_t)dr[i];
-            j++;
+    const cf32_t lc = dr[np];
+    cf32_t tmp;
+    if (lc != 1) {
+        const cf32_t inv = mod_p_inverse_32((int32_t)lc, (int32_t)st->fc);
+        for (i = np; i < ncols; ++i) {
+            if (dr[i] != 0) {
+                r[j]   =  i;
+                dr[i]  =  (dr[i] * inv) % st->fc;
+                dr[i]  += dr[i] >> 63 & st->fc;
+                cfs[j] =  (cf32_t)dr[i];
+                j++;
+            }
+        }
+    } else {
+        for (i = np; i < ncols; ++i) {
+            if (dr[i] != 0) {
+                r[j] = i;
+                cfs[j] = (cf32_t)dr[i];
+                j++;
+            }
         }
     }
     row[MULT]     = mh;
@@ -1117,7 +1132,18 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
     row[LENGTH]   = j;
     row[DEG]      = 0;
 #endif
+#if HAVE_AVX2
+    const unsigned long len = j / AVX2_SIZE + (j % AVX2_SIZE > 0 ? 1 : 0);
+    cfs = realloc(cfs, len * AVX2_SIZE * sizeof(cf32_t));
+    memset(cfs+j, 0, (len*AVX2_SIZE-j) * sizeof(cf32_t));
+    mat->cf_256[cfp] = calloc(len, sizeof(cf256_t));
+    /* load data to avx2 data storage */
+    for (i = 0; i < len; ++i) {
+        bs->cf_256[cfp][i]  = _mm256_loadu_si256((__m256i*)(cfs+(i*AVX2_SIZE)));
+    }
+#else
     mat->cf_32[cfp] = cfs;
+#endif
     return row;
 }
 

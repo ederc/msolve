@@ -42,6 +42,7 @@ inline omp_int_t omp_get_max_threads(void) { return 1;}
 
 #ifdef HAVE_AVX2
 #include <immintrin.h>
+#define AVX2_SIZE 8
 #endif
 
 #define EIGHTBIT 0

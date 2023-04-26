@@ -214,6 +214,7 @@ void check_enlarge_basis(
         const stat_t * const st
         )
 {
+    printf("enlarge basis?\n");
     if (bs->ld + added >= bs->sz) {
         bs->sz    = bs->sz * 2 > bs->ld + added ? bs->sz * 2 : bs->ld + added;
         bs->hm    = realloc(bs->hm, (unsigned long)bs->sz * sizeof(hm_t *));
@@ -238,7 +239,7 @@ void check_enlarge_basis(
                 memset(bs->cf_16+bs->ld, 0, (unsigned long)(bs->sz-bs->ld) * sizeof(cf16_t *));
                 break;
             case 32:
-#if HAVE_AVX2
+#if HAVE_AVX
                 bs->cf_256  = realloc(bs->cf_256,
                         (unsigned long)bs->sz * sizeof(cf256_t *));
                 memset(bs->cf_256+bs->ld, 0, (unsigned long)(bs->sz-bs->ld) * sizeof(cf256_t *));
@@ -450,19 +451,73 @@ bs_t *copy_basis_mod_p(
             }
             break;
         case 32:
+#if HAVE_AVX2
+            bs->cf_256   = (cf256_t **)malloc((unsigned long)bs->sz * sizeof(cf256_t *));
+            cf32_t *tmp  = NULL;
+#else
             bs->cf_32   = (cf32_t **)malloc((unsigned long)bs->sz * sizeof(cf32_t *));
+#endif
             for (i = 0; i < bs->ld; ++i) {
                 idx = gbs->hm[i][COEFFS];
+#if HAVE_AVX2
+                const unsigned long len = gbs->hm[i][LENGTH] / AVX2_SIZE + (gbs->hm[i][LENGTH] % AVX2_SIZE > 0 ? 1 : 0);
+                bs->cf_256[idx]  =
+                    (cf256_t *)malloc(len * sizeof(cf256_t));
+#else
                 bs->cf_32[idx]  =
                     (cf32_t *)malloc((unsigned long)(gbs->hm[i][LENGTH]) * sizeof(cf32_t));
-                for (j = 0; j < gbs->hm[i][LENGTH]; ++j) {
-                    bs->cf_32[idx][j] = (cf32_t)mpz_fdiv_ui(gbs->cf_qq[idx][j], prime);
+#endif
+                const cf32_t lc = (cf32_t)mpz_fdiv_ui(gbs->cf_qq[idx][j], prime);
+#if HAVE_AVX2
+                tmp = realloc(tmp, len * AVX2_SIZE * sizeof(cf32_t));
+                memset(tmp, 0, len * AVX2_SIZE * sizeof(cf32_t));
+                if (lc != 1) {
+                    int64_t tmpcf = 0;
+                    const cf32_t inv = mod_p_inverse_32((int32_t)lc, (int32_t)st->fc);
+                    for (j = 0; j < gbs->hm[i][LENGTH]; ++j) {
+                        tmpcf =  (cf32_t)mpz_fdiv_ui(gbs->cf_qq[idx][j], prime);
+                        tmpcf =  (tmpcf * inv) % st->fc;
+                        tmpcf += (tmpcf >> 63) & st->fc;
+                        tmp[j] = (cf32_t)tmpcf;
+                    }
+
+                } else {
+                    for (j = 0; j < gbs->hm[i][LENGTH]; ++j) {
+                        tmp[j] = (cf32_t)mpz_fdiv_ui(gbs->cf_qq[idx][j], prime);
+                    }
                 }
+                /* load data to avx2 data storage */
+                for (i = 0; i < len; ++i) {
+                    bs->cf_256[idx][i]  = _mm256_loadu_si256((__m256i*)(tmp+(i*AVX2_SIZE)));
+                }
+#else
+                if (lc != 1) {
+                    int64_t tmpcf = 0;
+                    const cf32_t inv = mod_p_inverse_32((int32_t)lc, (int32_t)st->fc);
+                    for (j = 0; j < gbs->hm[i][LENGTH]; ++j) {
+                        tmpcf =  (cf32_t)mpz_fdiv_ui(gbs->cf_qq[idx][j], prime);
+                        tmpcf =  (tmpcf * inv) % st->fc;
+                        tmpcf += (tmpcf >> 63) & st->fc;
+                        bs->cf_32[idx][j] = (cf32_t)tmpcf;
+                    }
+
+                } else {
+                    for (j = 0; j < gbs->hm[i][LENGTH]; ++j) {
+                        bs->cf_32[idx][j] = (cf32_t)mpz_fdiv_ui(gbs->cf_qq[idx][j], prime);
+                    }
+                }
+#endif
             }
+#if HAVE_AVX2
+            free(tmp);
+            tmp = NULL;
+#endif
             break;
         default:
             exit(1);
     }
+
+    /* normalize_initial_basis(bs, st->fc); */
 
     return bs;
 }
