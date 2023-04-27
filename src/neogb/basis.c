@@ -458,8 +458,10 @@ bs_t *copy_basis_mod_p(
             bs->cf_32   = (cf32_t **)malloc((unsigned long)bs->sz * sizeof(cf32_t *));
 #endif
             for (i = 0; i < bs->ld; ++i) {
+                printf("idx %d / %d szn", gbs->hm[i][COEFFS], bs->sz);
                 idx = gbs->hm[i][COEFFS];
 #if HAVE_AVX2
+                printf("LENGTH %d\n", gbs->hm[i][LENGTH]);
                 const unsigned long len = gbs->hm[i][LENGTH] / AVX2_SIZE + (gbs->hm[i][LENGTH] % AVX2_SIZE > 0 ? 1 : 0);
                 bs->cf_256[idx]  =
                     (cf256_t *)malloc(len * sizeof(cf256_t));
@@ -467,7 +469,7 @@ bs_t *copy_basis_mod_p(
                 bs->cf_32[idx]  =
                     (cf32_t *)malloc((unsigned long)(gbs->hm[i][LENGTH]) * sizeof(cf32_t));
 #endif
-                const cf32_t lc = (cf32_t)mpz_fdiv_ui(gbs->cf_qq[idx][j], prime);
+                const cf32_t lc = (cf32_t)mpz_fdiv_ui(gbs->cf_qq[idx][0], prime);
 #if HAVE_AVX2
                 tmp = realloc(tmp, len * AVX2_SIZE * sizeof(cf32_t));
                 memset(tmp, 0, len * AVX2_SIZE * sizeof(cf32_t));
@@ -487,7 +489,10 @@ bs_t *copy_basis_mod_p(
                     }
                 }
                 /* load data to avx2 data storage */
+                printf("len %d\n", len);
                 for (i = 0; i < len; ++i) {
+                    printf("i %d\n", i);
+                    printf("cf256 %p\n", bs->cf_256[idx]);
                     bs->cf_256[idx][i]  = _mm256_loadu_si256((__m256i*)(tmp+(i*AVX2_SIZE)));
                 }
 #else
