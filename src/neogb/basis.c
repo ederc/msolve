@@ -239,7 +239,7 @@ void check_enlarge_basis(
                 memset(bs->cf_16+bs->ld, 0, (unsigned long)(bs->sz-bs->ld) * sizeof(cf16_t *));
                 break;
             case 32:
-#if HAVE_AVX
+#if HAVE_AVX2
                 bs->cf_256  = realloc(bs->cf_256,
                         (unsigned long)bs->sz * sizeof(cf256_t *));
                 memset(bs->cf_256+bs->ld, 0, (unsigned long)(bs->sz-bs->ld) * sizeof(cf256_t *));
@@ -393,7 +393,7 @@ bs_t *copy_basis_mod_p(
         const stat_t * const st
         )
 {
-    len_t i, j, idx;
+    len_t i, j, k, idx;
 
     /* set field characteristic */
     unsigned long prime = (unsigned long)st->fc;
@@ -434,8 +434,20 @@ bs_t *copy_basis_mod_p(
                 idx = gbs->hm[i][COEFFS];
                 bs->cf_8[idx]  =
                     (cf8_t *)malloc((unsigned long)(gbs->hm[i][LENGTH]) * sizeof(cf8_t));
-                for (j = 0; j < gbs->hm[i][LENGTH]; ++j) {
-                    bs->cf_8[idx][j] = (cf8_t)mpz_fdiv_ui(gbs->cf_qq[idx][j], prime);
+                const cf32_t lc = (cf32_t)mpz_fdiv_ui(gbs->cf_qq[idx][0], prime);
+                if (lc != 1) {
+                    int64_t tmpcf = 0;
+                    const cf32_t inv = mod_p_inverse_32((int32_t)lc, (int32_t)st->fc);
+                    for (j = 0; j < gbs->hm[i][LENGTH]; ++j) {
+                        tmpcf =  (cf32_t)mpz_fdiv_ui(gbs->cf_qq[idx][j], prime);
+                        tmpcf =  (tmpcf * inv) % st->fc;
+                        tmpcf += (tmpcf >> 63) & st->fc;
+                        bs->cf_32[idx][j] = (cf8_t)tmpcf;
+                    }
+                } else {
+                    for (j = 0; j < gbs->hm[i][LENGTH]; ++j) {
+                        bs->cf_16[idx][j] = (cf8_t)mpz_fdiv_ui(gbs->cf_qq[idx][j], prime);
+                    }
                 }
             }
             break;
@@ -445,26 +457,45 @@ bs_t *copy_basis_mod_p(
                 idx = gbs->hm[i][COEFFS];
                 bs->cf_16[idx]  =
                     (cf16_t *)malloc((unsigned long)(gbs->hm[i][LENGTH]) * sizeof(cf16_t));
-                for (j = 0; j < gbs->hm[i][LENGTH]; ++j) {
-                    bs->cf_16[idx][j] = (cf16_t)mpz_fdiv_ui(gbs->cf_qq[idx][j], prime);
+                const cf32_t lc = (cf32_t)mpz_fdiv_ui(gbs->cf_qq[idx][0], prime);
+                if (lc != 1) {
+                    int64_t tmpcf = 0;
+                    const cf32_t inv = mod_p_inverse_32((int32_t)lc, (int32_t)st->fc);
+                    for (j = 0; j < gbs->hm[i][LENGTH]; ++j) {
+                        tmpcf =  (cf32_t)mpz_fdiv_ui(gbs->cf_qq[idx][j], prime);
+                        tmpcf =  (tmpcf * inv) % st->fc;
+                        tmpcf += (tmpcf >> 63) & st->fc;
+                        bs->cf_32[idx][j] = (cf16_t)tmpcf;
+                    }
+                } else {
+                    for (j = 0; j < gbs->hm[i][LENGTH]; ++j) {
+                        bs->cf_16[idx][j] = (cf16_t)mpz_fdiv_ui(gbs->cf_qq[idx][j], prime);
+                    }
                 }
             }
             break;
         case 32:
 #if HAVE_AVX2
-            bs->cf_256   = (cf256_t **)malloc((unsigned long)bs->sz * sizeof(cf256_t *));
+            printf("bs->sz %d\n", bs->sz);
+            bs->cf_256   = (cf256_t **)calloc((unsigned long)bs->sz, sizeof(cf256_t *));
+            for (int kk = 0; kk < bs->sz; ++kk) {
+                printf("bs->cf_256[%d] = %pn", kk, bs->cf_256[kk]);
+            }
             cf32_t *tmp  = NULL;
 #else
             bs->cf_32   = (cf32_t **)malloc((unsigned long)bs->sz * sizeof(cf32_t *));
 #endif
             for (i = 0; i < bs->ld; ++i) {
-                printf("idx %d / %d szn", gbs->hm[i][COEFFS], bs->sz);
                 idx = gbs->hm[i][COEFFS];
+                printf("i %d -> idx %d\n", i , idx);
 #if HAVE_AVX2
-                printf("LENGTH %d\n", gbs->hm[i][LENGTH]);
                 const unsigned long len = gbs->hm[i][LENGTH] / AVX2_SIZE + (gbs->hm[i][LENGTH] % AVX2_SIZE > 0 ? 1 : 0);
-                bs->cf_256[idx]  =
-                    (cf256_t *)malloc(len * sizeof(cf256_t));
+                printf("len %d\n", len);
+                bs->cf_256[idx]  = (cf256_t *)malloc(len * sizeof(cf256_t));
+                printf("bs->cf_256[%d] = %p\n", idx, bs->cf_256[idx]);
+                for (int kk = 0; kk< len; ++kk) {
+                    printf("cf256[%d][%d] = %p\n", idx, kk, bs->cf_256[idx][kk]);
+                }
 #else
                 bs->cf_32[idx]  =
                     (cf32_t *)malloc((unsigned long)(gbs->hm[i][LENGTH]) * sizeof(cf32_t));
@@ -482,18 +513,27 @@ bs_t *copy_basis_mod_p(
                         tmpcf += (tmpcf >> 63) & st->fc;
                         tmp[j] = (cf32_t)tmpcf;
                     }
-
                 } else {
                     for (j = 0; j < gbs->hm[i][LENGTH]; ++j) {
                         tmp[j] = (cf32_t)mpz_fdiv_ui(gbs->cf_qq[idx][j], prime);
                     }
                 }
                 /* load data to avx2 data storage */
-                printf("len %d\n", len);
-                for (i = 0; i < len; ++i) {
-                    printf("i %d\n", i);
-                    printf("cf256 %p\n", bs->cf_256[idx]);
-                    bs->cf_256[idx][i]  = _mm256_loadu_si256((__m256i*)(tmp+(i*AVX2_SIZE)));
+                printf("bs->cf_256[%d] = %p\n", idx, bs->cf_256[idx]);
+                for (len_t k = 0; k < len; ++k) {
+                    for (len_t kk = 0; kk < 8; ++kk) {
+                        printf("tmp[%d] = %d\n", k*AVX2_SIZE+kk, tmp[k*AVX2_SIZE+kk]);
+                    }
+                    bs->cf_256[idx][k]  = _mm256_loadu_si256((__m256i*)(tmp+(k*AVX2_SIZE)));
+                    printf("cf256[%d][%d][0] = %d\n", idx, k, _mm256_extract_epi32(bs->cf_256[idx][k], 0));
+                    printf("cf256[%d][%d][1] = %d\n", idx, k, _mm256_extract_epi32(bs->cf_256[idx][k], 1));
+                    printf("cf256[%d][%d][2] = %d\n", idx, k, _mm256_extract_epi32(bs->cf_256[idx][k], 2));
+                    printf("cf256[%d][%d][3] = %d\n", idx, k, _mm256_extract_epi32(bs->cf_256[idx][k], 3));
+                    printf("cf256[%d][%d][4] = %d\n", idx, k, _mm256_extract_epi32(bs->cf_256[idx][k], 4));
+                    printf("cf256[%d][%d][5] = %d\n", idx, k, _mm256_extract_epi32(bs->cf_256[idx][k], 5));
+                    printf("cf256[%d][%d][6] = %d\n", idx, k, _mm256_extract_epi32(bs->cf_256[idx][k], 6));
+                    printf("cf256[%d][%d][7] = %d\n", idx, k, _mm256_extract_epi32(bs->cf_256[idx][k], 7));
+
                 }
 #else
                 if (lc != 1) {
@@ -505,7 +545,6 @@ bs_t *copy_basis_mod_p(
                         tmpcf += (tmpcf >> 63) & st->fc;
                         bs->cf_32[idx][j] = (cf32_t)tmpcf;
                     }
-
                 } else {
                     for (j = 0; j < gbs->hm[i][LENGTH]; ++j) {
                         bs->cf_32[idx][j] = (cf32_t)mpz_fdiv_ui(gbs->cf_qq[idx][j], prime);

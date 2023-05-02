@@ -470,7 +470,7 @@ static void initialize_f4(
         st = copy_statistics(*gstp, fc);
         reset_function_pointers(fc, st->laopt);
         bs = copy_basis_mod_p(*gbsp, st);
-        normalize_initial_basis(bs, fc);
+        /* normalize_initial_basis(bs, fc); */
     } else {
         bs = *gbsp;
         st = *gstp;

@@ -107,9 +107,11 @@ static inline void generate_dense_row_from_sparse_row_ff_32(
     memset(dr, 0, (unsigned long)mat->nc * sizeof(int64_t));
 
     const len_t len  = row[LENGTH];
+    printf("coeffs %d\n", row[COEFFS]);
 #if HAVE_AVX2
     const cf256_t *cf  = mat->cf_256[row[COEFFS]];
     const len_t len256 = len / AVX2_SIZE + ((len % AVX2_SIZE > 0) ? 1 : 0);
+    printf("len %d / %d len256\n", len, len256);
 #else
     const cf32_t *cf = mat->cf_32[row[COEFFS]];
 #endif
@@ -127,9 +129,13 @@ static inline void generate_dense_row_from_sparse_row_ff_32(
     const len_t *r = row + OFFSET;
 #if HAVE_AVX2
     len_t j;
-    cf32_t cfs[8];
+    cf32_t *cfs = malloc(8 * sizeof(cf32_t *));
+    printf("cf %p\n", cf);
     for (j = 0, i = 0; i < len256-1; ++i, j += 8) {
         _mm256_store_si256((__m256i*)(cfs), cf[i]);
+        for (int kk = 0; kk < 8; ++kk) {
+            printf("cf[%d] = %d\n", kk, cfs[kk]);
+        }
         dr[r[j]]   = cfs[0];
         dr[r[j+1]] = cfs[1];
         dr[r[j+2]] = cfs[2];
@@ -139,11 +145,19 @@ static inline void generate_dense_row_from_sparse_row_ff_32(
         dr[r[j+6]] = cfs[6];
         dr[r[j+7]] = cfs[7];
     }
+    printf("i %d\n", i);
+    printf("cf[i] = %p\n", cf[i]);
     _mm256_store_si256((__m256i*)(cfs), cf[i]);
+        for (int kk = 0; kk < 8; ++kk) {
+            printf("cf[%d] = %d\n", kk, cfs[kk]);
+        }
     i = 0;
     while (j < len) {
+        printf("j %u | i %u\n", j, i);
         dr[r[j++]] = cfs[i++];
     }
+    free(cfs);
+    cfs = NULL;
 #else
     for (i = 0; i < len; ++i) {
         dr[r[i]] = cf[i];
@@ -1189,14 +1203,24 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
     row[DEG]      = 0;
 #endif
 #if HAVE_AVX2
+    printf("j %u, k %u\n", j, k);
     const unsigned long len = j / AVX2_SIZE + (j % AVX2_SIZE > 0 ? 1 : 0);
+    printf("cfs %p\n", cfs);
     cfs = realloc(cfs, len * AVX2_SIZE * sizeof(cf32_t));
+    printf("cfs %p\n", cfs);
     memset(cfs+j, 0, (len*AVX2_SIZE-j) * sizeof(cf32_t));
+    for (int ii = 0; ii < len*AVX2_SIZE; ++ii) {
+        printf("cfs[%d] = %d\n", ii, cfs[ii]);
+    }
     mat->cf_256[cfp] = calloc(len, sizeof(cf256_t));
     /* load data to avx2 data storage */
+    printf("len %lu\n", len);
     for (i = 0; i < len; ++i) {
+        printf("i %d\n", i);
         mat->cf_256[cfp][i]  = _mm256_loadu_si256((__m256i*)(cfs+(i*AVX2_SIZE)));
     }
+    free(cfs);
+    cfs = NULL;
 #else
     mat->cf_32[cfp] = cfs;
 #endif
@@ -4122,16 +4146,30 @@ static void exact_sparse_linear_algebra_cd_ff_32(
 
     /* prepare matrix */
     mat->row   = calloc((unsigned long)nc, sizeof(len_t *));
+#if HAVE_AVX2
+    mat->cf_256 = calloc((unsigned long)mat->nr, sizeof(cf256_t *));
+#else
     mat->cf_32 = calloc((unsigned long)mat->nr, sizeof(cf32_t *));
+#endif
 
 #pragma omp parallel for num_threads(st->nthrds) private(i) schedule(dynamic)
     for (i = 0; i < nru; ++i) {
+#if HAVE_AVX2
+        mat->cf_256[i] = bs->cf_256[mat->op[i][COEFFS]];
+                printf("cfs %d --> mat->cf_256[%d] = %p\n", mat->op[i][COEFFS], i, mat->cf_256[i]);
+#else
         mat->cf_32[i] = bs->cf_32[mat->op[i][COEFFS]];
+#endif
         mat->op[i][COEFFS] = i;
         mat->row[mat->op[i][OFFSET]] = mat->op[i];
     }
     for (i = 0; i < nrl; ++i) {
+#if HAVE_AVX2
+        mat->cf_256[i+nru] = bs->cf_256[mat->cp[i][COEFFS]];
+                printf("cfs %d --> mat->cf_256[%d] = %p\n", mat->cp[i][COEFFS], i+nru, mat->cf_256[i+nru]);
+#else
         mat->cf_32[i+nru] = bs->cf_32[mat->cp[i][COEFFS]];
+#endif
         mat->cp[i][COEFFS] = i+nru;
     }
 
