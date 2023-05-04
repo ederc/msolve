@@ -707,28 +707,25 @@ bs_t *core_f4(
         const len_t cfi = bs->hm[bs->lmps[i]][COEFFS];
         const len_t len = bs->hm[bs->lmps[i]][LENGTH];
         const len_t len256 = len / AVX2_SIZE + (len % AVX2_SIZE > 0 ? 1 : 0);
-        printf("len256 %d\n", len256);
         bs->cf_32[i] = malloc((unsigned long)len * sizeof(cf32_t));
         k = 0;
         for (j = 0; j < len256; ++j) {
             _mm256_store_si256((__m256i*)(tmpcfs), bs->cf_256[cfi][j]);
             l = 0;
-            printf("len %d\n", len);
             while (k < len && l < AVX2_SIZE) {
-                printf("k %d\n", k);
                 bs->cf_32[i][k++] = (cf32_t)tmpcfs[l++];
             }
         }
         free(bs->cf_256[cfi]);
         bs->hm[bs->lmps[i]][COEFFS] = i;
     }
-    for (i = 0; i < bs->lml; ++i) {
+    /* for (i = 0; i < bs->lml; ++i) {
         cf32_t *cf = bs->cf_32[bs->hm[bs->lmps[i]][COEFFS]];
         for (j = 0; j < bs->hm[bs->lmps[i]][LENGTH]; ++j) {
             printf("%u ", cf[j]);
         }
         printf("\n");
-    }
+    } */
     free(bs->cf_256);
     bs->cf_256 = NULL;
 #endif

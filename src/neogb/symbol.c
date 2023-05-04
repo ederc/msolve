@@ -1024,7 +1024,7 @@ static void get_matrix_data_from_trace(
 
     if (st->info_level > 1) {
         deg_t deg = ht->hd[mat->trd[0]].deg + ht->hd[bs->hm[mat->trd[1]][OFFSET]].deg;
-        printf(" %3u / %u    %5u", idx, bs->tr->ltd, deg);
+        printf(" %3u / %u    %5u", idx+1, bs->tr->ltd, deg);
         fflush(stdout);
     }
 

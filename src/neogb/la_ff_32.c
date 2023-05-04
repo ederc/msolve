@@ -1201,11 +1201,6 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
     row[DEG]      = 0;
 
     normalize_sparse_matrix_row_ff_32(cfs, row[PRELOOP], row[LENGTH], st->fc);
-    printf("[%u] --> ", row[LENGTH]);
-    for (i = 0; i < j; ++i) {
-        printf("%u ", cfs[i]);
-    }
-    printf("\n");
 #endif
 #if HAVE_AVX2
     const unsigned long len = j / AVX2_SIZE + (j % AVX2_SIZE > 0 ? 1 : 0);
