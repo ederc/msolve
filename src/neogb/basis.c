@@ -214,7 +214,6 @@ void check_enlarge_basis(
         const stat_t * const st
         )
 {
-    printf("enlarge basis?\n");
     if (bs->ld + added >= bs->sz) {
         bs->sz    = bs->sz * 2 > bs->ld + added ? bs->sz * 2 : bs->ld + added;
         bs->hm    = realloc(bs->hm, (unsigned long)bs->sz * sizeof(hm_t *));
@@ -476,26 +475,16 @@ bs_t *copy_basis_mod_p(
             break;
         case 32:
 #if HAVE_AVX2
-            printf("bs->sz %d\n", bs->sz);
             bs->cf_256   = (cf256_t **)calloc((unsigned long)bs->sz, sizeof(cf256_t *));
-            for (int kk = 0; kk < bs->sz; ++kk) {
-                printf("bs->cf_256[%d] = %pn", kk, bs->cf_256[kk]);
-            }
             cf32_t *tmp  = NULL;
 #else
             bs->cf_32   = (cf32_t **)malloc((unsigned long)bs->sz * sizeof(cf32_t *));
 #endif
             for (i = 0; i < bs->ld; ++i) {
                 idx = gbs->hm[i][COEFFS];
-                printf("i %d -> idx %d\n", i , idx);
 #if HAVE_AVX2
                 const unsigned long len = gbs->hm[i][LENGTH] / AVX2_SIZE + (gbs->hm[i][LENGTH] % AVX2_SIZE > 0 ? 1 : 0);
-                printf("len %d\n", len);
-                bs->cf_256[idx]  = (cf256_t *)malloc(len * sizeof(cf256_t));
-                printf("bs->cf_256[%d] = %p\n", idx, bs->cf_256[idx]);
-                for (int kk = 0; kk< len; ++kk) {
-                    printf("cf256[%d][%d] = %p\n", idx, kk, bs->cf_256[idx][kk]);
-                }
+                posix_memalign((void **)&bs->cf_256[idx], 32, len * sizeof(cf256_t));
 #else
                 bs->cf_32[idx]  =
                     (cf32_t *)malloc((unsigned long)(gbs->hm[i][LENGTH]) * sizeof(cf32_t));
@@ -519,21 +508,8 @@ bs_t *copy_basis_mod_p(
                     }
                 }
                 /* load data to avx2 data storage */
-                printf("bs->cf_256[%d] = %p\n", idx, bs->cf_256[idx]);
                 for (len_t k = 0; k < len; ++k) {
-                    for (len_t kk = 0; kk < 8; ++kk) {
-                        printf("tmp[%d] = %d\n", k*AVX2_SIZE+kk, tmp[k*AVX2_SIZE+kk]);
-                    }
                     bs->cf_256[idx][k]  = _mm256_loadu_si256((__m256i*)(tmp+(k*AVX2_SIZE)));
-                    printf("cf256[%d][%d][0] = %d\n", idx, k, _mm256_extract_epi32(bs->cf_256[idx][k], 0));
-                    printf("cf256[%d][%d][1] = %d\n", idx, k, _mm256_extract_epi32(bs->cf_256[idx][k], 1));
-                    printf("cf256[%d][%d][2] = %d\n", idx, k, _mm256_extract_epi32(bs->cf_256[idx][k], 2));
-                    printf("cf256[%d][%d][3] = %d\n", idx, k, _mm256_extract_epi32(bs->cf_256[idx][k], 3));
-                    printf("cf256[%d][%d][4] = %d\n", idx, k, _mm256_extract_epi32(bs->cf_256[idx][k], 4));
-                    printf("cf256[%d][%d][5] = %d\n", idx, k, _mm256_extract_epi32(bs->cf_256[idx][k], 5));
-                    printf("cf256[%d][%d][6] = %d\n", idx, k, _mm256_extract_epi32(bs->cf_256[idx][k], 6));
-                    printf("cf256[%d][%d][7] = %d\n", idx, k, _mm256_extract_epi32(bs->cf_256[idx][k], 7));
-
                 }
 #else
                 if (lc != 1) {

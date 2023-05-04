@@ -366,8 +366,7 @@ static void select_spairs(
     ps->ld -= nps;
 
     /* statistics */
-    st->num_rowsred +=  mat->nrl;
-    st->current_deg =   md;
+    st->current_deg = md;
 
     /* timings */
     st->select_ctime += cputime() - ct;
