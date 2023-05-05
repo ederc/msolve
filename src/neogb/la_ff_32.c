@@ -112,6 +112,7 @@ static inline void generate_dense_row_from_sparse_row_ff_32(
 
     const cf32_t *cf = mat->cf_32[row[COEFFS]];
     const len_t len  = row[LENGTH];
+    const len_t os   = row[PRELOOP];
 #if EIGHTBIT
     len_t j = 0;
     const cd_t * const cd   = (cd_t *)(row + OFFSET);
@@ -124,8 +125,14 @@ static inline void generate_dense_row_from_sparse_row_ff_32(
     }
 #else
     const len_t *r = row + OFFSET;
-    for (i = 0; i < len; ++i) {
+    for (i = 0; i < os; ++i) {
         dr[r[i]] = cf[i];
+    }
+    for (; i < len; i += 4) {
+        dr[r[i]]   = cf[i];
+        dr[r[i+1]] = cf[i+1];
+        dr[r[i+2]] = cf[i+2];
+        dr[r[i+3]] = cf[i+3];
     }
 #endif
 }
@@ -936,6 +943,7 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
     const len_t ncols  = mat->nc;
 #ifdef HAVE_AVX2
     int64_t res[4] __attribute__((aligned(32)));
+    int64_t res2[4] __attribute__((aligned(32)));
     __m256i cmpv, redv, drv, mulv, prodv, resv, rresv;
     __m256i zerov= _mm256_set1_epi64x(0);
     __m256i mod2v = _mm256_set1_epi64x(mod2);
@@ -976,6 +984,9 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
         }
         for (; j < len; j += 8) {
             redv  = _mm256_loadu_si256((__m256i*)(pcf+j));
+
+            /* idxv  = _mm256_loadu_si256((__m256i*)(ds+j));
+            drv = _mm256_i64gather_epi64(dr, _mm256_srli_epi64(idxv, 32), 8); */
             drv   = _mm256_setr_epi64x(
                 dr[ds[j+1]],
                 dr[ds[j+3]],
@@ -987,13 +998,14 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
             cmpv  = _mm256_cmpgt_epi64(zerov, resv);
             rresv = _mm256_add_epi64(resv, _mm256_and_si256(cmpv, mod2v));
             _mm256_store_si256((__m256i*)(res), rresv);
-            dr[ds[j+1]] = res[0];
+            /* dr[ds[j+1]] = res[0];
             dr[ds[j+3]] = res[1];
             dr[ds[j+5]] = res[2];
-            dr[ds[j+7]] = res[3];
+            dr[ds[j+7]] = res[3]; */
             /* second four mult-adds -- higher */
             prodv = _mm256_mul_epu32(mulv, redv);
-            drv   = _mm256_setr_epi64x(
+            /* drv = _mm256_i64gather_epi64(dr, _mm256_srli_epi64( _mm256_slli_epi64(idxv, 32), 32), 8); */
+            drv  = _mm256_setr_epi64x(
                 dr[ds[j]],
                 dr[ds[j+2]],
                 dr[ds[j+4]],
@@ -1001,11 +1013,15 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
             resv  = _mm256_sub_epi64(drv, prodv);
             cmpv  = _mm256_cmpgt_epi64(zerov, resv);
             rresv = _mm256_add_epi64(resv, _mm256_and_si256(cmpv, mod2v));
-            _mm256_store_si256((__m256i*)(res), rresv);
-            dr[ds[j]]   = res[0];
-            dr[ds[j+2]] = res[1];
-            dr[ds[j+4]] = res[2];
-            dr[ds[j+6]] = res[3];
+            _mm256_store_si256((__m256i*)(res2), rresv);
+            dr[ds[j]]   = res2[0];
+            dr[ds[j+1]] = res[0];
+            dr[ds[j+2]] = res2[1];
+            dr[ds[j+3]] = res[1];
+            dr[ds[j+4]] = res2[2];
+            dr[ds[j+5]] = res[2];
+            dr[ds[j+6]] = res2[3];
+            dr[ds[j+7]] = res[3];
         }
 #else
         const len_t os  = mat->row[i][PRELOOP];
