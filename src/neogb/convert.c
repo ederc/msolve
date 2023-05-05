@@ -409,8 +409,6 @@ static void convert_hashes_to_columns_with_matrix(
         fflush(stdout);
     }
 
-    st->num_rowsred += mat->nrl;
-
     /* timings */
     st->convert_ctime += cputime() - ct;
     st->convert_rtime += realtime() - rt;
@@ -1040,6 +1038,8 @@ static void convert_sparse_cd_matrix_rows_to_basis_elements(
 
     check_enlarge_basis(bs, mat->np, st);
 
+    st->num_zerored += (mat->nrl - mat->np);
+
 #pragma omp parallel for num_threads(st->nthrds) private(i) schedule(dynamic)
     for (i = 0; i < np; ++i) {
         len_t l = np-i-1;
@@ -1083,18 +1083,10 @@ static void convert_sparse_cd_matrix_rows_to_basis_elements(
                 bs->cf_16[bl+i] = mat->cf_16[cfi];
                 break;
             case 32:
-#if HAVE_AVX2
-                bs->cf_256[bl+i] = mat->cf_256[cfi];
-#else
                 bs->cf_32[bl+i] = mat->cf_32[cfi];
-#endif
                 break;
             default:
-#if HAVE_AVX2
-                bs->cf_256[bl+i] = mat->cf_256[cfi];
-#else
                 bs->cf_32[bl+i] = mat->cf_32[cfi];
-#endif
                 break;
         }
         poly[COEFFS]  = bl+i;
