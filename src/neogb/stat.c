@@ -158,6 +158,7 @@ void print_final_statistics(
     fprintf(file, "#redundant elements      %10lu\n", (unsigned long)st->num_redundant);
     fprintf(file, "#reset basis hash table    %8lu\n", (unsigned long)st->num_rht);
     fprintf(file, "#rows reduced      %16lu\n", (unsigned long)st->num_rowsred);
+    fprintf(file, "#reductions        %16lu\n", (unsigned long)st->num_reductions);
     fprintf(file, "#zero reductions   %16lu\n", (unsigned long)st->num_zerored);
     fprintf(file, "max. update hash table size    2^%d\n",
             (uint32_t)(ceil(log((double)st->max_uht_size)/log(2))));

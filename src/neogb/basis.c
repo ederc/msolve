@@ -423,8 +423,10 @@ bs_t *copy_basis_mod_p(
             bs->cf_32   = (cf32_t **)malloc((unsigned long)bs->sz * sizeof(cf32_t *));
             for (i = 0; i < bs->ld; ++i) {
                 idx = gbs->hm[i][COEFFS];
-                bs->cf_32[idx]  =
-                    (cf32_t *)malloc((unsigned long)(gbs->hm[i][LENGTH]) * sizeof(cf32_t));
+                posix_memalign((void **)&bs->cf_32[idx], 32, (unsigned long)(gbs->hm[i][LENGTH]) * sizeof(cf32_t));
+
+                /* bs->cf_32[idx]  =
+                    (cf32_t *)malloc((unsigned long)(gbs->hm[i][LENGTH]) * sizeof(cf32_t)); */
                 for (j = 0; j < gbs->hm[i][LENGTH]; ++j) {
                     bs->cf_32[idx][j] = (cf32_t)mpz_fdiv_ui(gbs->cf_qq[idx][j], prime);
                 }

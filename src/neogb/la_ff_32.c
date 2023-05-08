@@ -944,7 +944,7 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
 #ifdef HAVE_AVX2
     int64_t res[4] __attribute__((aligned(32)));
     int64_t res2[4] __attribute__((aligned(32)));
-    __m256i cmpv, redv, drv, mulv, prodv, resv, rresv;
+    __m256i cmpv, cmpv2, redv, drv, drv2, mulv, prodv, prodv2, resv, resv2, rresv, rresv2;
     __m256i zerov= _mm256_set1_epi64x(0);
     __m256i mod2v = _mm256_set1_epi64x(mod2);
 #endif
@@ -965,6 +965,7 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
             continue;
         }
 
+        st->num_reductions++;
         /* found reducer row, get multiplier */
         const int64_t mul        = (int64_t)dr[i];
         const cf32_t * const pcf = mat->cf_32[mat->row[i][COEFFS]];
@@ -978,11 +979,7 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
         const hm_t * const ds  = mat->row[i] + OFFSET;
         const uint32_t mul32 = (uint32_t)(dr[i]);
         mulv  = _mm256_set1_epi32(mul32);
-        for (j = 0; j < os; ++j) {
-            dr[ds[j]] -=  mul * pcf[j];
-            dr[ds[j]] +=  (dr[ds[j]] >> 63) & mod2;
-        }
-        for (; j < len; j += 8) {
+        for (j = 0; j < len-os; j += 8) {
             redv  = _mm256_loadu_si256((__m256i*)(pcf+j));
 
             /* idxv  = _mm256_loadu_si256((__m256i*)(ds+j));
@@ -992,28 +989,28 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
                 dr[ds[j+3]],
                 dr[ds[j+5]],
                 dr[ds[j+7]]);
+            drv2  = _mm256_setr_epi64x(
+                dr[ds[j]],
+                dr[ds[j+2]],
+                dr[ds[j+4]],
+                dr[ds[j+6]]);
             /* first four mult-adds -- lower */
             prodv = _mm256_mul_epu32(mulv, _mm256_srli_epi64(redv, 32));
+            prodv2 = _mm256_mul_epu32(mulv, redv);
             resv  = _mm256_sub_epi64(drv, prodv);
+            resv2  = _mm256_sub_epi64(drv2, prodv2);
             cmpv  = _mm256_cmpgt_epi64(zerov, resv);
+            cmpv2  = _mm256_cmpgt_epi64(zerov, resv2);
             rresv = _mm256_add_epi64(resv, _mm256_and_si256(cmpv, mod2v));
+            rresv2 = _mm256_add_epi64(resv2, _mm256_and_si256(cmpv2, mod2v));
             _mm256_store_si256((__m256i*)(res), rresv);
+            _mm256_store_si256((__m256i*)(res2), rresv2);
             /* dr[ds[j+1]] = res[0];
             dr[ds[j+3]] = res[1];
             dr[ds[j+5]] = res[2];
             dr[ds[j+7]] = res[3]; */
             /* second four mult-adds -- higher */
-            prodv = _mm256_mul_epu32(mulv, redv);
             /* drv = _mm256_i64gather_epi64(dr, _mm256_srli_epi64( _mm256_slli_epi64(idxv, 32), 32), 8); */
-            drv  = _mm256_setr_epi64x(
-                dr[ds[j]],
-                dr[ds[j+2]],
-                dr[ds[j+4]],
-                dr[ds[j+6]]);
-            resv  = _mm256_sub_epi64(drv, prodv);
-            cmpv  = _mm256_cmpgt_epi64(zerov, resv);
-            rresv = _mm256_add_epi64(resv, _mm256_and_si256(cmpv, mod2v));
-            _mm256_store_si256((__m256i*)(res2), rresv);
             dr[ds[j]]   = res2[0];
             dr[ds[j+1]] = res[0];
             dr[ds[j+2]] = res2[1];
@@ -1022,6 +1019,10 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
             dr[ds[j+5]] = res[2];
             dr[ds[j+6]] = res2[3];
             dr[ds[j+7]] = res[3];
+        }
+        for (; j < len; ++j) {
+            dr[ds[j]] -=  mul * pcf[j];
+            dr[ds[j]] +=  (dr[ds[j]] >> 63) & mod2;
         }
 #else
         const len_t os  = mat->row[i][PRELOOP];
@@ -1120,7 +1121,9 @@ static len_t *reduce_dense_row_by_known_pivots_sparse_cd_31_bit(
     const unsigned long rlen = OFFSET + k;
 
     len_t *row  = calloc(rlen, sizeof(len_t));
-    cf32_t *cfs = (cf32_t *)malloc((unsigned long)k * sizeof(cf32_t));
+    cf32_t *cfs = NULL;
+    posix_memalign((void **)&cfs, 32, (unsigned long)k * sizeof(cf32_t));
+    /* cf32_t *cfs = (cf32_t *)malloc((unsigned long)k * sizeof(cf32_t)); */
     len_t *r = row + OFFSET;
     j = 0;
     for (i = np; i < ncols; ++i) {
@@ -4094,13 +4097,11 @@ static void exact_sparse_linear_algebra_cd_ff_32(
         const len_t mh = mat->cp[i][MULT];
         const len_t bi = mat->cp[i][BINDEX];
         int64_t *drl = dr + (omp_get_thread_num() * nc);
-    double ttr = realtime();
         generate_dense_row_from_sparse_row_ff_32(drl, mat->cp[i], mat);
         /* generate_dense_row_from_multiplied_polynomial_ff_32(
                 drl, &sc, mat, i, ht, bs); */
         free(mat->cp[i]);
         mat->cp[i] = NULL;
-    st->trace_rtime += (realtime() - ttr);
 
         /* remove link to basis elements coefficients in order to not
         mess around with it in the following */

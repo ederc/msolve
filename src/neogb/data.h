@@ -386,6 +386,7 @@ struct stat_t
     int64_t num_rht;
     int64_t num_rowsred;
     int64_t num_zerored;
+    int64_t num_reductions;
 
     int32_t ngens_input;
     int32_t ngens_invalid;
