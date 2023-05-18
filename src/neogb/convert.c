@@ -587,6 +587,183 @@ static void return_normal_forms_to_basis(
     st->convert_rtime +=  rt1 - rt0;
 }
 
+static void convert_matrix_rows_to_basis_elements(
+        const int sort,
+        mat_t *mat,
+        bs_t *bs,
+        ht_t *bht,
+        const ht_t * const sht,
+        const hi_t * const hcm,
+        stat_t *st
+        )
+{
+    len_t i, j, k, l, m;
+    deg_t deg;
+
+    const len_t bl  = bs->ld;
+    const len_t np  = mat->np;
+    const len_t ncr = mat->ncr;
+    const len_t ncl = mat->ncl;
+
+    /* timings */
+    double ct0, ct1, rt0, rt1;
+    ct0 = cputime();
+    rt0 = realtime();
+
+    check_enlarge_basis(bs, np, st);
+
+
+/* TODO */
+
+
+    /* timings */
+    ct1 = cputime();
+    rt1 = realtime();
+    st->convert_ctime +=  ct1 - ct0;
+    st->convert_rtime +=  rt1 - rt0;
+}
+
+
+
+static void convert_dense_matrix_rows_to_basis_elements(
+        const int sort,
+        mat_t *mat,
+        bs_t *bs,
+        ht_t *bht,
+        const ht_t * const sht,
+        const hi_t * const hcm,
+        stat_t *st
+        )
+{
+    len_t i, j, k, l, m;
+    deg_t deg;
+
+    const len_t bl  = bs->ld;
+    const len_t np  = mat->np;
+    const len_t ncr = mat->ncr;
+    const len_t ncl = mat->ncl;
+
+    /* timings */
+    double ct0, ct1, rt0, rt1;
+    ct0 = cputime();
+    rt0 = realtime();
+
+    check_enlarge_basis(bs, np, st);
+
+    i = 0;
+    j = 0;
+    while (i < ncr && j < np) {
+        /* k = ncr - i - 1; */
+        k = i;
+        if (mat->dpivs[k] != NULL) {
+            const cf32_t *row = mat->dpivs[k];
+            const len_t len   = ncr - k;
+            cf32_t *cf = (cf32_t *)malloc((unsigned long)len * sizeof(cf32_t));
+            hm_t *mon  = (hm_t *)malloc((unsigned long)(len * OFFSET) * sizeof(hm_t));
+            hm_t *ms   = mon + OFFSET;
+            m = 0;
+            const len_t os = k + ncl;
+            for (l = 0; l < len; ++l) {
+                if (row[l] != 0) {
+                    cf[m] = row[l];
+                    ms[m] = l + os;
+                    m++;
+                }
+            }
+            mon[COEFFS]  = bl+j;
+            mon[LENGTH]  = m;
+            mon[PRELOOP] = m % UNROLL;
+
+            insert_in_basis_hash_table_pivots(mon, bht, sht, hcm, st);
+            deg = bht->hd[mon[OFFSET]].deg;
+            if (st->nev > 0) {
+                const len_t len = mon[LENGTH]+OFFSET;
+                for (l = OFFSET+1; l < len; ++l) {
+                    if (deg < bht->hd[mon[j]].deg) {
+                        deg = bht->hd[mon[j]].deg;
+                    }
+                }
+            }
+            mon[DEG] = deg;
+            if (deg == 0) {
+                bs->constant  = 1;
+            }
+
+            switch (st->ff_bits) {
+                case 0:
+                    bs->cf_qq[bl+j] = cf;
+                    break;
+                case 8:
+                    bs->cf_8[bl+j]  = cf;
+                    break;
+                case 16:
+                    bs->cf_16[bl+j] = cf;
+                    break;
+                case 32:
+                    bs->cf_32[bl+j] = cf;
+                    break;
+                default:
+                    bs->cf_32[bl+j] = cf;
+                    break;
+            }
+
+
+            bs->cf_32[bl+j] = cf;
+            bs->hm[bl+j]    = mon;
+            free(mat->dpivs[k]);
+            mat->dpivs[k] = NULL;
+            j++;
+#if 0
+        if (st->ff_bits == 32) {
+            printf("new element (%u): length %u | degree %d | ", bl+j, bs->hm[bl+j][LENGTH], bs->hm[bl+j][DEG]);
+            int kk = 0;
+            /* for (int kk=0; kk<bs->hm[bl+j][LENGTH]; ++kk) { */
+            printf("%u | ", bs->cf_32[bl+j][kk]);
+            for (int jj=0; jj < bht->evl; ++jj) {
+                printf("%u ", bht->ev[bs->hm[bl+j][OFFSET+kk]][jj]);
+            }
+            /* printf(" || ");
+             * } */
+            printf("\n");
+        }
+        if (st->ff_bits == 16) {
+            printf("new element (%u): length %u | degree %d (difference %d) | ", bl+j, bs->hm[bl+j][LENGTH], bs->hm[bl+j][DEG],
+                    bs->hm[bl+j][DEG] - bht->hd[bs->hm[bl+j][OFFSET]].deg);
+            int kk = 0;
+            for (int kk=0; kk<bs->hm[bl+j][LENGTH]; ++kk) {
+            printf("%u | ", bs->cf_16[bl+j][kk]);
+            for (int jj=0; jj < bht->evl; ++jj) {
+                printf("%u ", bht->ev[bs->hm[bl+j][OFFSET+kk]][jj]);
+            }
+            printf(" || ");
+            }
+            printf("\n");
+        }
+        if (st->ff_bits == 8) {
+            printf("new element (%u): length %u | degree %d (difference %d) | ", bl+j, bs->hm[bl+j][LENGTH], bs->hm[bl+j][DEG],
+                    bs->hm[bl+j][DEG] - bht->hd[bs->hm[bl+j][OFFSET]].deg);
+            int kk = 0;
+            for (int kk=0; kk<bs->hm[bl+j][LENGTH]; ++kk) {
+            printf("%u | ", bs->cf_8[bl+j][kk]);
+            for (int jj=0; jj < bht->evl; ++jj) {
+                printf("%u ", bht->ev[bs->hm[bl+j][OFFSET+kk]][jj]);
+            }
+            printf(" || ");
+            }
+            printf("\n");
+        }
+#endif
+        }
+        i++;
+    }
+
+    /* timings */
+    ct1 = cputime();
+    rt1 = realtime();
+    st->convert_ctime +=  ct1 - ct0;
+    st->convert_rtime +=  rt1 - rt0;
+}
+
 static void convert_sparse_matrix_rows_to_basis_elements(
         const int sort,
         mat_t *mat,

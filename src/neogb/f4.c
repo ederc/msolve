@@ -84,6 +84,12 @@ static void clear_matrix(
     mat->rr = NULL;
     free(mat->tr);
     mat->tr  = NULL;
+    free(mat->pivs);
+    mat->pivs = NULL;
+    free(mat->spivs);
+    mat->spivs = NULL;
+    free(mat->dpivs);
+    mat->dpivs = NULL;
     free(mat->cf_8);
     mat->cf_8 = NULL;
     free(mat->cf_16);
@@ -388,7 +394,7 @@ int core_f4(
       linear_algebra(mat, bs, st);
       /* columns indices are mapped back to exponent hashes */
       if (mat->np > 0) {
-        convert_sparse_matrix_rows_to_basis_elements(
+        convert_dense_matrix_rows_to_basis_elements(
             -1, mat, bs, bht, sht, hcm, st);
       }
       clean_hash_table(sht);

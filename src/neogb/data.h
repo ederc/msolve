@@ -198,6 +198,7 @@ struct bs_t
                        the denominator is 1) */
 };
 
+typedef enum {NONE, SPARSE, DENSE} piv_t;
 /* matrix stuff */
 typedef struct mat_t mat_t;
 struct mat_t
@@ -216,6 +217,9 @@ struct mat_t
     cf8_t **cf_8;       /* coefficients for finite fields (8 bit) */
     cf16_t **cf_16;     /* coefficients for finite fields (16 bit) */
     cf32_t **cf_32;     /* coefficients for finite fields (32 bit) */
+    piv_t *pivs;        /* keeping track of pivots */
+    cf32_t **dpivs;     /* dense pivots */
+    hm_t **spivs;       /* sparse pivots */
     mpz_t **cf_qq;      /* coefficients for rationals */
     mpz_t **cf_ab_qq;   /* coefficients for rationals */
     len_t sz;           /* number of rows allocated resp. size */
