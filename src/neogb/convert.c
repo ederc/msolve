@@ -338,13 +338,13 @@ static void convert_hashes_to_columns(
     sort_r(hcm, (unsigned long)j, sizeof(hi_t), hcm_cmp, sht);
 
     /* printf("hcm\n");
-     * for (int ii=0; ii<j; ++ii) {
-     *     printf("hcm[%d] = %d | idx %u | deg %u |", ii, hcm[ii], hds[hcm[ii]].idx, sht->ev[hcm[ii]][DEG]+sht->ev[hcm[ii]][sht->ebl]);
-     *     for (int jj = 0; jj < sht->evl; ++jj) {
-     *         printf("%d ", sht->ev[hcm[ii]][jj]);
-     *     }
-     *     printf("\n");
-     * } */
+    for (int ii=0; ii<j; ++ii) {
+        printf("hcm[%d] = %d | idx %u | deg %u |", ii, hcm[ii], hds[hcm[ii]].idx, sht->ev[hcm[ii]][DEG]+sht->ev[hcm[ii]][sht->ebl]);
+        for (int jj = 0; jj < sht->evl; ++jj) {
+            printf("%d ", sht->ev[hcm[ii]][jj]);
+        }
+        printf("\n");
+    } */
 
     mat->ncl  = k;
     mat->ncr  = (len_t)esld - 1 - mat->ncl;
@@ -602,6 +602,7 @@ static void convert_matrix_rows_to_basis_elements(
 
     const len_t bl  = bs->ld;
     const len_t np  = mat->np;
+    const len_t nc  = mat->nc;
     const len_t ncr = mat->ncr;
     const len_t ncl = mat->ncl;
 
@@ -613,7 +614,191 @@ static void convert_matrix_rows_to_basis_elements(
     check_enlarge_basis(bs, np, st);
 
 
-/* TODO */
+    hm_t **rows = mat->spivs;
+
+    i = ncl;
+    j = 0;
+    while (i < nc && j < np) {
+        /* k = ncr - i - 1; */
+        k = i;
+        if (mat->pivs[k] == DENSE) {
+            const cf32_t *row = mat->dpivs[k-ncl];
+            const len_t len   = nc - k;
+            cf32_t *cf = (cf32_t *)malloc((unsigned long)len * sizeof(cf32_t));
+            hm_t *mon  = (hm_t *)malloc((unsigned long)(len * OFFSET) * sizeof(hm_t));
+            hm_t *ms   = mon + OFFSET;
+            m = 0;
+            const len_t os = k;
+            for (l = 0; l < len; ++l) {
+                if (row[l] != 0) {
+                    cf[m] = row[l];
+                    ms[m] = l + os;
+                    m++;
+                }
+            }
+            mon[COEFFS]  = bl+j;
+            mon[LENGTH]  = m;
+            mon[PRELOOP] = m % UNROLL;
+
+            insert_in_basis_hash_table_pivots(mon, bht, sht, hcm, st);
+            deg = bht->hd[mon[OFFSET]].deg;
+            if (st->nev > 0) {
+                const len_t len = mon[LENGTH]+OFFSET;
+                for (l = OFFSET+1; l < len; ++l) {
+                    if (deg < bht->hd[mon[j]].deg) {
+                        deg = bht->hd[mon[j]].deg;
+                    }
+                }
+            }
+            mon[DEG] = deg;
+            if (deg == 0) {
+                bs->constant  = 1;
+            }
+
+            switch (st->ff_bits) {
+                case 0:
+                    bs->cf_qq[bl+j] = cf;
+                    break;
+                case 8:
+                    bs->cf_8[bl+j]  = cf;
+                    break;
+                case 16:
+                    bs->cf_16[bl+j] = cf;
+                    break;
+                case 32:
+                    bs->cf_32[bl+j] = cf;
+                    break;
+                default:
+                    bs->cf_32[bl+j] = cf;
+                    break;
+            }
+
+
+            bs->cf_32[bl+j] = cf;
+            bs->hm[bl+j]    = mon;
+            free(mat->dpivs[k-ncl]);
+            mat->dpivs[k-ncl] = NULL;
+#if 0
+        if (st->ff_bits == 32) {
+            printf("new element (%u): length %u | degree %d | ", bl+j, bs->hm[bl+j][LENGTH], bs->hm[bl+j][DEG]);
+            int kk = 0;
+            /* for (int kk=0; kk<bs->hm[bl+j][LENGTH]; ++kk) { */
+            printf("%u | ", bs->cf_32[bl+j][kk]);
+            for (int jj=0; jj < bht->evl; ++jj) {
+                printf("%u ", bht->ev[bs->hm[bl+j][OFFSET+kk]][jj]);
+            }
+            /* printf(" || ");
+             * } */
+            printf("\n");
+        }
+        if (st->ff_bits == 16) {
+            printf("new element (%u): length %u | degree %d (difference %d) | ", bl+j, bs->hm[bl+j][LENGTH], bs->hm[bl+j][DEG],
+                    bs->hm[bl+j][DEG] - bht->hd[bs->hm[bl+j][OFFSET]].deg);
+            int kk = 0;
+            for (int kk=0; kk<bs->hm[bl+j][LENGTH]; ++kk) {
+            printf("%u | ", bs->cf_16[bl+j][kk]);
+            for (int jj=0; jj < bht->evl; ++jj) {
+                printf("%u ", bht->ev[bs->hm[bl+j][OFFSET+kk]][jj]);
+            }
+            printf(" || ");
+            }
+            printf("\n");
+        }
+        if (st->ff_bits == 8) {
+            printf("new element (%u): length %u | degree %d (difference %d) | ", bl+j, bs->hm[bl+j][LENGTH], bs->hm[bl+j][DEG],
+                    bs->hm[bl+j][DEG] - bht->hd[bs->hm[bl+j][OFFSET]].deg);
+            int kk = 0;
+            for (int kk=0; kk<bs->hm[bl+j][LENGTH]; ++kk) {
+            printf("%u | ", bs->cf_8[bl+j][kk]);
+            for (int jj=0; jj < bht->evl; ++jj) {
+                printf("%u ", bht->ev[bs->hm[bl+j][OFFSET+kk]][jj]);
+            }
+            printf(" || ");
+            }
+            printf("\n");
+        }
+#endif
+            j++;
+        }
+        if (mat->pivs[k] == SPARSE) {
+            insert_in_basis_hash_table_pivots(rows[i], bht, sht, hcm, st);
+            deg = bht->hd[rows[i][OFFSET]].deg;
+            if (st->nev > 0) {
+                const len_t len = rows[i][LENGTH]+OFFSET;
+                for (k = OFFSET+1; k < len; ++k) {
+                    if (deg < bht->hd[rows[i][k]].deg) {
+                        deg = bht->hd[rows[i][k]].deg;
+                    }
+                }
+            }
+            switch (st->ff_bits) {
+                case 0:
+                    bs->cf_qq[bl+j] = mat->cf_qq[rows[i][COEFFS]];
+                    break;
+                case 8:
+                    bs->cf_8[bl+j]  = mat->cf_8[rows[i][COEFFS]];
+                    break;
+                case 16:
+                    bs->cf_16[bl+j] = mat->cf_16[rows[i][COEFFS]];
+                    break;
+                case 32:
+                    bs->cf_32[bl+j] = mat->cf_32[rows[i][COEFFS]];
+                    break;
+                default:
+                    bs->cf_32[bl+j] = mat->cf_32[rows[i][COEFFS]];
+                    break;
+            }
+            rows[i][COEFFS]   = bl+j;
+            bs->hm[bl+j]      = rows[i];
+            bs->hm[bl+j][DEG] = deg;
+            if (deg == 0) {
+                bs->constant  = 1;
+            }
+#if 0
+        if (st->ff_bits == 32) {
+            printf("new element (%u): length %u | degree %d | ", bl+j, bs->hm[bl+j][LENGTH], bs->hm[bl+j][DEG]);
+            int kk = 0;
+            /* for (int kk=0; kk<bs->hm[bl+j][LENGTH]; ++kk) { */
+            printf("%u | ", bs->cf_32[bl+j][kk]);
+            for (int jj=0; jj < bht->evl; ++jj) {
+                printf("%u ", bht->ev[bs->hm[bl+j][OFFSET+kk]][jj]);
+            }
+            /* printf(" || ");
+             * } */
+            printf("\n");
+        }
+        if (st->ff_bits == 16) {
+            printf("new element (%u): length %u | degree %d (difference %d) | ", bl+j, bs->hm[bl+j][LENGTH], bs->hm[bl+j][DEG],
+                    bs->hm[bl+j][DEG] - bht->hd[bs->hm[bl+j][OFFSET]].deg);
+            int kk = 0;
+            for (int kk=0; kk<bs->hm[bl+j][LENGTH]; ++kk) {
+            printf("%u | ", bs->cf_16[bl+j][kk]);
+            for (int jj=0; jj < bht->evl; ++jj) {
+                printf("%u ", bht->ev[bs->hm[bl+j][OFFSET+kk]][jj]);
+            }
+            printf(" || ");
+            }
+            printf("\n");
+        }
+        if (st->ff_bits == 8) {
+            printf("new element (%u): length %u | degree %d (difference %d) | ", bl+j, bs->hm[bl+j][LENGTH], bs->hm[bl+j][DEG],
+                    bs->hm[bl+j][DEG] - bht->hd[bs->hm[bl+j][OFFSET]].deg);
+            int kk = 0;
+            for (int kk=0; kk<bs->hm[bl+j][LENGTH]; ++kk) {
+            printf("%u | ", bs->cf_8[bl+j][kk]);
+            for (int jj=0; jj < bht->evl; ++jj) {
+                printf("%u ", bht->ev[bs->hm[bl+j][OFFSET+kk]][jj]);
+            }
+            printf(" || ");
+            }
+            printf("\n");
+        }
+#endif
+            j++;
+        }
+        i++;
+    }
+
 
 
     /* timings */

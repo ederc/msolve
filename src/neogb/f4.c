@@ -394,7 +394,7 @@ int core_f4(
       linear_algebra(mat, bs, st);
       /* columns indices are mapped back to exponent hashes */
       if (mat->np > 0) {
-        convert_dense_matrix_rows_to_basis_elements(
+        convert_matrix_rows_to_basis_elements(
             -1, mat, bs, bht, sht, hcm, st);
       }
       clean_hash_table(sht);
