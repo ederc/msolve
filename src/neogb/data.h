@@ -69,8 +69,9 @@ inline omp_int_t omp_get_max_threads(void) { return 1;}
 #define SM_SMON  (SM_OFFSET-5)  /* hash value of signature monomial */
 
 /* computational data */
-typedef uint8_t cf8_t;   /* coefficient type finite field (8 bit) */
+typedef uint8_t cf8_t;   /* coefficient type finite field (8 bit)  */
 typedef uint16_t cf16_t; /* coefficient type finite field (16 bit) */
+typedef float cf24_t;    /* coefficient type finite field (24 bit) */
 typedef uint32_t cf32_t; /* coefficient type finite field (32 bit) */
 typedef uint32_t val_t;  /* core values like hashes */
 typedef val_t hi_t;      /* index of hash table entries*/
@@ -192,8 +193,9 @@ struct bs_t
     hm_t **hm;      /* hashed monomials representing exponents */
     sm_t *sm;       /* signatures for F5-style computations */
     si_t *si;       /* signatures index for F5-style computations */
-    cf8_t **cf_8;   /* coefficients for finite fields (8 bit) */
+    cf8_t **cf_8;   /* coefficients for finite fields (8 bit)  */
     cf16_t **cf_16; /* coefficients for finite fields (16 bit) */
+    cf24_t **cf_24; /* coefficients for finite fields (24 bit) */
     cf32_t **cf_32; /* coefficients for finite fields (32 bit) */
     mpz_t **cf_qq;  /* coefficients for rationals (always multiplied such that
                        the denominator is 1) */
@@ -214,8 +216,9 @@ struct mat_t
     hm_t **rr;          /* reducer rows of the matrix, only column */
                         /* entries, coefficients are handled via linking */
                         /* to coefficient arrays. */
-    cf8_t **cf_8;       /* coefficients for finite fields (8 bit) */
+    cf8_t **cf_8;       /* coefficients for finite fields (8 bit)  */
     cf16_t **cf_16;     /* coefficients for finite fields (16 bit) */
+    cf24_t **cf_24;     /* coefficients for finite fields (24 bit) */
     cf32_t **cf_32;     /* coefficients for finite fields (32 bit) */
     mpz_t **cf_qq;      /* coefficients for rationals */
     mpz_t **cf_ab_qq;   /* coefficients for rationals */
