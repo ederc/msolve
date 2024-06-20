@@ -849,7 +849,7 @@ static void probabilistic_sparse_linear_algebra_ff_16(
 
 /* In f4: tbr == bs
 in nf: tbr are the polynomials to be reduced w.r.t. bs */
-static void exact_sparse_linear_algebra_ff_16(
+static void exact_sparse_linear_algebra_ff_24(
         mat_t *mat,
         const bs_t * const tbr,
         const bs_t * const bs,
@@ -863,9 +863,9 @@ static void exact_sparse_linear_algebra_ff_16(
 
     /* allocate temporary storage space for sparse
      * coefficients of all pivot rows */
-    mat->cf_16  = realloc(mat->cf_16,
-            (unsigned long)mat->nr * sizeof(cf16_t *));
-    exact_sparse_reduced_echelon_form_ff_16(mat, tbr, bs, st);
+    mat->cf_24  = realloc(mat->cf_24,
+            (unsigned long)mat->nr * sizeof(cf24_t *));
+    exact_sparse_reduced_echelon_form_ff_24(mat, tbr, bs, st);
 
     /* timings */
     ct1 = cputime();
