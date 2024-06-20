@@ -151,6 +151,54 @@ void sort_terms_ff_16(
   *hmp  = hm;
 }
 
+void sort_terms_ff_24(
+    cf24_t **cfp,
+    hm_t **hmp,
+    ht_t *ht
+    )
+{
+  cf24_t *cf  = *cfp;
+  hm_t *hm    = *hmp;
+  hm_t *hmo   = hm+OFFSET;
+
+  const len_t len = hm[LENGTH];
+
+  len_t i, j, k;
+
+  hm_t tmphm    = 0;
+  cf24_t tmpcf  = 0;
+
+  /* generate array of pointers to hm entries */
+  hm_t *phm[len];
+  for (i = 0; i < len; ++i) {
+    phm[i]  = &hmo[i];
+  }
+
+  /* sort pointers to hm entries -> getting permutations */
+  sort_r(phm, (unsigned long)len, sizeof(phm[0]), initial_gens_cmp, ht);
+
+  /* sort cf and hm using permutations stored in phm */
+  for (i = 0; i < len; ++i) {
+    if (i != phm[i]-hmo) {
+      tmpcf = cf[i];
+      tmphm = hmo[i];
+      k     = i;
+      while (i != (j = phm[k]-hmo)) {
+        cf[k]   = cf[j];
+        hmo[k]  = hmo[j];
+        phm[k]  = &hmo[k];
+        k       = j;
+      }
+      cf[k]   = tmpcf;
+      hmo[k]  = tmphm;
+      phm[k]  = &hmo[k];
+    }
+  }
+
+  *cfp  = cf;
+  *hmp  = hm;
+}
+
 void sort_terms_ff_32(
     cf32_t **cfp,
     hm_t **hmp,
@@ -266,6 +314,7 @@ void import_input_data(
 
     cf8_t *cf8      =   NULL;
     cf16_t *cf16    =   NULL;
+    cf24_t *cf24    =   NULL;
     cf32_t *cf32    =   NULL;
     mpz_t *cfq      =   NULL;
     int32_t *cfs_ff =   NULL;
@@ -348,6 +397,24 @@ void import_input_data(
                         cf16[j-off] =   (cf16_t)(cfs_ff[j] % fc);
                     }
                     sort_terms_ff_16(&(bs->cf_16[ctr]), &(bs->hm[ctr]), ht);
+                    ctr++;
+                }
+                off +=  lens[i];
+            }
+            break;
+        case 24:
+            cfs_ff  =   (int32_t *)vcfs;
+            for (i = start; i < stop; ++i) {
+                if (invalid_gens == NULL || invalid_gens[i] == 0) {
+                    cf24    = (cf24_t *)malloc((unsigned long)(lens[i]) * sizeof(cf24_t));
+                    bs->cf_24[ctr] = cf24;
+
+                    for (j = off; j < off+lens[i]; ++j) {
+                        /* make coefficient positive */
+                        cfs_ff[j]   +=  (cfs_ff[j] >> 31) & fc;
+                        cf24[j-off] =   (cf24_t)(cfs_ff[j] % fc);
+                    }
+                    sort_terms_ff_24(&(bs->cf_24[ctr]), &(bs->hm[ctr]), ht);
                     ctr++;
                 }
                 off +=  lens[i];
@@ -607,7 +674,7 @@ void set_ff_bits(md_t *st, int32_t fc){
                 st->ff_bits = 16;
             } else {
                 if (fc < (int32_t)(1) << 23) {
-                    st->ff_bits = 32;
+                    st->ff_bits = 23;
                 } else {
                     st->ff_bits = 32;
                 }
