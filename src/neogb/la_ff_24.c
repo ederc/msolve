@@ -27,27 +27,27 @@
 #include <arm_neon.h>
 #endif
 
-static inline cf16_t *normalize_sparse_matrix_row_ff_16(
-        cf16_t *row,
+static inline cf24_t *normalize_sparse_matrix_row_ff_24(
+        cf24_t *row,
         const len_t os,
         const len_t len,
-        const uint32_t fc
+        const double fc
         )
 {
     len_t i;
 
-    const uint16_t fc16  = (uint16_t)fc;
-    const uint16_t inv   = mod_p_inverse_16(row[0], fc16);
+    const cf32_t fc32  = (cf32_t)fc;
+    const cf32_t inv   = mod_p_inverse_32(row[0], fc32);
 
     for (i = 0; i < os; ++i) {
-        row[i]  = (cf16_t)(((uint32_t)row[i] * inv) % fc16);
+        row[i]  = (cf24_t)(((cf32_t)row[i] * inv) % fc32);
     }
     /* we need to set i to os since os < 1 is possible */
     for (i = os; i < len; i += UNROLL) {
-        row[i]   = (cf16_t)(((uint32_t)row[i] * inv) % fc16);
-        row[i+1] = (cf16_t)(((uint32_t)row[i+1] * inv) % fc16);
-        row[i+2] = (cf16_t)(((uint32_t)row[i+2] * inv) % fc16);
-        row[i+3] = (cf16_t)(((uint32_t)row[i+3] * inv) % fc16);
+        row[i]   = (cf24_t)(((cf32_t)row[i]   * inv) % fc32);
+        row[i+1] = (cf24_t)(((cf32_t)row[i+1] * inv) % fc32);
+        row[i+2] = (cf24_t)(((cf32_t)row[i+2] * inv) % fc32);
+        row[i+3] = (cf24_t)(((cf32_t)row[i+3] * inv) % fc32);
     }
     row[0]  = 1;
 
