@@ -1316,6 +1316,7 @@ static inline void reset_function_pointers(
         }
     }
 }
+
 static inline void reset_trace_function_pointers(
         const uint32_t prime
         )
@@ -1372,8 +1373,8 @@ static inline void reset_trace_function_pointers(
             }
         }
     }
-
 }
+
 
 static void write_pbm_file(
     mat_t *mat,
