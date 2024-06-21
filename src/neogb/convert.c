@@ -688,6 +688,9 @@ static void convert_sparse_matrix_rows_to_basis_elements(
             case 16:
                 bs->cf_16[bl+k] = mat->cf_16[rows[i][COEFFS]];
                 break;
+            case 24:
+                bs->cf_24[bl+k] = mat->cf_24[rows[i][COEFFS]];
+                break;
             case 32:
                 bs->cf_32[bl+k] = mat->cf_32[rows[i][COEFFS]];
                 break;
@@ -707,6 +710,19 @@ static void convert_sparse_matrix_rows_to_basis_elements(
             int kk = 0;
             for (int kk=0; kk<bs->hm[bl+k][LENGTH]; ++kk) {
             printf("%u | ", bs->cf_32[bl+k][kk]);
+            for (int jj=0; jj < bht->evl; ++jj) {
+                printf("%u ", bht->ev[bs->hm[bl+k][OFFSET+kk]][jj]);
+            }
+            printf(" || ");
+            }
+            printf("\n");
+        }
+        if (st->ff_bits == 24) {
+            printf("new element (%u): length %u | degree %d (difference %d) | ", bl+k, bs->hm[bl+k][LENGTH], bs->hm[bl+k][DEG],
+                    bs->hm[bl+k][DEG] - bht->hd[bs->hm[bl+k][OFFSET]].deg);
+            int kk = 0;
+            for (int kk=0; kk<bs->hm[bl+k][LENGTH]; ++kk) {
+            printf("%f | ", bs->cf_24[bl+k][kk]);
             for (int jj=0; jj < bht->evl; ++jj) {
                 printf("%u ", bht->ev[bs->hm[bl+k][OFFSET+kk]][jj]);
             }
