@@ -87,9 +87,9 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_ff_24(
 
     k = 0;
     for (i = dpiv; i < ncols; ++i) {
-        if (dr[i] != 0) {
+        /* if (dr[i] != 0) {
             dr[i] = dr[i] % mod;
-        }
+        } */
         if (dr[i] == 0) {
             continue;
         }
@@ -115,12 +115,12 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_ff_24(
         const hm_t * const ds  = dts + OFFSET;
         for (j = 0; j < len; ++j) {
             dr[ds[j]] +=  mul * cfs[j];
-            if (ds[j] > ncl) {
+            if (ds[j] > ncl) {
                 of[ds[j]-ncl]++;
             }
-            if (os[ds[j]] > 31) {
+            if (of[ds[j]] > 31) {
                 dr[ds[j]] = dr[ds[j]] - floor(dr[ds[j]] * invmod) * mod;
-                os[ds[j]] = 0;
+                of[ds[j]] = 0;
             }
         }
         /* for (; j < len; j += UNROLL) {
