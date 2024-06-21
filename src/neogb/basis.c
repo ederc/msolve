@@ -188,6 +188,9 @@ bs_t *initialize_basis(
         case 16:
             bs->cf_16  = (cf16_t **)malloc((unsigned long)bs->sz * sizeof(cf16_t *));
             break;
+        case 24:
+            bs->cf_24  = (cf24_t **)malloc((unsigned long)bs->sz * sizeof(cf24_t *));
+            break;
         case 32:
             bs->cf_32  = (cf32_t **)malloc((unsigned long)bs->sz * sizeof(cf32_t *));
             break;
@@ -195,6 +198,7 @@ bs_t *initialize_basis(
             bs->cf_qq = (mpz_t **)malloc((unsigned long)bs->sz * sizeof(mpz_t *));
             break;
         default:
+            printf("There is something wrong with ff_bits = %d while initializing the basis.\n", md->ff_bits);
             exit(1);
     }
 
