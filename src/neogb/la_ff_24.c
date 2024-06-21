@@ -364,6 +364,93 @@ static void exact_sparse_linear_algebra_ff_24(
     }
 }
 
+static void interreduce_matrix_rows_ff_24(
+        mat_t *mat,
+        bs_t *bs,
+        md_t *st,
+        const int free_basis
+        )
+{
+    len_t i, j, k, l;
+
+    const len_t nrows = mat->nr;
+    const len_t ncols = mat->nc;
+
+    /* adjust displaying timings for statistic printout */
+    if (st->info_level > 1) {
+        printf("                          ");
+    }
+
+    /* for interreduction steps like the final basis reduction we
+    need to allocate memory for rba here, even so we do not use
+    it at all */
+    mat->rba  = (rba_t **)malloc((unsigned long)ncols * sizeof(rba_t *));
+    const unsigned long len = ncols / 32 + ((ncols % 32) != 0);
+    for (i = 0; i < ncols; ++i) {
+        mat->rba[i] = (rba_t *)calloc(len, sizeof(rba_t));
+    }
+
+    mat->tr = realloc(mat->tr, (unsigned long)ncols * sizeof(hm_t *));
+
+    mat->cf_24  = realloc(mat->cf_24,
+            (unsigned long)ncols * sizeof(cf16_t *));
+    memset(mat->cf_24, 0, (unsigned long)ncols * sizeof(cf24_t *));
+    hm_t **pivs = (hm_t **)calloc((unsigned long)ncols, sizeof(hm_t *));
+    /* copy coefficient arrays from basis in matrix, maybe
+     * several rows need the same coefficient arrays, but we
+     * cannot share them here. */
+    for (i = 0; i < nrows; ++i) {
+        pivs[mat->rr[i][OFFSET]]  = mat->rr[i];
+    }
+
+    double *dr = (double *)malloc((unsigned long)ncols * sizeof(double));
+    /* interreduce new pivots */
+    cf24_t *cfs;
+    /* starting column, coefficient array position in tmpcf */
+    hm_t sc;
+    k = nrows - 1;
+    for (i = 0; i < ncols; ++i) {
+        l = ncols-1-i;
+        if (pivs[l] != NULL) {
+            memset(dr, 0, (unsigned long)ncols * sizeof(double));
+            cfs = bs->cf_24[pivs[l][COEFFS]];
+            const len_t bi  = pivs[l][BINDEX];
+            const len_t mh  = pivs[l][MULT];
+            const len_t os  = pivs[l][PRELOOP];
+            const len_t len = pivs[l][LENGTH];
+            const hm_t * const ds = pivs[l] + OFFSET;
+            sc  = ds[0];
+            for (j = 0; j < os; ++j) {
+                dr[ds[j]] = (double)cfs[j];
+            }
+            for (; j < len; j += UNROLL) {
+                dr[ds[j]]   = (double)cfs[j];
+                dr[ds[j+1]] = (double)cfs[j+1];
+                dr[ds[j+2]] = (double)cfs[j+2];
+                dr[ds[j+3]] = (double)cfs[j+3];
+            }
+            free(pivs[l]);
+            pivs[l] = NULL;
+            pivs[l] = mat->tr[k--] =
+                reduce_dense_row_by_known_pivots_sparse_ff_24(
+                        dr, mat, bs, pivs, sc, l, mh, bi, 0, st->fc);
+        }
+    }
+    for (i = 0; i < ncols; ++i) {
+        free(mat->rba[i]);
+        mat->rba[i] = NULL;
+    }
+    if (free_basis != 0) {
+        /* free now all polynomials in the basis and reset bs->ld to 0. */
+        free_basis_elements(bs);
+    }
+    free(mat->rr);
+    mat->rr = NULL;
+    st->np = mat->np = nrows;
+    free(pivs);
+    free(dr);
+}
+
 /* 
 TODO: Implement below functions for 24 bit.
  */
@@ -663,92 +750,5 @@ static void probabilistic_sparse_linear_algebra_ff_16(
         printf("%9d new %7d zero", mat->np, mat->nrl - mat->np);
         fflush(stdout);
     }
-}
-
-static void interreduce_matrix_rows_ff_16(
-        mat_t *mat,
-        bs_t *bs,
-        md_t *st,
-        const int free_basis
-        )
-{
-    len_t i, j, k, l;
-
-    const len_t nrows = mat->nr;
-    const len_t ncols = mat->nc;
-
-    /* adjust displaying timings for statistic printout */
-    if (st->info_level > 1) {
-        printf("                          ");
-    }
-
-    /* for interreduction steps like the final basis reduction we
-    need to allocate memory for rba here, even so we do not use
-    it at all */
-    mat->rba  = (rba_t **)malloc((unsigned long)ncols * sizeof(rba_t *));
-    const unsigned long len = ncols / 32 + ((ncols % 32) != 0);
-    for (i = 0; i < ncols; ++i) {
-        mat->rba[i] = (rba_t *)calloc(len, sizeof(rba_t));
-    }
-
-    mat->tr = realloc(mat->tr, (unsigned long)ncols * sizeof(hm_t *));
-
-    mat->cf_16  = realloc(mat->cf_16,
-            (unsigned long)ncols * sizeof(cf16_t *));
-    memset(mat->cf_16, 0, (unsigned long)ncols * sizeof(cf16_t *));
-    hm_t **pivs = (hm_t **)calloc((unsigned long)ncols, sizeof(hm_t *));
-    /* copy coefficient arrays from basis in matrix, maybe
-     * several rows need the same coefficient arrays, but we
-     * cannot share them here. */
-    for (i = 0; i < nrows; ++i) {
-        pivs[mat->rr[i][OFFSET]]  = mat->rr[i];
-    }
-
-    int64_t *dr = (int64_t *)malloc((unsigned long)ncols * sizeof(int64_t));
-    /* interreduce new pivots */
-    cf16_t *cfs;
-    /* starting column, coefficient array position in tmpcf */
-    hm_t sc;
-    k = nrows - 1;
-    for (i = 0; i < ncols; ++i) {
-        l = ncols-1-i;
-        if (pivs[l] != NULL) {
-            memset(dr, 0, (unsigned long)ncols * sizeof(int64_t));
-            cfs = bs->cf_16[pivs[l][COEFFS]];
-            const len_t bi  = pivs[l][BINDEX];
-            const len_t mh  = pivs[l][MULT];
-            const len_t os  = pivs[l][PRELOOP];
-            const len_t len = pivs[l][LENGTH];
-            const hm_t * const ds = pivs[l] + OFFSET;
-            sc  = ds[0];
-            for (j = 0; j < os; ++j) {
-                dr[ds[j]] = (int64_t)cfs[j];
-            }
-            for (; j < len; j += UNROLL) {
-                dr[ds[j]]   = (int64_t)cfs[j];
-                dr[ds[j+1]] = (int64_t)cfs[j+1];
-                dr[ds[j+2]] = (int64_t)cfs[j+2];
-                dr[ds[j+3]] = (int64_t)cfs[j+3];
-            }
-            free(pivs[l]);
-            pivs[l] = NULL;
-            pivs[l] = mat->tr[k--] =
-                reduce_dense_row_by_known_pivots_sparse_ff_16(
-                        dr, mat, bs, pivs, sc, l, mh, bi, 0, st->fc);
-        }
-    }
-    for (i = 0; i < ncols; ++i) {
-        free(mat->rba[i]);
-        mat->rba[i] = NULL;
-    }
-    if (free_basis != 0) {
-        /* free now all polynomials in the basis and reset bs->ld to 0. */
-        free_basis_elements(bs);
-    }
-    free(mat->rr);
-    mat->rr = NULL;
-    st->np = mat->np = nrows;
-    free(pivs);
-    free(dr);
 }
 #endif
