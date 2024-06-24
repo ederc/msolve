@@ -35,21 +35,27 @@ static inline cf24_t *normalize_sparse_matrix_row_ff_24(
         )
 {
     len_t i;
+    double tmp;
 
     const cf32_t fc32  = (cf32_t)fc;
-    const cf32_t inv   = mod_p_inverse_32(row[0], fc32);
+    const double inv   = (double)mod_p_inverse_32(row[0], fc32);
+    const double mod   = (double)fc;
+    const double invmod = (double)1.0/mod;
 
     for (i = 0; i < os; ++i) {
-        row[i]  = (cf24_t)(((cf32_t)row[i] * inv) % fc32);
+        tmp1    = inv * row[i];
+        row[i]  = (cf24_t)(tmp1 - floor(tmp1 * invmod) * mod);
     }
-    /* we need to set i to os since os < 1 is possible */
-    for (i = os; i < len; i += UNROLL) {
-        row[i]   = (cf24_t)(((cf32_t)row[i]   * inv) % fc32);
-        row[i+1] = (cf24_t)(((cf32_t)row[i+1] * inv) % fc32);
-        row[i+2] = (cf24_t)(((cf32_t)row[i+2] * inv) % fc32);
-        row[i+3] = (cf24_t)(((cf32_t)row[i+3] * inv) % fc32);
+    for (i = os; i < len; i += OFFSET) {
+        tmp1     = inv * row[i];
+        tmp2     = inv * row[i+1];
+        tmp3     = inv * row[i+2];
+        tmp4     = inv * row[i+3];
+        row[i]   = (cf24_t)(tmp1 - floor(tmp1 * invmod) * mod);
+        row[i+1] = (cf24_t)(tmp2 - floor(tmp2 * invmod) * mod);
+        row[i+2] = (cf24_t)(tmp3 - floor(tmp3 * invmod) * mod);
+        row[i+3] = (cf24_t)(tmp4 - floor(tmp4 * invmod) * mod);
     }
-    row[0]  = 1;
 
     return row;
 }
