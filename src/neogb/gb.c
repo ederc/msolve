@@ -37,7 +37,7 @@
 #include "basis.c"    /* basis and polynomial handling */
 #include "la_ff_8.c"  /* finite field linear algebra (8 bit) */
 #include "la_ff_16.c" /* finite field linear algebra (16 bit) */
-#include "la_ff_23.c" /* finite field linear algebra (24 bit) */
+#include "la_ff_23.c" /* finite field linear algebra (23 bit) */
 #include "la_ff_32.c" /* finite field linear algebra (32 bit) */
 #include "la_qq.c"    /* rational linear algebra */
 #include "update.c"   /* update process and pairset handling */
