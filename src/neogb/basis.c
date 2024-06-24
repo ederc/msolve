@@ -342,7 +342,7 @@ static inline void normalize_initial_basis_ff_24(
         )
 {
     len_t i, j;
-    int64_t tmp1, tmp2, tmp3, tmp4;
+    double tmp1, tmp2, tmp3, tmp4;
 
     cf24_t **cf       = bs->cf_24;
     hm_t * const *hm  = bs->hm;
@@ -351,29 +351,28 @@ static inline void normalize_initial_basis_ff_24(
     for (i = 0; i < ld; ++i) {
         cf24_t *row = cf[hm[i][COEFFS]];
 
-        const uint32_t inv  = mod_p_inverse_32((int64_t)row[0], (int64_t)fc);
+        const double inv    = (double)mod_p_inverse_32((int64_t)row[0], (int64_t)fc);
+        const double mod    = (double)fc;
+        const double invmod = (double)1.0/mod;
+
         const len_t os      = hm[i][PRELOOP]; 
         const len_t len     = hm[i][LENGTH]; 
 
         for (j = 0; j < os; ++j) {
-            tmp1    =   ((int64_t)row[j] * inv) % fc;
-            tmp1    +=  (tmp1 >> 63) & fc;
-            row[j]  =   (cf24_t)tmp1;
+            tmp1    =   inv * row[j];
+            row[j]  =   (cf24_t)(tmp1 - floor(tmp1 * invmod) * mod);
         }
         for (j = os; j < len; j += UNROLL) {
-            tmp1      =   ((int64_t)row[j] * inv) % fc;
-            tmp2      =   ((int64_t)row[j+1] * inv) % fc;
-            tmp3      =   ((int64_t)row[j+2] * inv) % fc;
-            tmp4      =   ((int64_t)row[j+3] * inv) % fc;
-            tmp1      +=  (tmp1 >> 63) & fc;
-            tmp2      +=  (tmp2 >> 63) & fc;
-            tmp3      +=  (tmp3 >> 63) & fc;
-            tmp4      +=  (tmp4 >> 63) & fc;
-            row[j]    =   (cf24_t)tmp1;
-            row[j+1]  =   (cf24_t)tmp2;
-            row[j+2]  =   (cf24_t)tmp3;
-            row[j+3]  =   (cf24_t)tmp4;
+            tmp1     = inv * row[j];
+            tmp2     = inv * row[j+1];
+            tmp3     = inv * row[j+2];
+            tmp4     = inv * row[j+3];
+            row[j]   = (cf24_t)(tmp1 - floor(tmp1 * invmod) * mod);
+            row[j+1] = (cf24_t)(tmp2 - floor(tmp2 * invmod) * mod);
+            row[j+2] = (cf24_t)(tmp3 - floor(tmp3 * invmod) * mod);
+            row[j+3] = (cf24_t)(tmp4 - floor(tmp4 * invmod) * mod);
         }
+
     }
 }
 
