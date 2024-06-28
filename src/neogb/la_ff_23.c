@@ -84,6 +84,8 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_ff_23(
     cf23_t * const * const mcf  = mat->cf_23;
     uint8_t of[ncols];
 
+    const uint8_t acc = 127;
+
     rba_t *rba;
     if (tr > 0) {
         rba = mat->rba[tmp_pos];
@@ -121,7 +123,7 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_ff_23(
         for (j = 0; j < os; ++j) {
             dr[ds[j]] +=  mul * cfs[j];
             of[ds[j]]++;
-            if (of[ds[j]] > 0) {
+            if (of[ds[j]] > acc) {
                 dr[ds[j]] = dr[ds[j]] - floor(dr[ds[j]] * invmod) * mod;
                 of[ds[j]] = 0;
             }
@@ -129,25 +131,25 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_ff_23(
         for (; j < len; j += UNROLL) {
             dr[ds[j]] +=  mul * cfs[j];
             of[ds[j]]++;
-            if (of[ds[j]] > 0) {
+            if (of[ds[j]] > acc) {
                 dr[ds[j]] = dr[ds[j]] - floor(dr[ds[j]] * invmod) * mod;
                 of[ds[j]] = 0;
             }
             dr[ds[j+1]] +=  mul * cfs[j+1];
             of[ds[j+1]]++;
-            if (of[ds[j+1]] > 0) {
+            if (of[ds[j+1]] > acc) {
                 dr[ds[j+1]] = dr[ds[j+1]] - floor(dr[ds[j+1]] * invmod) * mod;
                 of[ds[j+1]] = 0;
             }
             dr[ds[j+2]] +=  mul * cfs[j+2];
             of[ds[j+2]]++;
-            if (of[ds[j+2]] > 0) {
+            if (of[ds[j+2]] > acc) {
                 dr[ds[j+2]] = dr[ds[j+2]] - floor(dr[ds[j+2]] * invmod) * mod;
                 of[ds[j+2]] = 0;
             }
             dr[ds[j+3]] +=  mul * cfs[j+3];
             of[ds[j+3]]++;
-            if (of[ds[j+3]] > 0) {
+            if (of[ds[j+3]] > acc) {
                 dr[ds[j+3]] = dr[ds[j+3]] - floor(dr[ds[j+3]] * invmod) * mod;
                 of[ds[j+3]] = 0;
             }
