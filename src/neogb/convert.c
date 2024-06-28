@@ -336,13 +336,13 @@ static void convert_hashes_to_columns(
     sort_r(hcm, (unsigned long)j, sizeof(hi_t), hcm_cmp, sht);
 
     /* printf("hcm\n");
-    for (int ii=0; ii<j; ++ii) {
-        printf("hcm[%d] = %d | idx %u | deg %u |", ii, hcm[ii], hds[hcm[ii]].idx, sht->ev[hcm[ii]][DEG]+sht->ev[hcm[ii]][sht->ebl]);
-        for (int jj = 0; jj < sht->evl; ++jj) {
-            printf("%d ", sht->ev[hcm[ii]][jj]);
-        }
-        printf("\n");
-    } */
+     * for (int ii=0; ii<j; ++ii) {
+     *     printf("hcm[%d] = %d | idx %u | deg %u |", ii, hcm[ii], hds[hcm[ii]].idx, sht->ev[hcm[ii]][DEG]+sht->ev[hcm[ii]][sht->ebl]);
+     *     for (int jj = 0; jj < sht->evl; ++jj) {
+     *         printf("%d ", sht->ev[hcm[ii]][jj]);
+     *     }
+     *     printf("\n");
+     * } */
 
     mat->ncl  = k;
     mat->ncr  = (len_t)esld - 1 - mat->ncl;
@@ -688,8 +688,8 @@ static void convert_sparse_matrix_rows_to_basis_elements(
             case 16:
                 bs->cf_16[bl+k] = mat->cf_16[rows[i][COEFFS]];
                 break;
-            case 24:
-                bs->cf_24[bl+k] = mat->cf_24[rows[i][COEFFS]];
+            case 23:
+                bs->cf_23[bl+k] = mat->cf_23[rows[i][COEFFS]];
                 break;
             case 32:
                 bs->cf_32[bl+k] = mat->cf_32[rows[i][COEFFS]];
@@ -717,12 +717,12 @@ static void convert_sparse_matrix_rows_to_basis_elements(
             }
             printf("\n");
         }
-        if (st->ff_bits == 24) {
+        if (st->ff_bits == 23) {
             printf("new element (%u): length %u | degree %d (difference %d) | ", bl+k, bs->hm[bl+k][LENGTH], bs->hm[bl+k][DEG],
                     bs->hm[bl+k][DEG] - bht->hd[bs->hm[bl+k][OFFSET]].deg);
             int kk = 0;
             for (int kk=0; kk<bs->hm[bl+k][LENGTH]; ++kk) {
-            printf("%f | ", bs->cf_24[bl+k][kk]);
+            printf("%f | ", bs->cf_23[bl+k][kk]);
             for (int jj=0; jj < bht->evl; ++jj) {
                 printf("%u ", bht->ev[bs->hm[bl+k][OFFSET+kk]][jj]);
             }

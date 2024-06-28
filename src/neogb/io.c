@@ -151,13 +151,13 @@ void sort_terms_ff_16(
   *hmp  = hm;
 }
 
-void sort_terms_ff_24(
-    cf24_t **cfp,
+void sort_terms_ff_23(
+    cf23_t **cfp,
     hm_t **hmp,
     ht_t *ht
     )
 {
-  cf24_t *cf  = *cfp;
+  cf23_t *cf  = *cfp;
   hm_t *hm    = *hmp;
   hm_t *hmo   = hm+OFFSET;
 
@@ -166,7 +166,7 @@ void sort_terms_ff_24(
   len_t i, j, k;
 
   hm_t tmphm    = 0;
-  cf24_t tmpcf  = 0;
+  cf23_t tmpcf  = 0;
 
   /* generate array of pointers to hm entries */
   hm_t *phm[len];
@@ -314,7 +314,7 @@ void import_input_data(
 
     cf8_t *cf8      =   NULL;
     cf16_t *cf16    =   NULL;
-    cf24_t *cf24    =   NULL;
+    cf23_t *cf23    =   NULL;
     cf32_t *cf32    =   NULL;
     mpz_t *cfq      =   NULL;
     int32_t *cfs_ff =   NULL;
@@ -402,19 +402,19 @@ void import_input_data(
                 off +=  lens[i];
             }
             break;
-        case 24:
+        case 23:
             cfs_ff  =   (int32_t *)vcfs;
             for (i = start; i < stop; ++i) {
                 if (invalid_gens == NULL || invalid_gens[i] == 0) {
-                    cf24    = (cf24_t *)malloc((unsigned long)(lens[i]) * sizeof(cf24_t));
-                    bs->cf_24[ctr] = cf24;
+                    cf23    = (cf23_t *)malloc((unsigned long)(lens[i]) * sizeof(cf23_t));
+                    bs->cf_23[ctr] = cf23;
 
                     for (j = off; j < off+lens[i]; ++j) {
                         /* make coefficient positive */
                         cfs_ff[j]   +=  (cfs_ff[j] >> 31) & fc;
-                        cf24[j-off] =   (cf24_t)(cfs_ff[j] % fc);
+                        cf23[j-off] =   (cf23_t)(cfs_ff[j] % fc);
                     }
-                    sort_terms_ff_24(&(bs->cf_24[ctr]), &(bs->hm[ctr]), ht);
+                    sort_terms_ff_23(&(bs->cf_23[ctr]), &(bs->hm[ctr]), ht);
                     ctr++;
                 }
                 off +=  lens[i];
@@ -664,6 +664,9 @@ static int64_t export_data(
 }
 
 void set_ff_bits(md_t *st, int32_t fc){
+    printf("fc %d | st->gfc %d | st->fc %d | st->ff_bits %d\n",
+            fc, st->gfc, st->fc, st->ff_bits);
+    printf("2^16 %d --  2^23 %d -- 2^32 %d -- fc - pwo(2, 23) = %d | %d\n", pow(2,16), pow(2, 23), pow(2,32), fc- pow(2, 23), fc < pow(2, 23));
     if (fc == 0) {
         st->ff_bits = 0;
     } else {
@@ -681,6 +684,8 @@ void set_ff_bits(md_t *st, int32_t fc){
             }
         }
     }
+    printf("--> fc %d | st->gfc %d | st->fc %d | st->ff_bits %d\n",
+            fc, st->gfc, st->fc, st->ff_bits);
 }
 
 /* return 1 if validation was possible, zero otherwise */
@@ -1024,34 +1029,34 @@ void set_function_pointers(
       normalize_initial_basis = normalize_initial_basis_ff_16;
       break;
 
-    case 24:
+    case 23:
       switch (st->laopt) {
         case 1:
-          printf("Currently not available for 24 bit.\n");
+          printf("Currently not available for 23 bit.\n");
           exit(0);
           break;
         case 2:
-          linear_algebra  = exact_sparse_linear_algebra_ff_24;
+          linear_algebra  = exact_sparse_linear_algebra_ff_23;
           break;
         case 42:
-          printf("Currently not available for 24 bit.\n");
+          printf("Currently not available for 23 bit.\n");
           exit(0);
           break;
         case 43:
-          printf("Currently not available for 24 bit.\n");
+          printf("Currently not available for 23 bit.\n");
           exit(0);
           break;
         case 44:
-          printf("Currently not available for 24 bit.\n");
+          printf("Currently not available for 23 bit.\n");
           exit(0);
-          /* linear_algebra  = probabilistic_sparse_linear_algebra_ff_24; */
+          /* linear_algebra  = probabilistic_sparse_linear_algebra_ff_23; */
           break;
         default:
-          linear_algebra  = exact_sparse_linear_algebra_ff_24;
+          linear_algebra  = exact_sparse_linear_algebra_ff_23;
       }
-      exact_linear_algebra    = exact_sparse_linear_algebra_ff_24;
-      interreduce_matrix_rows = interreduce_matrix_rows_ff_24;
-      normalize_initial_basis = normalize_initial_basis_ff_24;
+      exact_linear_algebra    = exact_sparse_linear_algebra_ff_23;
+      interreduce_matrix_rows = interreduce_matrix_rows_ff_23;
+      normalize_initial_basis = normalize_initial_basis_ff_23;
       break;
 
     case 32:
@@ -1246,7 +1251,7 @@ static inline void reset_function_pointers(
                 exact_linear_algebra    = exact_sparse_linear_algebra_ff_23;
                 interreduce_matrix_rows = interreduce_matrix_rows_ff_23;
                 normalize_initial_basis = normalize_initial_basis_ff_23;
-                switch (st->laopt) {
+                switch (laopt) {
                     case 1:
                         printf("Currently not available for 23 bit.\n");
                         exit(0);
@@ -1339,8 +1344,8 @@ static inline void reset_trace_function_pointers(
                 exact_linear_algebra        = exact_sparse_linear_algebra_ff_23;
                 interreduce_matrix_rows     = interreduce_matrix_rows_ff_23;
                 normalize_initial_basis     = normalize_initial_basis_ff_23;
-                application_linear_algebra  = exact_application_sparse_linear_algebra_ff_23;
-                trace_linear_algebra        = exact_trace_sparse_linear_algebra_ff_23;
+                /* application_linear_algebra  = exact_application_sparse_linear_algebra_ff_23;
+                 * trace_linear_algebra        = exact_trace_sparse_linear_algebra_ff_23; */
             } else {
                 exact_linear_algebra        = exact_sparse_linear_algebra_ff_32;
                 interreduce_matrix_rows     = interreduce_matrix_rows_ff_32;

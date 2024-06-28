@@ -686,8 +686,10 @@ bs_t *core_f4(
     /* timings for one round */
     double rrt, crt;
 
+
     done = initialize_f4(&bs, &md, &mat, gmd, gbs, fc);
 
+    printf("bits %d\n", md->ff_bits);
 
     /* let's start the f4 rounds, we are done when no more spairs
        are left in the pairset or if we found a constant in the basis. */

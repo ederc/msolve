@@ -39,8 +39,12 @@ md_t *copy_meta_data(
         if (md->fc < (int32_t)(1) << 16) {
             md->ff_bits = 16;
         } else {
-            if (md->fc < (int32_t)(1) << 31) {
-                md->ff_bits = 32;
+            if (md->fc < (int32_t)(1) << 23) {
+                md->ff_bits = 23;
+            } else {
+                if (md->fc < (int32_t)(1) << 31) {
+                    md->ff_bits = 32;
+                }
             }
         }
     }

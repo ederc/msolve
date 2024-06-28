@@ -188,8 +188,8 @@ bs_t *initialize_basis(
         case 16:
             bs->cf_16  = (cf16_t **)malloc((unsigned long)bs->sz * sizeof(cf16_t *));
             break;
-        case 24:
-            bs->cf_24  = (cf24_t **)malloc((unsigned long)bs->sz * sizeof(cf24_t *));
+        case 23:
+            bs->cf_23  = (cf23_t **)malloc((unsigned long)bs->sz * sizeof(cf23_t *));
             break;
         case 32:
             bs->cf_32  = (cf32_t **)malloc((unsigned long)bs->sz * sizeof(cf32_t *));
@@ -233,6 +233,11 @@ void check_enlarge_basis(
                 bs->cf_16  = realloc(bs->cf_16,
                         (unsigned long)bs->sz * sizeof(cf16_t *));
                 memset(bs->cf_16+bs->ld, 0, (unsigned long)(bs->sz-bs->ld) * sizeof(cf16_t *));
+                break;
+            case 23:
+                bs->cf_23  = realloc(bs->cf_23,
+                        (unsigned long)bs->sz * sizeof(cf23_t *));
+                memset(bs->cf_23+bs->ld, 0, (unsigned long)(bs->sz-bs->ld) * sizeof(cf23_t *));
                 break;
             case 32:
                 bs->cf_32  = realloc(bs->cf_32,
@@ -336,7 +341,7 @@ static inline void normalize_initial_basis_ff_16(
 }
 
 /* finite field stuff  --  24 */
-static inline void normalize_initial_basis_ff_24(
+static inline void normalize_initial_basis_ff_23(
         bs_t *bs,
        const uint32_t fc
         )
@@ -344,12 +349,12 @@ static inline void normalize_initial_basis_ff_24(
     len_t i, j;
     double tmp1, tmp2, tmp3, tmp4;
 
-    cf24_t **cf       = bs->cf_24;
+    cf23_t **cf       = bs->cf_23;
     hm_t * const *hm  = bs->hm;
     const bl_t ld     = bs->ld;
 
     for (i = 0; i < ld; ++i) {
-        cf24_t *row = cf[hm[i][COEFFS]];
+        cf23_t *row = cf[hm[i][COEFFS]];
 
         const double inv    = (double)mod_p_inverse_32((int64_t)row[0], (int64_t)fc);
         const double mod    = (double)fc;
@@ -360,17 +365,17 @@ static inline void normalize_initial_basis_ff_24(
 
         for (j = 0; j < os; ++j) {
             tmp1    =   inv * row[j];
-            row[j]  =   (cf24_t)(tmp1 - floor(tmp1 * invmod) * mod);
+            row[j]  =   (cf23_t)(tmp1 - floor(tmp1 * invmod) * mod);
         }
         for (j = os; j < len; j += UNROLL) {
             tmp1     = inv * row[j];
             tmp2     = inv * row[j+1];
             tmp3     = inv * row[j+2];
             tmp4     = inv * row[j+3];
-            row[j]   = (cf24_t)(tmp1 - floor(tmp1 * invmod) * mod);
-            row[j+1] = (cf24_t)(tmp2 - floor(tmp2 * invmod) * mod);
-            row[j+2] = (cf24_t)(tmp3 - floor(tmp3 * invmod) * mod);
-            row[j+3] = (cf24_t)(tmp4 - floor(tmp4 * invmod) * mod);
+            row[j]   = (cf23_t)(tmp1 - floor(tmp1 * invmod) * mod);
+            row[j+1] = (cf23_t)(tmp2 - floor(tmp2 * invmod) * mod);
+            row[j+2] = (cf23_t)(tmp3 - floor(tmp3 * invmod) * mod);
+            row[j+3] = (cf23_t)(tmp4 - floor(tmp4 * invmod) * mod);
         }
 
     }
