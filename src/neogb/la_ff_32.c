@@ -1013,9 +1013,9 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_31_bit(
 
     k = 0;
     for (i = dpiv; i < ncols; ++i) {
-        /* if (dr[i] != 0) {
+        if (dr[i] != 0) {
             dr[i] = dr[i] % mod;
-        } */
+        }
         if (dr[i] == 0) {
             continue;
         }
