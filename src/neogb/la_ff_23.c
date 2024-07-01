@@ -78,13 +78,12 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_ff_23(
     cf23_t *cfs;
     int64_t np = -1;
     const double mod            = (double)fc;
+    const double mod2           = (double)fc*fc;
     const double invmod         = (double)1.0/mod;
     const len_t ncols           = mat->nc;
     const len_t ncl             = mat->ncl;
     cf23_t * const * const mcf  = mat->cf_23;
     uint8_t of[ncols];
-
-    const uint8_t acc = 127;
 
     rba_t *rba;
     if (tr > 0) {
@@ -108,7 +107,7 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_ff_23(
             continue;
         }
         /* found reducer row, get multiplier */
-        const double mul = (double)(fc - dr[i]);
+        const double mul = dr[i];
         dts   = pivs[i];
         if (i < ncl) {
             /* set corresponding bit of reducer in reducer bit array */
@@ -121,37 +120,27 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_ff_23(
         const len_t len = dts[LENGTH];
         const hm_t * const ds  = dts + OFFSET;
         for (j = 0; j < os; ++j) {
-            dr[ds[j]] +=  mul * cfs[j];
-            of[ds[j]]++;
-            if (of[ds[j]] > acc) {
-                dr[ds[j]] = dr[ds[j]] - floor(dr[ds[j]] * invmod) * mod;
-                of[ds[j]] = 0;
+            dr[ds[j]] -=  mul * cfs[j];
+            if (dr[ds[j]] < 0) {
+                dr[ds[j]] += mod2;
             }
         }
-        for (; j < len; j += UNROLL) {
-            dr[ds[j]] +=  mul * cfs[j];
-            of[ds[j]]++;
-            if (of[ds[j]] > acc) {
-                dr[ds[j]] = dr[ds[j]] - floor(dr[ds[j]] * invmod) * mod;
-                of[ds[j]] = 0;
+        for (j; j < len; j += 4) {
+            dr[ds[j]] -=  mul * cfs[j];
+            if (dr[ds[j]] < 0) {
+                dr[ds[j]] += mod2;
             }
-            dr[ds[j+1]] +=  mul * cfs[j+1];
-            of[ds[j+1]]++;
-            if (of[ds[j+1]] > acc) {
-                dr[ds[j+1]] = dr[ds[j+1]] - floor(dr[ds[j+1]] * invmod) * mod;
-                of[ds[j+1]] = 0;
+            dr[ds[j+1]] -=  mul * cfs[j+1];
+            if (dr[ds[j+1]] < 0) {
+                dr[ds[j+1]] += mod2;
             }
-            dr[ds[j+2]] +=  mul * cfs[j+2];
-            of[ds[j+2]]++;
-            if (of[ds[j+2]] > acc) {
-                dr[ds[j+2]] = dr[ds[j+2]] - floor(dr[ds[j+2]] * invmod) * mod;
-                of[ds[j+2]] = 0;
+            dr[ds[j+2]] -=  mul * cfs[j+2];
+            if (dr[ds[j+2]] < 0) {
+                dr[ds[j+2]] += mod2;
             }
-            dr[ds[j+3]] +=  mul * cfs[j+3];
-            of[ds[j+3]]++;
-            if (of[ds[j+3]] > acc) {
-                dr[ds[j+3]] = dr[ds[j+3]] - floor(dr[ds[j+3]] * invmod) * mod;
-                of[ds[j+3]] = 0;
+            dr[ds[j+3]] -=  mul * cfs[j+3];
+            if (dr[ds[j+3]] < 0) {
+                dr[ds[j+3]] += mod2;
             }
         }
         dr[i] = 0;
