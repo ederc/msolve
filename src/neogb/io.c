@@ -664,9 +664,6 @@ static int64_t export_data(
 }
 
 void set_ff_bits(md_t *st, int32_t fc){
-    printf("fc %d | st->gfc %d | st->fc %d | st->ff_bits %d\n",
-            fc, st->gfc, st->fc, st->ff_bits);
-    printf("2^16 %d --  2^23 %d -- 2^32 %d -- fc - pwo(2, 23) = %d | %d\n", pow(2,16), pow(2, 23), pow(2,32), fc- pow(2, 23), fc < pow(2, 23));
     if (fc == 0) {
         st->ff_bits = 0;
     } else {
@@ -684,8 +681,6 @@ void set_ff_bits(md_t *st, int32_t fc){
             }
         }
     }
-    printf("--> fc %d | st->gfc %d | st->fc %d | st->ff_bits %d\n",
-            fc, st->gfc, st->fc, st->ff_bits);
 }
 
 /* return 1 if validation was possible, zero otherwise */
