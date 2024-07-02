@@ -270,6 +270,7 @@ static void print_msolve_polynomials_ff(
                 case 16:
                   fprintf(file, "%u", bs->cf_16[bs->hm[idx][COEFFS]][0]);
                   break;
+                case 23:
                 case 32:
                   fprintf(file, "%u", bs->cf_32[bs->hm[idx][COEFFS]][0]);
                   break;
@@ -290,6 +291,7 @@ static void print_msolve_polynomials_ff(
 		  case 16:
 		    fprintf(file, "+%u", bs->cf_16[bs->hm[idx][COEFFS]][j]);
 		    break;
+          case 23:
 		  case 32:
 		    fprintf(file, "+%u", bs->cf_32[bs->hm[idx][COEFFS]][j]);
 		    break;

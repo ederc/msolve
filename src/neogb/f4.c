@@ -656,6 +656,8 @@ static void finalize_f4(
 {
     if (err > 0) {
         free_basis_and_only_local_hash_table_data(bsp);
+    } else {
+        coefficient_adjustment_basis(*bsp, *lmdp);
     }
 
     if ((*lmdp)->trace_level == LEARN_TRACER) {

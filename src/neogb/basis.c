@@ -568,3 +568,30 @@ next_poly:
         }
     }
 }
+
+void coefficient_adjustment_basis(
+        bs_t *bs,
+        const md_t *md
+        )
+{
+    /* at the moment we have no handling for cf23_t coefficient types outside
+     * of the f4 part of msolve, thus we convert the coefficients back to
+     * cf32_t type ´right before leaving f4. */
+    if (md->ff_bits == 23) {
+        cf32_t *cf = NULL;
+        bs->cf_32 = (cf32_t **)malloc((unsigned long)bs->lml * sizeof(cf32_t *));
+        for (len_t i = 0; i < bs->lml; ++i) {
+            const len_t j = bs->lmps[i];
+            const len_t len = bs->hm[j][LENGTH];
+            cf = (cf32_t *)malloc(
+                    (unsigned long)len * sizeof(cf32_t));
+            for (len_t k = 0; k < len; ++k) {
+                cf[k] = (cf32_t)bs->cf_23[j][k];
+            }
+            bs->cf_32[bs->hm[j][COEFFS]] = cf;
+            free(bs->cf_23[j]);
+        }
+        free(bs->cf_23);
+        bs->cf_23 = NULL;
+    }
+}
