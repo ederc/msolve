@@ -2022,6 +2022,7 @@ void set_linear_function_pointer(int32_t fc){
     copy_poly_in_matrix_from_bs = copy_poly_in_matrix_from_bs_8;
     copy_nf_in_matrix_from_bs = copy_nf_in_matrix_from_bs_8;
     break;
+  case 15:
   case 16:
     set_linear_poly = set_linear_poly_16;
     check_and_set_linear_poly = check_and_set_linear_poly_16;

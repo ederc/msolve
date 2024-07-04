@@ -335,6 +335,7 @@ void import_input_data(
                 off +=  lens[i];
             }
             break;
+        case 15:
         case 16:
             cfs_ff  =   (int32_t *)vcfs;
             for (i = start; i < stop; ++i) {
@@ -603,13 +604,17 @@ void set_ff_bits(md_t *st, int32_t fc){
         if (fc < (int32_t)(1) << 8) {
             st->ff_bits = 8;
         } else {
-            if (fc < (int32_t)(1) << 16) {
-                st->ff_bits = 16;
+            if (fc < (int32_t)(1) << 15) {
+                st->ff_bits = 15;
             } else {
-                if (fc < (int32_t)(1) << 23) {
-                    st->ff_bits = 32;
+                if (fc < (int32_t)(1) << 16) {
+                    st->ff_bits = 16;
                 } else {
-                    st->ff_bits = 32;
+                    if (fc < (int32_t)(1) << 23) {
+                        st->ff_bits = 32;
+                    } else {
+                        st->ff_bits = 32;
+                    }
                 }
             }
         }
@@ -932,6 +937,31 @@ void set_function_pointers(
       normalize_initial_basis = normalize_initial_basis_ff_8;
       break;
 
+
+    case 15:
+      switch (st->laopt) {
+        case 1:
+          linear_algebra  = exact_sparse_dense_linear_algebra_ff_16;
+          break;
+        case 2:
+          linear_algebra  = exact_sparse_linear_algebra_ff_15;
+          break;
+        case 42:
+          linear_algebra  = probabilistic_sparse_dense_linear_algebra_ff_16;
+          break;
+        case 43:
+          linear_algebra  = probabilistic_sparse_dense_linear_algebra_ff_16_2;
+          break;
+        case 44:
+          linear_algebra  = probabilistic_sparse_linear_algebra_ff_16;
+          break;
+        default:
+          linear_algebra  = exact_sparse_linear_algebra_ff_15;
+      }
+      exact_linear_algebra    = exact_sparse_linear_algebra_ff_15;
+      interreduce_matrix_rows = interreduce_matrix_rows_ff_15;
+      normalize_initial_basis = normalize_initial_basis_ff_16;
+      break;
     case 16:
       switch (st->laopt) {
         case 1:

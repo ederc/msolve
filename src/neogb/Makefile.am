@@ -30,6 +30,7 @@ EXTRA_DIST	=		basis.h \
 								sba.c \
 								hash.c \
 								io.c \
+								la_ff_15.c \
 								la_ff_16.c \
 								la_ff_32.c \
 								la_ff_8.c \

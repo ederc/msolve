@@ -185,6 +185,7 @@ bs_t *initialize_basis(
         case 8:
             bs->cf_8  = (cf8_t **)malloc((unsigned long)bs->sz * sizeof(cf8_t *));
             break;
+        case 15:
         case 16:
             bs->cf_16  = (cf16_t **)malloc((unsigned long)bs->sz * sizeof(cf16_t *));
             break;
@@ -225,6 +226,7 @@ void check_enlarge_basis(
                         (unsigned long)bs->sz * sizeof(cf8_t *));
                 memset(bs->cf_8+bs->ld, 0, (unsigned long)(bs->sz-bs->ld) * sizeof(cf8_t *));
                 break;
+            case 15:
             case 16:
                 bs->cf_16  = realloc(bs->cf_16,
                         (unsigned long)bs->sz * sizeof(cf16_t *));
