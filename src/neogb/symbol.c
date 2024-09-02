@@ -251,6 +251,7 @@ static int32_t select_spairs_by_minimal_degree(
     }
     printf("\n");
 #endif
+
     for (i = 0; i < psl->ld; ++i) {
         if (ps[i].deg > mdeg) {
             break;

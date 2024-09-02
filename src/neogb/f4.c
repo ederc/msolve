@@ -76,11 +76,11 @@ void free_f4_julia_result_data(
     /* lengths resp. nterms */
     int32_t *lens  = *blen;
 
-    int64_t i;
-    int64_t len = 0;
-    for (i = 0; i < ngens; ++i) {
-         len += (int64_t)lens[i];
-    } 
+    /* int64_t i;
+     * int64_t len = 0;
+     * for (i = 0; i < ngens; ++i) {
+     *     len += (int64_t)lens[i];
+     * } */
 
     (*freep)(lens);
     lens  = NULL;
@@ -94,10 +94,12 @@ void free_f4_julia_result_data(
 
     /* coefficients */
     if (field_char == 0) {
-         mpz_t **cfs = (mpz_t **)bcf;
-         for (i = 0; i < len; ++i) {
-             mpz_clear((*cfs)[i]);
-         }
+        /* mpz_t **cfs = (mpz_t **)bcf;
+         * for (i = 0; i < len; ++i) {
+         *     mpz_clear((*cfs)[i]);
+         * }
+         * (*freep)(*cfs);
+         * *cfs  = NULL; */
     } else {
         if (field_char > 0) {
             int32_t *cfs  = *((int32_t **)bcf);
@@ -698,6 +700,10 @@ bs_t *core_f4(
         crt = cputime();
         md->max_bht_size = md->max_bht_size > bs->ht->esz ?
             md->max_bht_size : bs->ht->esz;
+
+        /* if (bs->ht->esz >= pow(2,22)) { */
+        /*     reset_hash_table(bs->ht, bs, md->ps, md); */
+        /* } */
 
         done = preprocessing(mat, bs, md);
 

@@ -174,7 +174,7 @@ ht_t *copy_hash_table(
     ht->eld = bht->eld;
     const hl_t esz  = ht->esz;
     for (j = 0; j < esz; ++j) {
-        ht->ev[j]  = tmp + (j*ht->evl);
+        ht->ev[j]  = tmp + ((unsigned long)j*ht->evl);
     }
     return ht;
 }
@@ -224,7 +224,7 @@ ht_t *initialize_secondary_hash_table(
     }
     const hl_t esz  = ht->esz;
     for (j = 0; j < esz; ++j) {
-        ht->ev[j]  = tmp + (j*ht->evl);
+        ht->ev[j]  = tmp + ((unsigned long)j*ht->evl);
     }
     return ht;
 }
@@ -343,7 +343,7 @@ static void enlarge_hash_table(
     /* due to realloc we have to reset ALL ev entries,
      * memory might have been moved */
     for (i = 1; i < esz; ++i) {
-        ht->ev[i] = ht->ev[0] + (i*ht->evl);
+        ht->ev[i] = ht->ev[0] + ((unsigned long)i*ht->evl);
     }
 
     /* The hash table should be double the size of the exponent space in
@@ -1050,12 +1050,12 @@ static inline void switch_hcm_data_to_basis_hash_table(
     }
 
     for (len_t i = start; i < end; ++i) {
-#if PARALLEL_HASHING
-        hcm[i] = check_insert_in_hash_table(
-                sht->ev[hcm[i]], sht->hd[hcm[i]].val, bht);
-#else
+/* #if PARALLEL_HASHING */
+/*         hcm[i] = check_insert_in_hash_table( */
+/*                 sht->ev[hcm[i]], sht->hd[hcm[i]].val, bht); */
+/* #else */
         hcm[i] = insert_in_hash_table(sht->ev[hcm[i]], bht);
-#endif
+/* #endif */
     }
 }
 
@@ -1150,7 +1150,8 @@ static inline void insert_multiplied_poly_in_hash_table(
 }
 
 static inline void reinsert_in_hash_table(
-    hm_t *row,
+    bs_t *bs,
+    const len_t bi,
     exp_t * const *oev,
     ht_t *ht
     )
@@ -1162,12 +1163,15 @@ static inline void reinsert_in_hash_table(
     hd_t *d;
     val_t h;
 
+    hm_t *row = bs->hm[bi];
+
     const len_t len = row[LENGTH]+OFFSET;
     const len_t evl = ht->evl;
     const hi_t hsz  = ht->hsz;
     /* ht->hsz <= 2^32 => mod is always uint32_t */
     const hi_t mod  = (hi_t)(hsz - 1);
     l = OFFSET;
+
 letsgo:
     for (; l < len; ++l) {
         const exp_t * const n = oev[row[l]];
@@ -1217,6 +1221,8 @@ restart:
         ht->eld++;
         row[l] =  pos;
     }
+
+    bs->hm[bi] = row;
 }
 
 void reset_hash_table_indices(
@@ -1230,6 +1236,78 @@ void reset_hash_table_indices(
     }
 }
 
+static void reset_hash_table_during_update(
+    ht_t *ht,
+    bs_t *bs,
+    ps_t *psl,
+    md_t *st,
+    const len_t bld
+    )
+{
+    printf("-reset-");
+    /* timings */
+    double ct0, ct1, rt0, rt1;
+    ct0 = cputime();
+    rt0 = realtime();
+
+    len_t i;
+    hi_t k;
+    exp_t *e;
+
+    spair_t *ps = psl->p;
+    exp_t **oev  = ht->ev;
+
+    const len_t evl = ht->evl;
+    const hl_t esz  = ht->esz;
+    const len_t pld = psl->ld;
+
+    ht->ev  = calloc(esz, sizeof(exp_t *));
+    if (ht->ev == NULL) {
+        fprintf(stderr, "Computation needs too much memory on this machine,\n");
+        fprintf(stderr, "cannot reset ht->ev, esz = %lu\n", (unsigned long)esz);
+        fprintf(stderr, "segmentation fault will follow.\n");
+    }
+    exp_t *tmp  = (exp_t *)malloc(
+            (unsigned long)evl * esz * sizeof(exp_t));
+    if (tmp == NULL) {
+        fprintf(stderr, "Computation needs too much memory on this machine,\n");
+        fprintf(stderr, "resetting table failed, esz = %lu\n", (unsigned long)esz);
+        fprintf(stderr, "segmentation fault will follow.\n");
+    }
+    for (k = 0; k < esz; ++k) {
+        ht->ev[k]  = tmp + (unsigned long)k*evl;
+    }
+    ht->eld = 1;
+    memset(ht->hmap, 0, ht->hsz * sizeof(hi_t));
+    memset(ht->hd, 0, esz * sizeof(hd_t));
+
+    /* reinsert known elements */
+    for (i = 0; i < bld; ++i) {
+        reinsert_in_hash_table(bs, i, oev, ht);
+    }
+    for (i = 0; i < pld; ++i) {
+        e = oev[ps[i].lcm];
+/* #if PARALLEL_HASHING */
+/*         ps[i].lcm = check_insert_in_hash_table(e, 0, ht); */
+/* #else */
+        ps[i].lcm = insert_in_hash_table(e, ht);
+/* #endif */
+    }
+    psl->p = ps;
+    /* note: all memory is allocated as a big block, so it is
+     *       enough to free oev[0].       */
+    free(oev[0]);
+    free(oev);
+
+    bs->ht = ht;
+
+    /* timings */
+    ct1 = cputime();
+    rt1 = realtime();
+    st->rht_ctime  +=  ct1 - ct0;
+    st->rht_rtime  +=  rt1 - rt0;
+}
+
 static void reset_hash_table(
     ht_t *ht,
     bs_t *bs,
@@ -1237,6 +1315,7 @@ static void reset_hash_table(
     md_t *st
     )
 {
+    printf("-reset-");
     /* timings */
     double ct0, ct1, rt0, rt1;
     ct0 = cputime();
@@ -1268,7 +1347,7 @@ static void reset_hash_table(
         fprintf(stderr, "segmentation fault will follow.\n");
     }
     for (k = 0; k < esz; ++k) {
-        ht->ev[k]  = tmp + k*evl;
+        ht->ev[k]  = tmp + (unsigned long)k*evl;
     }
     ht->eld = 1;
     memset(ht->hmap, 0, ht->hsz * sizeof(hi_t));
@@ -1276,22 +1355,23 @@ static void reset_hash_table(
 
     /* reinsert known elements */
     for (i = 0; i < bld; ++i) {
-      if (bs->red[i] < 2) {
-        reinsert_in_hash_table(bs->hm[i], oev, ht);
-      }
+        reinsert_in_hash_table(bs, i, oev, ht);
     }
     for (i = 0; i < pld; ++i) {
         e = oev[ps[i].lcm];
-#if PARALLEL_HASHING
-        ps[i].lcm = check_insert_in_hash_table(e, 0, ht);
-#else
+/* #if PARALLEL_HASHING */
+/*         ps[i].lcm = check_insert_in_hash_table(e, 0, ht); */
+/* #else */
         ps[i].lcm = insert_in_hash_table(e, ht);
-#endif
+/* #endif */
     }
+    psl->p = ps;
     /* note: all memory is allocated as a big block, so it is
      *       enough to free oev[0].       */
     free(oev[0]);
     free(oev);
+
+    bs->ht = ht;
 
     /* timings */
     ct1 = cputime();
@@ -1301,6 +1381,47 @@ static void reset_hash_table(
 }
 
 /* computes lcm of a and b from ht1 and inserts it in ht2 */
+static inline hi_t get_lcm_with_primality(
+    const hi_t a,
+    const hi_t b,
+    const ht_t *ht1,
+    ht_t *ht2,
+    len_t *isprime
+    )
+{
+    len_t i;
+
+    /* exponents of basis elements, thus from basis hash table */
+    const exp_t * const ea = ht1->ev[a];
+    const exp_t * const eb = ht1->ev[b];
+    exp_t etmp[ht1->evl];
+    const len_t evl = ht1->evl;
+    const len_t ebl = ht1->ebl;
+
+    /* set degree(s), if ebl == 0, i.e. we do not have an elimination block
+     * order then the second for loop is just not executed and the third one
+     * computes correctly the full degree of the lcm. */
+    for (i = 1; i < evl; ++i) {
+        etmp[i]  = ea[i] < eb[i] ? eb[i] : ea[i];
+    }
+    /* reset degree entries */
+    etmp[0]   = 0;
+    etmp[ebl] = 0;
+    for (i = 1; i < ebl; ++i) {
+        etmp[0]  += etmp[i];
+    }
+    for (i = ebl+1; i < evl; ++i) {
+        etmp[ebl] += etmp[i];
+    }
+    *isprime = (etmp[0] < ea[0]+eb[0]) ? 0 : 1;
+    /* printf("lcm -> ");
+     * for (int ii = 0; ii < evl; ++ii) {
+     *     printf("%d ", etmp[ii]);
+     * }
+     * printf("\n"); */
+    len_t pos = insert_in_hash_table(etmp, ht2);
+    return pos;
+}
 static inline hi_t get_lcm(
     const hi_t a,
     const hi_t b,
@@ -1337,11 +1458,8 @@ static inline hi_t get_lcm(
      *     printf("%d ", etmp[ii]);
      * }
      * printf("\n"); */
-#if PARALLEL_HASHING
-    return check_insert_in_hash_table(etmp, 0, ht2);
-#else
-    return insert_in_hash_table(etmp, ht2);
-#endif
+    len_t pos = insert_in_hash_table(etmp, ht2);
+    return pos;
 }
 
 static inline hm_t *poly_to_matrix_row(

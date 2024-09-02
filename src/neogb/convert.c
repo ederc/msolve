@@ -655,7 +655,7 @@ static void convert_sparse_matrix_rows_to_basis_elements(
     deg_t pairs_deg = sht->hd[hcm[0]].deg;
     switch_hcm_data_to_basis_hash_table(hcm, bht, mat, sht);
 #pragma omp parallel for num_threads(st->nthrds) \
-    private(i, j, k)
+    private(i, j, k) schedule(static, 20)
     for (k = 0; k < np; ++k) {
         /* We first insert the highest leading monomial element to the basis
          * for a better Gebauer-Moeller application when updating the pair

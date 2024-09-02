@@ -540,6 +540,25 @@ static int hcm_cmp_pivots_drl(
     return monomial_cmp_pivots_drl(ma, mb, ht);
 }
 
+static int spair_cmp_update_neg(
+        const void *a,
+        const void *b,
+        void *htp)
+{
+    const spair_t *sa   =   ((spair_t *)a);
+    const spair_t *sb   =   ((spair_t *)b);
+    const ht_t *ht      =   (ht_t *)htp;
+    /* if (sa->lcm != sb->lcm) { */
+        return (int)monomial_cmp(sa->lcm, sb->lcm, ht);
+    /* } else { */
+    /*     if (sa->gen1 != sb->gen1) { */
+    /*         return (sa->gen1 < sb->gen1) ? -1 : 1; */
+    /*     } else { */
+    /*         return (sa->gen2 < sb->gen2) ? -1 : 1; */
+    /*     } */
+    /* } */
+}
+
 static int spair_cmp_update(
         const void *a,
         const void *b,
@@ -548,19 +567,18 @@ static int spair_cmp_update(
     const spair_t *sa   =   ((spair_t *)a);
     const spair_t *sb   =   ((spair_t *)b);
     const ht_t *ht      =   (ht_t *)htp;
-    if (sa->lcm != sb->lcm) {
-        return (int)monomial_cmp(sa->lcm, sb->lcm, ht);
-    } else {
-        if (sa->deg != sb->deg) {
-            return (sa->deg < sb->deg) ? -1 : 1;
-        } else {
-            if (sa->gen1 != sb->gen1) {
-                return (sa->gen1 < sb->gen1) ? -1 : 1;
-            } else {
-                return 0;
-            }
-        }
+    if (sa->deg != sb->deg) {
+        return (sa->deg < sb->deg) ? -1 : 1;
     }
+    /* if (sa->lcm != sb->lcm) { */
+        return (int)monomial_cmp(sa->lcm, sb->lcm, ht);
+    /* } else { */
+    /*     if (sa->gen1 != sb->gen1) { */
+    /*         return (sa->gen1 < sb->gen1) ? -1 : 1; */
+    /*     } else { */
+    /*         return (sa->gen2 < sb->gen2) ? -1 : 1; */
+    /*     } */
+    /* } */
 }
 
 static int spair_cmp_drl(
