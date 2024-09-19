@@ -1983,8 +1983,8 @@ int msolve_trace_qq(mpz_param_t *mpz_paramp,
   calculate_divmask(bs_qq->ht);
 
   /* sort initial elements, smallest lead term first */
-  sort_r(bs_qq->hm, (unsigned long)bs_qq->ld, sizeof(hm_t *), initial_input_cmp,
-         bs_qq->ht);
+  /* sort_r(bs_qq->hm, (unsigned long)bs_qq->ld, sizeof(hm_t *), initial_input_cmp, */
+  /*        bs_qq->ht); */
   if (gens->field_char == 0) {
     remove_content_of_initial_basis(bs_qq);
     /* generate lucky prime numbers */

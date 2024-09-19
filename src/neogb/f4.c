@@ -400,7 +400,9 @@ static int32_t initialize_f4(
        always check redundancy since input generators may be redundant
        even so they are homogeneous. */
     if (md->trace_level != APPLY_TRACER) {
-        md->np = md->ngens;
+        md->np = 1;
+        bs->ld = md->ngens - 1;
+        /* md->np = md->ngens; */
         done   = update(bs, md);
     }
 
