@@ -49,13 +49,14 @@ static inline omp_int_t omp_get_max_threads(void) { return 1;}
 #define UNROLL  4
 /* we store some more information in the row arrays,
  * real data starts at index OFFSET */
-#define OFFSET  6           /* real data starts at OFFSET */
-#define LENGTH  (OFFSET-1)  /* length of the row */
-#define PRELOOP (OFFSET-2)  /* length of not unrolled loop part */
-#define COEFFS  (OFFSET-3)  /* index of corresponding coefficient vector */
-#define MULT    (OFFSET-4)  /* hash of multiplier (for tracing and saturation) */
-#define BINDEX  (OFFSET-5)  /* basis index of element (for tracing) */
-#define DEG     (OFFSET-6)  /* the first entry in each exponent vector
+#define OFFSET  7           /* real data starts at OFFSET */
+#define DENSE   (OFFSET-1)  /* length of the row */
+#define LENGTH  (OFFSET-2)  /* length of the row */
+#define PRELOOP (OFFSET-3)  /* length of not unrolled loop part */
+#define COEFFS  (OFFSET-4)  /* index of corresponding coefficient vector */
+#define MULT    (OFFSET-5)  /* hash of multiplier (for tracing and saturation) */
+#define BINDEX  (OFFSET-6)  /* basis index of element (for tracing) */
+#define DEG     (OFFSET-7)  /* the first entry in each exponent vector
                              * stores the total degree of the polynomial */
 
 /* there is a different prelude with meta data for signature based matrices */

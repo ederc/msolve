@@ -1219,16 +1219,31 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_31_bit(
         return NULL;
     }
 
-    hm_t *row   = (hm_t *)malloc((uint64_t)(k+OFFSET) * sizeof(hm_t));
-    cf32_t *cf  = (cf32_t *)malloc((uint64_t)(k) * sizeof(cf32_t));
-    j = 0;
-    hm_t *rs  = row + OFFSET;
-    for (i = ncl; i < ncols; ++i) {
-        if (dr[i] != 0) {
-            rs[j] = (hm_t)i;
+    hm_t * row = NULL;
+    cf32_t *cf = NULL;
+    if ((double)k/(double)(mat->nc-np+1) > 1.0) {
+        row   = (hm_t *)malloc((uint64_t)OFFSET * sizeof(hm_t));
+        cf  = (cf32_t *)malloc((uint64_t)(ncols-np+1) * sizeof(cf32_t));
+        j = 0;
+        hm_t *rs  = row + OFFSET;
+        for (i = np; i < ncols; ++i) {
             cf[j] = (cf32_t)dr[i];
             j++;
         }
+        row[DENSE]    = 1;
+    } else {
+        row   = (hm_t *)malloc((uint64_t)(k+OFFSET) * sizeof(hm_t));
+        cf  = (cf32_t *)malloc((uint64_t)(k) * sizeof(cf32_t));
+        j = 0;
+        hm_t *rs  = row + OFFSET;
+        for (i = np; i < ncols; ++i) {
+            if (dr[i] != 0) {
+                rs[j] = (hm_t)i;
+                cf[j] = (cf32_t)dr[i];
+                j++;
+            }
+        }
+        row[DENSE]    = 0;
     }
     row[BINDEX]   = bi;
     row[MULT]     = mh;
