@@ -1140,54 +1140,87 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_31_bit(
 #elif defined __aarch64__
         const len_t len       = dts[LENGTH];
         const len_t os        = len % 8;
-        const hm_t * const ds = dts + OFFSET;
         const int32_t mul32   = (int32_t)(dr[i]);
         const int32x2_t mulv  = vmov_n_s32(mul32);
-        for (j = 0; j < os; ++j) {
-            dr[ds[j]] -=  mul * cfs[j];
-            dr[ds[j]] +=  (dr[ds[j]] >> 63) & mod2;
-        }
-        for (; j < len; j += 8) {
-            tmp[0] = dr[ds[j]];
-            tmp[1] = dr[ds[j+1]];
-            drv  = vld1q_s64(tmp);
-            redv = vld1q_s32((int32_t *)(cfs)+j);
-            /* multiply and subtract */
-            resv = vmlsl_s32(drv, vget_low_s32(redv), mulv);
-            mask = vreinterpretq_s64_u64(vcltzq_s64(resv));
-            resv = vaddq_s64(resv, vandq_s64(mask, mod2v));
-            vst1q_s64(tmp, resv);
-            dr[ds[j]]   = tmp[0];
-            dr[ds[j+1]] = tmp[1];
-            tmp[0] = dr[ds[j+2]];
-            tmp[1] = dr[ds[j+3]];
-            drv  = vld1q_s64(tmp);
-            resv = vmlsl_s32(drv, vget_high_s32(redv), mulv);
-            mask = vreinterpretq_s64_u64(vcltzq_s64(resv));
-            resv = vaddq_s64(resv, vandq_s64(mask, mod2v));
-            vst1q_s64(tmp, resv);
-            dr[ds[j+2]] = tmp[0];
-            dr[ds[j+3]] = tmp[1];
-            tmp[0] = dr[ds[j+4]];
-            tmp[1] = dr[ds[j+5]];
-            drv  = vld1q_s64(tmp);
-            redv = vld1q_s32((int32_t *)(cfs)+j+4);
-            /* multiply and subtract */
-            resv = vmlsl_s32(drv, vget_low_s32(redv), mulv);
-            mask = vreinterpretq_s64_u64(vcltzq_s64(resv));
-            resv = vaddq_s64(resv, vandq_s64(mask, mod2v));
-            vst1q_s64(tmp, resv);
-            dr[ds[j+4]] = tmp[0];
-            dr[ds[j+5]] = tmp[1];
-            tmp[0] = dr[ds[j+6]];
-            tmp[1] = dr[ds[j+7]];
-            drv  = vld1q_s64(tmp);
-            resv = vmlsl_s32(drv, vget_high_s32(redv), mulv);
-            mask = vreinterpretq_s64_u64(vcltzq_s64(resv));
-            resv = vaddq_s64(resv, vandq_s64(mask, mod2v));
-            vst1q_s64(tmp, resv);
-            dr[ds[j+6]] = tmp[0];
-            dr[ds[j+7]] = tmp[1];
+        if (dts[DENSE] == 0) {
+            const hm_t * const ds  = dts + OFFSET;
+            for (j = 0; j < os; ++j) {
+                dr[ds[j]] -=  mul * cfs[j];
+                dr[ds[j]] +=  (dr[ds[j]] >> 63) & mod2;
+            }
+            for (; j < len; j += 8) {
+                tmp[0] = dr[ds[j]];
+                tmp[1] = dr[ds[j+1]];
+                drv  = vld1q_s64(tmp);
+                redv = vld1q_s32((int32_t *)(cfs)+j);
+                /* multiply and subtract */
+                resv = vmlsl_s32(drv, vget_low_s32(redv), mulv);
+                mask = vreinterpretq_s64_u64(vcltzq_s64(resv));
+                resv = vaddq_s64(resv, vandq_s64(mask, mod2v));
+                vst1q_s64(tmp, resv);
+                dr[ds[j]]   = tmp[0];
+                dr[ds[j+1]] = tmp[1];
+                tmp[0] = dr[ds[j+2]];
+                tmp[1] = dr[ds[j+3]];
+                drv  = vld1q_s64(tmp);
+                resv = vmlsl_s32(drv, vget_high_s32(redv), mulv);
+                mask = vreinterpretq_s64_u64(vcltzq_s64(resv));
+                resv = vaddq_s64(resv, vandq_s64(mask, mod2v));
+                vst1q_s64(tmp, resv);
+                dr[ds[j+2]] = tmp[0];
+                dr[ds[j+3]] = tmp[1];
+                tmp[0] = dr[ds[j+4]];
+                tmp[1] = dr[ds[j+5]];
+                drv  = vld1q_s64(tmp);
+                redv = vld1q_s32((int32_t *)(cfs)+j+4);
+                /* multiply and subtract */
+                resv = vmlsl_s32(drv, vget_low_s32(redv), mulv);
+                mask = vreinterpretq_s64_u64(vcltzq_s64(resv));
+                resv = vaddq_s64(resv, vandq_s64(mask, mod2v));
+                vst1q_s64(tmp, resv);
+                dr[ds[j+4]] = tmp[0];
+                dr[ds[j+5]] = tmp[1];
+                tmp[0] = dr[ds[j+6]];
+                tmp[1] = dr[ds[j+7]];
+                drv  = vld1q_s64(tmp);
+                resv = vmlsl_s32(drv, vget_high_s32(redv), mulv);
+                mask = vreinterpretq_s64_u64(vcltzq_s64(resv));
+                resv = vaddq_s64(resv, vandq_s64(mask, mod2v));
+                vst1q_s64(tmp, resv);
+                dr[ds[j+6]] = tmp[0];
+                dr[ds[j+7]] = tmp[1];
+            }
+        } else {
+            for (j = 0; j < os; ++j) {
+                dr[j] -=  mul * cfs[j];
+                dr[j] +=  (dr[j] >> 63) & mod2;
+            }
+            for (; j < len; j += 8) {
+                drv  = vld1q_s64(dr+j);
+                redv = vld1q_s32((int32_t *)(cfs)+j);
+                /* multiply and subtract */
+                resv = vmlsl_s32(drv, vget_low_s32(redv), mulv);
+                mask = vreinterpretq_s64_u64(vcltzq_s64(resv));
+                resv = vaddq_s64(resv, vandq_s64(mask, mod2v));
+                vst1q_s64(dr+j, resv);
+                drv  = vld1q_s64(dr+j+2);
+                resv = vmlsl_s32(drv, vget_high_s32(redv), mulv);
+                mask = vreinterpretq_s64_u64(vcltzq_s64(resv));
+                resv = vaddq_s64(resv, vandq_s64(mask, mod2v));
+                vst1q_s64(dr+j+2, resv);
+                drv  = vld1q_s64(dr+j+4);
+                redv = vld1q_s32((int32_t *)(cfs)+j+4);
+                /* multiply and subtract */
+                resv = vmlsl_s32(drv, vget_low_s32(redv), mulv);
+                mask = vreinterpretq_s64_u64(vcltzq_s64(resv));
+                resv = vaddq_s64(resv, vandq_s64(mask, mod2v));
+                vst1q_s64(dr+j+4, resv);
+                drv  = vld1q_s64(dr+j+6);
+                resv = vmlsl_s32(drv, vget_high_s32(redv), mulv);
+                mask = vreinterpretq_s64_u64(vcltzq_s64(resv));
+                resv = vaddq_s64(resv, vandq_s64(mask, mod2v));
+                vst1q_s64(dr+j+6, resv);
+            }
         }
 
 #else

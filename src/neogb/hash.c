@@ -1376,6 +1376,7 @@ static inline hm_t *multiplied_poly_to_matrix_row(
   row[COEFFS]   = poly[COEFFS];
   row[PRELOOP]  = poly[PRELOOP];
   row[LENGTH]   = poly[LENGTH];
+  row[DENSE]    = 0;
   /* hash table product insertions appear only here:
    * we check for hash table enlargements first and then do the insertions
    * without further elargment checks there */

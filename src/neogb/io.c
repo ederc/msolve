@@ -302,6 +302,7 @@ void import_input_data(
             hm[COEFFS]  = ctr; /* link to matcf entry */
             hm[PRELOOP] = (lens[i] % UNROLL); /* offset */
             hm[LENGTH]  = lens[i]; /* length */
+            hm[DENSE]   = 0;
 
             bs->red[ctr] = 0;
 
