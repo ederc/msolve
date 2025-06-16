@@ -1038,104 +1038,201 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_31_bit(
 #if defined HAVE_AVX512_F
         const len_t len = dts[LENGTH];
         const len_t os  = len % 16;
-        const hm_t * const ds  = dts + OFFSET;
         const uint32_t mul32 = (int32_t)(dr[i]);
         mulv  = _mm512_set1_epi32(mul32);
-        for (j = 0; j < os; ++j) {
-            dr[ds[j]] -= mul * cfs[j];
-            dr[ds[j]] += (dr[ds[j]] >> 63) & mod2;
-        }
-        for (; j < len; j += 16) {
-            redv  = _mm512_loadu_si512((__m512i*)(cfs+j));
-            drv   = _mm512_setr_epi64(
-                dr[ds[j+1]],
-                dr[ds[j+3]],
-                dr[ds[j+5]],
-                dr[ds[j+7]],
-                dr[ds[j+9]],
-                dr[ds[j+11]],
-                dr[ds[j+13]],
-                dr[ds[j+15]]);
-            /* first four mult-adds -- lower */
-            prodv = _mm512_mul_epu32(mulv, _mm512_srli_epi64(redv, 32));
-            resv  = _mm512_sub_epi64(drv, prodv);
-            cmpv  = _mm512_cmpgt_epi64_mask(zerov, resv);
-            rresv = _mm512_mask_add_epi64(resv, cmpv, resv, mod2v);
-            _mm512_store_si512((__m512*)(res), rresv);
-            dr[ds[j+1]]  = res[0];
-            dr[ds[j+3]]  = res[1];
-            dr[ds[j+5]]  = res[2];
-            dr[ds[j+7]]  = res[3];
-            dr[ds[j+9]]  = res[4];
-            dr[ds[j+11]] = res[5];
-            dr[ds[j+13]] = res[6];
-            dr[ds[j+15]] = res[7];
-            /* second four mult-adds -- higher */
-            prodv = _mm512_mul_epu32(mulv, redv);
-            drv   = _mm512_setr_epi64(
-                dr[ds[j]],
-                dr[ds[j+2]],
-                dr[ds[j+4]],
-                dr[ds[j+6]],
-                dr[ds[j+8]],
-                dr[ds[j+10]],
-                dr[ds[j+12]],
-                dr[ds[j+14]]);
-            resv  = _mm512_sub_epi64(drv, prodv);
-            cmpv  = _mm512_cmpgt_epi64_mask(zerov, resv);
-            rresv = _mm512_mask_add_epi64(resv, cmpv, resv, mod2v);
-            _mm512_store_si512((__m512i*)(res), rresv);
-            dr[ds[j]]    = res[0];
-            dr[ds[j+2]]  = res[1];
-            dr[ds[j+4]]  = res[2];
-            dr[ds[j+6]]  = res[3];
-            dr[ds[j+8]]  = res[4];
-            dr[ds[j+10]] = res[5];
-            dr[ds[j+12]] = res[6];
-            dr[ds[j+14]] = res[7];
+        if (dts[DENSE] == 0) {
+            const hm_t * const ds  = dts + OFFSET;
+            for (j = 0; j < os; ++j) {
+                dr[ds[j]] -= mul * cfs[j];
+                dr[ds[j]] += (dr[ds[j]] >> 63) & mod2;
+            }
+            for (; j < len; j += 16) {
+                redv  = _mm512_loadu_si512((__m512i*)(cfs+j));
+                drv   = _mm512_setr_epi64(
+                        dr[ds[j+1]],
+                        dr[ds[j+3]],
+                        dr[ds[j+5]],
+                        dr[ds[j+7]],
+                        dr[ds[j+9]],
+                        dr[ds[j+11]],
+                        dr[ds[j+13]],
+                        dr[ds[j+15]]);
+                /* first four mult-adds -- lower */
+                prodv = _mm512_mul_epu32(mulv, _mm512_srli_epi64(redv, 32));
+                resv  = _mm512_sub_epi64(drv, prodv);
+                cmpv  = _mm512_cmpgt_epi64_mask(zerov, resv);
+                rresv = _mm512_mask_add_epi64(resv, cmpv, resv, mod2v);
+                _mm512_store_si512((__m512*)(res), rresv);
+                dr[ds[j+1]]  = res[0];
+                dr[ds[j+3]]  = res[1];
+                dr[ds[j+5]]  = res[2];
+                dr[ds[j+7]]  = res[3];
+                dr[ds[j+9]]  = res[4];
+                dr[ds[j+11]] = res[5];
+                dr[ds[j+13]] = res[6];
+                dr[ds[j+15]] = res[7];
+                /* second four mult-adds -- higher */
+                prodv = _mm512_mul_epu32(mulv, redv);
+                drv   = _mm512_setr_epi64(
+                        dr[ds[j]],
+                        dr[ds[j+2]],
+                        dr[ds[j+4]],
+                        dr[ds[j+6]],
+                        dr[ds[j+8]],
+                        dr[ds[j+10]],
+                        dr[ds[j+12]],
+                        dr[ds[j+14]]);
+                resv  = _mm512_sub_epi64(drv, prodv);
+                cmpv  = _mm512_cmpgt_epi64_mask(zerov, resv);
+                rresv = _mm512_mask_add_epi64(resv, cmpv, resv, mod2v);
+                _mm512_store_si512((__m512i*)(res), rresv);
+                dr[ds[j]]    = res[0];
+                dr[ds[j+2]]  = res[1];
+                dr[ds[j+4]]  = res[2];
+                dr[ds[j+6]]  = res[3];
+                dr[ds[j+8]]  = res[4];
+                dr[ds[j+10]] = res[5];
+                dr[ds[j+12]] = res[6];
+                dr[ds[j+14]] = res[7];
+            }
+        } else {
+            int64_t *drs = dr + dts[OFFSET];
+            for (j = 0; j < os; ++j) {
+                drs[j] -= mul * cfs[j];
+                drs[j] += (drs[j] >> 63) & mod2;
+            }
+            for (; j < len; j += 16) {
+                redv  = _mm512_loadu_si512((__m512i*)(cfs+j));
+                drv   = _mm512_setr_epi64(
+                        drs[j+1],
+                        drs[j+3],
+                        drs[j+5],
+                        drs[j+7],
+                        drs[j+9],
+                        drs[j+11],
+                        drs[j+13],
+                        drs[j+15]);
+                /* first four mult-adds -- lower */
+                prodv = _mm512_mul_epu32(mulv, _mm512_srli_epi64(redv, 32));
+                resv  = _mm512_sub_epi64(drv, prodv);
+                cmpv  = _mm512_cmpgt_epi64_mask(zerov, resv);
+                rresv = _mm512_mask_add_epi64(resv, cmpv, resv, mod2v);
+                _mm512_store_si512((__m512*)(res), rresv);
+                drs[j+1]  = res[0];
+                drs[j+3]  = res[1];
+                drs[j+5]  = res[2];
+                drs[j+7]  = res[3];
+                drs[j+9]  = res[4];
+                drs[j+11] = res[5];
+                drs[j+13] = res[6];
+                drs[j+15] = res[7];
+                /* second four mult-adds -- higher */
+                prodv = _mm512_mul_epu32(mulv, redv);
+                drv   = _mm512_setr_epi64(
+                        drs[j],
+                        drs[j+2],
+                        drs[j+4],
+                        drs[j+6],
+                        drs[j+8],
+                        drs[j+10],
+                        drs[j+12],
+                        drs[j+14]);
+                resv  = _mm512_sub_epi64(drv, prodv);
+                cmpv  = _mm512_cmpgt_epi64_mask(zerov, resv);
+                rresv = _mm512_mask_add_epi64(resv, cmpv, resv, mod2v);
+                _mm512_store_si512((__m512i*)(res), rresv);
+                drs[j]    = res[0];
+                drs[j+2]  = res[1];
+                drs[j+4]  = res[2];
+                drs[j+6]  = res[3];
+                drs[j+8]  = res[4];
+                drs[j+10] = res[5];
+                drs[j+12] = res[6];
+                drs[j+14] = res[7];
         }
 #elif defined HAVE_AVX2
         const len_t len = dts[LENGTH];
         const len_t os  = len % 8;
-        const hm_t * const ds  = dts + OFFSET;
         const uint32_t mul32 = (uint32_t)(dr[i]);
         mulv  = _mm256_set1_epi32(mul32);
-        for (j = 0; j < os; ++j) {
-            dr[ds[j]] -=  mul * cfs[j];
-            dr[ds[j]] +=  (dr[ds[j]] >> 63) & mod2;
-        }
-        for (; j < len; j += 8) {
-            redv  = _mm256_loadu_si256((__m256i*)(cfs+j));
-            drv   = _mm256_setr_epi64x(
-                dr[ds[j+1]],
-                dr[ds[j+3]],
-                dr[ds[j+5]],
-                dr[ds[j+7]]);
-            /* first four mult-adds -- lower */
-            prodv = _mm256_mul_epu32(mulv, _mm256_srli_epi64(redv, 32));
-            resv  = _mm256_sub_epi64(drv, prodv);
-            cmpv  = _mm256_cmpgt_epi64(zerov, resv);
-            rresv = _mm256_add_epi64(resv, _mm256_and_si256(cmpv, mod2v));
-            _mm256_store_si256((__m256i*)(res), rresv);
-            dr[ds[j+1]] = res[0];
-            dr[ds[j+3]] = res[1];
-            dr[ds[j+5]] = res[2];
-            dr[ds[j+7]] = res[3];
-            /* second four mult-adds -- higher */
-            prodv = _mm256_mul_epu32(mulv, redv);
-            drv   = _mm256_setr_epi64x(
-                dr[ds[j]],
-                dr[ds[j+2]],
-                dr[ds[j+4]],
-                dr[ds[j+6]]);
-            resv  = _mm256_sub_epi64(drv, prodv);
-            cmpv  = _mm256_cmpgt_epi64(zerov, resv);
-            rresv = _mm256_add_epi64(resv, _mm256_and_si256(cmpv, mod2v));
-            _mm256_store_si256((__m256i*)(res), rresv);
-            dr[ds[j]]   = res[0];
-            dr[ds[j+2]] = res[1];
-            dr[ds[j+4]] = res[2];
-            dr[ds[j+6]] = res[3];
+        if dts[DENSE] == 0) {
+            const hm_t * const ds  = dts + OFFSET;
+            for (j = 0; j < os; ++j) {
+                dr[ds[j]] -=  mul * cfs[j];
+                dr[ds[j]] +=  (dr[ds[j]] >> 63) & mod2;
+            }
+            for (; j < len; j += 8) {
+                redv  = _mm256_loadu_si256((__m256i*)(cfs+j));
+                drv   = _mm256_setr_epi64x(
+                        dr[ds[j+1]],
+                        dr[ds[j+3]],
+                        dr[ds[j+5]],
+                        dr[ds[j+7]]);
+                /* first four mult-adds -- lower */
+                prodv = _mm256_mul_epu32(mulv, _mm256_srli_epi64(redv, 32));
+                resv  = _mm256_sub_epi64(drv, prodv);
+                cmpv  = _mm256_cmpgt_epi64(zerov, resv);
+                rresv = _mm256_add_epi64(resv, _mm256_and_si256(cmpv, mod2v));
+                _mm256_store_si256((__m256i*)(res), rresv);
+                dr[ds[j+1]] = res[0];
+                dr[ds[j+3]] = res[1];
+                dr[ds[j+5]] = res[2];
+                dr[ds[j+7]] = res[3];
+                /* second four mult-adds -- higher */
+                prodv = _mm256_mul_epu32(mulv, redv);
+                drv   = _mm256_setr_epi64x(
+                        dr[ds[j]],
+                        dr[ds[j+2]],
+                        dr[ds[j+4]],
+                        dr[ds[j+6]]);
+                resv  = _mm256_sub_epi64(drv, prodv);
+                cmpv  = _mm256_cmpgt_epi64(zerov, resv);
+                rresv = _mm256_add_epi64(resv, _mm256_and_si256(cmpv, mod2v));
+                _mm256_store_si256((__m256i*)(res), rresv);
+                dr[ds[j]]   = res[0];
+                dr[ds[j+2]] = res[1];
+                dr[ds[j+4]] = res[2];
+                dr[ds[j+6]] = res[3];
+            }
+        } else {
+            int64_t *drs = dr + dts[OFFSET];
+            for (j = 0; j < os; ++j) {
+                drs[j] -=  mul * cfs[j];
+                drs[j] +=  (drs[j] >> 63) & mod2;
+            }
+            for (; j < len; j += 8) {
+                redv  = _mm256_loadu_si256((__m256i*)(cfs+j));
+                drv   = _mm256_setr_epi64x(
+                        drs[j+1],
+                        drs[j+3],
+                        drs[j+5],
+                        drs[j+7]);
+                /* first four mult-adds -- lower */
+                prodv = _mm256_mul_epu32(mulv, _mm256_srli_epi64(redv, 32));
+                resv  = _mm256_sub_epi64(drv, prodv);
+                cmpv  = _mm256_cmpgt_epi64(zerov, resv);
+                rresv = _mm256_add_epi64(resv, _mm256_and_si256(cmpv, mod2v));
+                _mm256_store_si256((__m256i*)(res), rresv);
+                drs[j+1] = res[0];
+                drs[j+3] = res[1];
+                drs[j+5] = res[2];
+                drs[j+7] = res[3];
+                /* second four mult-adds -- higher */
+                prodv = _mm256_mul_epu32(mulv, redv);
+                drv   = _mm256_setr_epi64x(
+                        drs[j],
+                        drs[j+2],
+                        drs[j+4],
+                        drs[j+6]);
+                resv  = _mm256_sub_epi64(drv, prodv);
+                cmpv  = _mm256_cmpgt_epi64(zerov, resv);
+                rresv = _mm256_add_epi64(resv, _mm256_and_si256(cmpv, mod2v));
+                _mm256_store_si256((__m256i*)(res), rresv);
+                drs[j]   = res[0];
+                drs[j+2] = res[1];
+                drs[j+4] = res[2];
+                drs[j+6] = res[3];
+            }
         }
 #elif defined __aarch64__
         const len_t len       = dts[LENGTH];
@@ -1227,20 +1324,38 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_31_bit(
 #else
         const len_t os  = dts[PRELOOP];
         const len_t len = dts[LENGTH];
-        const hm_t * const ds = dts + OFFSET;
-        for (j = 0; j < os; ++j) {
-            dr[ds[j]]   -=  mul * cfs[j];
-            dr[ds[j]]   +=  (dr[ds[j]] >> 63) & mod2;
-        }
-        for (; j < len; j += UNROLL) {
-            dr[ds[j]]   -=  mul * cfs[j];
-            dr[ds[j+1]] -=  mul * cfs[j+1];
-            dr[ds[j+2]] -=  mul * cfs[j+2];
-            dr[ds[j+3]] -=  mul * cfs[j+3];
-            dr[ds[j]]   +=  (dr[ds[j]] >> 63) & mod2;
-            dr[ds[j+1]] +=  (dr[ds[j+1]] >> 63) & mod2;
-            dr[ds[j+2]] +=  (dr[ds[j+2]] >> 63) & mod2;
-            dr[ds[j+3]] +=  (dr[ds[j+3]] >> 63) & mod2;
+        if (dts[DENSE] == 0) {
+            const hm_t * const ds = dts + OFFSET;
+            for (j = 0; j < os; ++j) {
+                dr[ds[j]]   -=  mul * cfs[j];
+                dr[ds[j]]   +=  (dr[ds[j]] >> 63) & mod2;
+            }
+            for (; j < len; j += UNROLL) {
+                dr[ds[j]]   -=  mul * cfs[j];
+                dr[ds[j+1]] -=  mul * cfs[j+1];
+                dr[ds[j+2]] -=  mul * cfs[j+2];
+                dr[ds[j+3]] -=  mul * cfs[j+3];
+                dr[ds[j]]   +=  (dr[ds[j]] >> 63) & mod2;
+                dr[ds[j+1]] +=  (dr[ds[j+1]] >> 63) & mod2;
+                dr[ds[j+2]] +=  (dr[ds[j+2]] >> 63) & mod2;
+                dr[ds[j+3]] +=  (dr[ds[j+3]] >> 63) & mod2;
+            }
+        } else {
+            int64_t *drs = dr + dts[OFFSET];
+            for (j = 0; j < os; ++j) {
+                drs[j]   -=  mul * cfs[j];
+                drs[j]   +=  (drs[j] >> 63) & mod2;
+            }
+            for (; j < len; j += UNROLL) {
+                drs[j]   -=  mul * cfs[j];
+                drs[j+1] -=  mul * cfs[j+1];
+                drs[j+2] -=  mul * cfs[j+2];
+                drs[j+3] -=  mul * cfs[j+3];
+                drs[j]   +=  (drs[j] >> 63) & mod2;
+                drs[j+1] +=  (drs[j+1] >> 63) & mod2;
+                drs[j+2] +=  (drs[j+2] >> 63) & mod2;
+                drs[j+3] +=  (drs[j+3] >> 63) & mod2;
+            }
         }
 #endif
         dr[i] = 0;
