@@ -2517,14 +2517,20 @@ static void probabilistic_sparse_reduced_echelon_form_ff_32(
             const len_t len = pivs[k][LENGTH];
             const hm_t * const ds = pivs[k] + OFFSET;
             sc  = ds[0];
-            for (j = 0; j < os; ++j) {
-                dr[ds[j]] = (int64_t)cfs[j];
-            }
-            for (; j < len; j += UNROLL) {
-                dr[ds[j]]   = (int64_t)cfs[j];
-                dr[ds[j+1]] = (int64_t)cfs[j+1];
-                dr[ds[j+2]] = (int64_t)cfs[j+2];
-                dr[ds[j+3]] = (int64_t)cfs[j+3];
+            if (pivs[k][DENSE] == 0) {
+                for (j = 0; j < os; ++j) {
+                    dr[ds[j]] = (int64_t)cfs[j];
+                }
+                for (; j < len; j += UNROLL) {
+                    dr[ds[j]]    = (int64_t)cfs[j];
+                    dr[ds[j+1]]  = (int64_t)cfs[j+1];
+                    dr[ds[j+2]]  = (int64_t)cfs[j+2];
+                    dr[ds[j+3]]  = (int64_t)cfs[j+3];
+                }
+            } else {
+                for (j = 0; j < len; ++j) {
+                    dr[j+sc] = (int64_t)cfs[j];
+                }
             }
             free(pivs[k]);
             free(cfs);
