@@ -669,9 +669,31 @@ static void convert_sparse_matrix_rows_to_basis_elements(
         } else {
             i = k;
         }
-        const len_t len = rows[i][LENGTH]+OFFSET;
-        for (j = OFFSET; j < len; ++j) {
-            rows[i][j] = hcm[rows[i][j]];
+        if (rows[i][DENSE] == 0) {
+            const len_t len = rows[i][LENGTH]+OFFSET;
+            for (j = OFFSET; j < len; ++j) {
+                rows[i][j] = hcm[rows[i][j]];
+            }
+        } else {
+            rows[i] = realloc(rows[i], ((uint64_t)(rows[i][LENGTH])+OFFSET) * sizeof(hm_t));
+            cf32_t *cf = (cf32_t *)malloc((uint64_t)(rows[i][LENGTH]) * sizeof(cf32_t));
+            len_t col = rows[i][OFFSET];
+            len_t ctr = 0;
+            for (len_t m = 0; m < rows[i][LENGTH]; ++m) {
+                if (mat->cf_32[rows[i][COEFFS]][m] != 0) {
+                    cf[ctr] = mat->cf_32[rows[i][COEFFS]][m];
+                    rows[i][ctr+OFFSET] = hcm[m+col];
+                    ctr++;
+                }
+            }
+            /* adjust lengths */
+            cf = realloc(cf, (uint64_t)ctr * sizeof(cf32_t));
+            rows[i] = realloc(rows[i], ((uint64_t)ctr + OFFSET) * sizeof(hm_t));
+            rows[i][LENGTH]  = ctr;
+            rows[i][PRELOOP] = ctr % UNROLL;
+            free(mat->cf_32[rows[i][COEFFS]]);
+            mat->cf_32[rows[i][COEFFS]] = NULL;
+            mat->cf_32[rows[i][COEFFS]] = cf;
         }
         deg = bht->hd[rows[i][OFFSET]].deg;
         if (st->nev > 0) {
