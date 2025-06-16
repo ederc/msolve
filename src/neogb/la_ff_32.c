@@ -1191,35 +1191,36 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_31_bit(
                 dr[ds[j+7]] = tmp[1];
             }
         } else {
+            int64_t *drs = dr + dts[OFFSET];
             for (j = 0; j < os; ++j) {
-                dr[j] -=  mul * cfs[j];
-                dr[j] +=  (dr[j] >> 63) & mod2;
+                drs[j] -=  mul * cfs[j];
+                drs[j] +=  (drs[j] >> 63) & mod2;
             }
             for (; j < len; j += 8) {
-                drv  = vld1q_s64(dr+j);
+                drv  = vld1q_s64(drs+j);
                 redv = vld1q_s32((int32_t *)(cfs)+j);
                 /* multiply and subtract */
                 resv = vmlsl_s32(drv, vget_low_s32(redv), mulv);
                 mask = vreinterpretq_s64_u64(vcltzq_s64(resv));
                 resv = vaddq_s64(resv, vandq_s64(mask, mod2v));
-                vst1q_s64(dr+j, resv);
-                drv  = vld1q_s64(dr+j+2);
+                vst1q_s64(drs+j, resv);
+                drv  = vld1q_s64(drs+j+2);
                 resv = vmlsl_s32(drv, vget_high_s32(redv), mulv);
                 mask = vreinterpretq_s64_u64(vcltzq_s64(resv));
                 resv = vaddq_s64(resv, vandq_s64(mask, mod2v));
-                vst1q_s64(dr+j+2, resv);
-                drv  = vld1q_s64(dr+j+4);
+                vst1q_s64(drs+j+2, resv);
+                drv  = vld1q_s64(drs+j+4);
                 redv = vld1q_s32((int32_t *)(cfs)+j+4);
                 /* multiply and subtract */
                 resv = vmlsl_s32(drv, vget_low_s32(redv), mulv);
                 mask = vreinterpretq_s64_u64(vcltzq_s64(resv));
                 resv = vaddq_s64(resv, vandq_s64(mask, mod2v));
-                vst1q_s64(dr+j+4, resv);
-                drv  = vld1q_s64(dr+j+6);
+                vst1q_s64(drs+j+4, resv);
+                drv  = vld1q_s64(drs+j+6);
                 resv = vmlsl_s32(drv, vget_high_s32(redv), mulv);
                 mask = vreinterpretq_s64_u64(vcltzq_s64(resv));
                 resv = vaddq_s64(resv, vandq_s64(mask, mod2v));
-                vst1q_s64(dr+j+6, resv);
+                vst1q_s64(drs+j+6, resv);
             }
         }
 
@@ -1254,16 +1255,16 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_31_bit(
 
     hm_t * row = NULL;
     cf32_t *cf = NULL;
-    if ((double)k/(double)(mat->nc-np+1) > 1.0) {
-        row   = (hm_t *)malloc((uint64_t)OFFSET * sizeof(hm_t));
+    if ((double)k/(double)(mat->nc-np+1) > 0.5) {
+        row   = (hm_t *)malloc((uint64_t)(OFFSET+1) * sizeof(hm_t));
         cf  = (cf32_t *)malloc((uint64_t)(ncols-np+1) * sizeof(cf32_t));
         j = 0;
-        hm_t *rs  = row + OFFSET;
         for (i = np; i < ncols; ++i) {
             cf[j] = (cf32_t)dr[i];
             j++;
         }
-        row[DENSE]    = 1;
+        row[OFFSET] = np;
+        row[DENSE]  = 1;
     } else {
         row   = (hm_t *)malloc((uint64_t)(k+OFFSET) * sizeof(hm_t));
         cf  = (cf32_t *)malloc((uint64_t)(k) * sizeof(cf32_t));
@@ -2782,14 +2783,20 @@ static void exact_sparse_reduced_echelon_form_ff_32(
                 const len_t mh  = pivs[k][MULT];
                 const hm_t * const ds = pivs[k] + OFFSET;
                 sc  = ds[0];
-                for (j = 0; j < os; ++j) {
-                    dr[ds[j]] = (int64_t)cfs[j];
-                }
-                for (; j < len; j += UNROLL) {
-                    dr[ds[j]]    = (int64_t)cfs[j];
-                    dr[ds[j+1]]  = (int64_t)cfs[j+1];
-                    dr[ds[j+2]]  = (int64_t)cfs[j+2];
-                    dr[ds[j+3]]  = (int64_t)cfs[j+3];
+                if (pivs[k][DENSE] == 0) {
+                    for (j = 0; j < os; ++j) {
+                        dr[ds[j]] = (int64_t)cfs[j];
+                    }
+                    for (; j < len; j += UNROLL) {
+                        dr[ds[j]]    = (int64_t)cfs[j];
+                        dr[ds[j+1]]  = (int64_t)cfs[j+1];
+                        dr[ds[j+2]]  = (int64_t)cfs[j+2];
+                        dr[ds[j+3]]  = (int64_t)cfs[j+3];
+                    }
+                } else {
+                    for (j = 0; j < len; ++j) {
+                        dr[j+sc] = (int64_t)cfs[j];
+                    }
                 }
                 free(pivs[k]);
                 free(cfs);
