@@ -1155,7 +1155,7 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_31_bit(
         const len_t os  = len % 8;
         const uint32_t mul32 = (uint32_t)(dr[i]);
         mulv  = _mm256_set1_epi32(mul32);
-        if dts[DENSE] == 0) {
+        if (dts[DENSE] == 0) {
             const hm_t * const ds  = dts + OFFSET;
             for (j = 0; j < os; ++j) {
                 dr[ds[j]] -=  mul * cfs[j];
