@@ -1149,6 +1149,7 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_31_bit(
                 drs[j+10] = res[5];
                 drs[j+12] = res[6];
                 drs[j+14] = res[7];
+            }
         }
 #elif defined HAVE_AVX2
         const len_t len = dts[LENGTH];
