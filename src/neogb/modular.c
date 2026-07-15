@@ -1803,6 +1803,7 @@ int64_t f4_trace_julia(
         uint32_t field_char,
         int32_t mon_order,
         int32_t elim_block_len,
+        int32_t blb,
         int32_t nr_vars,
         int32_t nr_gens,
         int32_t ht_size,
@@ -1841,7 +1842,7 @@ int64_t f4_trace_julia(
     int32_t nr_nf           =   0;
     int32_t truncate_lifting =  0;
     int res = validate_input_data(&invalid_gens, cfs, lens, &field_char, &mon_order,
-            &elim_block_len, &nr_vars, &nr_gens, &nr_nf, &ht_size, &nr_threads,
+            &elim_block_len, &blb, &nr_vars, &nr_gens, &nr_nf, &ht_size, &nr_threads,
             &max_nr_pairs, &reset_ht, &la_option, &use_signatures, &reduce_gb,
             &truncate_lifting, &info_level);
 
@@ -1854,7 +1855,7 @@ int64_t f4_trace_julia(
     /* checks and set all meta data. if a nonzero value is returned then
      * some of the input data is corrupted. */
     if (check_and_set_meta_data_trace(st, lens, exps, cfs, invalid_gens,
-                field_char, mon_order, elim_block_len, nr_vars, nr_gens,
+                field_char, mon_order, elim_block_len, blb, nr_vars, nr_gens,
                 nr_nf, ht_size, nr_threads, max_nr_pairs, reset_ht, la_option,
                 use_signatures, reduce_gb, prime_start, nr_primes, pbm_file,
                 truncate_lifting, info_level)) {

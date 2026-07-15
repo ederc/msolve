@@ -62,6 +62,7 @@ int64_t export_nf(
         const uint32_t field_char,
         const int32_t mon_order,
         const int32_t elim_block_len,
+        const int32_t blb,
         const int32_t nr_vars,
         const int32_t bs_is_gb,
         const int32_t nr_threads,

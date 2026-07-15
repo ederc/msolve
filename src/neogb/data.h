@@ -127,6 +127,7 @@ struct ht_t
     hl_t eld;     /* load of exponent vector */
     hl_t esz;     /* size of exponent vector */
     hl_t hsz;     /* size of hash map, might be 2^32 */
+    len_t bbl;    /* bilinear block length */
     len_t ebl;    /* elimination block length:
                    * degree + #elimination variables,
                    * 0 if no elimination order */
@@ -150,6 +151,8 @@ struct spair_t
     hi_t lcm;
     bi_t gen1;
     bi_t gen2;
+    deg_t bdeg1;
+    deg_t bdeg2;
     deg_t deg;
     spt_t type;
 };
@@ -386,6 +389,7 @@ struct md_t
     int32_t nvars;
     int32_t mnsel;
     int32_t homogeneous;
+    int32_t blb;
     uint32_t gfc; /* global field characteristic */
     uint32_t fc;
     int32_t nev; /* number of elimination variables */

@@ -2154,6 +2154,7 @@ int msolve_trace_qq(mpz_param_t *mpz_paramp,
                     int32_t nr_threads,
                     int32_t max_nr_pairs,
                     int32_t elim_block_len,
+                    int32_t blb,
                     int32_t reset_ht,
                     int32_t la_option,
                     int32_t use_signatures,
@@ -2189,7 +2190,7 @@ int msolve_trace_qq(mpz_param_t *mpz_paramp,
   int *invalid_gens = NULL;
   int res = validate_input_data(
       &invalid_gens, cfs, lens, &field_char, &mon_order, &elim_block_len,
-      &nr_vars, &nr_gens, &nr_nf, &ht_size, &nr_threads, &max_nr_pairs,
+      &blb, &nr_vars, &nr_gens, &nr_nf, &ht_size, &nr_threads, &max_nr_pairs,
       &reset_ht, &la_option, &use_signatures, &reduce_gb,
       &truncate_lifting, &info_level);
 
@@ -2205,7 +2206,7 @@ int msolve_trace_qq(mpz_param_t *mpz_paramp,
 
   if (check_and_set_meta_data_trace(
           st, lens, exps, cfs, invalid_gens, field_char, mon_order,
-          elim_block_len, nr_vars, nr_gens, nr_nf, ht_size, nr_threads,
+          elim_block_len, blb, nr_vars, nr_gens, nr_nf, ht_size, nr_threads,
           max_nr_pairs, reset_ht, la_option, use_signatures, reduce_gb,
           prime_start, nr_primes, pbm_file, 0 /*truncate_lifting */,
           info_level)) {
@@ -3730,6 +3731,7 @@ int real_msolve_qq(mpz_param_t *mpz_paramp, param_t **nmod_param, int *dim_ptr,
                    int32_t nr_threads,
                    int32_t max_nr_pairs,
                    int32_t elim_block_len,
+                   int32_t blb,
                    int32_t reset_ht,
                    int32_t la_option,
                    int32_t use_signatures,
@@ -3768,6 +3770,7 @@ int real_msolve_qq(mpz_param_t *mpz_paramp, param_t **nmod_param, int *dim_ptr,
                           nr_threads,
                           max_nr_pairs,
                           elim_block_len,
+                          blb,
                           reset_ht,
                           la_option,
                           use_signatures,
@@ -3958,6 +3961,7 @@ int core_msolve(
   int32_t initial_hts,
   int32_t max_pairs,
   int32_t elim_block_len,
+  int32_t blb,
   int32_t update_ht,
   int32_t generate_pbm,
   int32_t reduce_gb,
@@ -4027,7 +4031,7 @@ restart:
 
             success = initialize_gba_input_data(&bs, &bht, &st,
                     gens->lens, gens->exps, (void *)gens->cfs,
-                    1073741827, 0 /* DRL order */, elim_block_len, gens->nvars,
+                    1073741827, 0 /* DRL order */, elim_block_len, blb, gens->nvars,
                     /* gens->field_char, 0 [> DRL order <], gens->nvars, */
                     gens->ngens, saturate, initial_hts, nr_threads, max_pairs,
                     update_ht, la_option, use_signatures, 1 /* reduce_gb */, 0,
@@ -4109,7 +4113,7 @@ restart:
              *             to the correct field characteristic. */
             success = initialize_gba_input_data(&bs, &bht, &st,
                     gens->lens, gens->exps, (void *)gens->cfs,
-                    gens->field_char, 0 /* DRL order */, elim_block_len, gens->nvars,
+                    gens->field_char, 0 /* DRL order */, elim_block_len, blb, gens->nvars,
                     /* gens->field_char, 0 [> DRL order <], gens->nvars, */
                     gens->ngens, saturate, initial_hts, nr_threads, max_pairs,
                     update_ht, la_option, use_signatures, 1 /* reduce_gb */, 0,
@@ -4201,7 +4205,7 @@ restart:
              * to the correct field characteristic. */
             int success = initialize_gba_input_data(&bs, &bht, &st,
                     gens->lens, gens->exps, (void *)gens->cfs,
-                    1073741827, 0 /* DRL order */, elim_block_len, gens->nvars,
+                    1073741827, 0 /* DRL order */, elim_block_len, blb, gens->nvars,
                     /* gens->field_char, 0 [> DRL order <], gens->nvars, */
                     gens->ngens, 1, initial_hts, nr_threads, max_pairs,
                     update_ht, la_option, use_signatures, 1 /* reduce_gb */, 0,
@@ -4487,7 +4491,7 @@ restart:
                        real_pts_ptr,
                        gens,
                        initial_hts, unstable_staircase, nr_threads, max_pairs,
-                       elim_block_len, update_ht,
+                       elim_block_len, blb, update_ht,
                        la_option, use_signatures, lift_matrix,
                        &init_primes, info_level, print_gb,
                        generate_pbm, precision, files, round, get_param);
@@ -4587,7 +4591,7 @@ restart:
              * to the correct field characteristic. */
             success = initialize_gba_input_data(&bs, &bht, &st,
                     gens->lens, gens->exps, (void *)gens->cfs,
-                    gens->field_char, 0 /* DRL order */, elim_block_len, gens->nvars,
+                    gens->field_char, 0 /* DRL order */, elim_block_len, blb, gens->nvars,
                     /* gens->field_char, 0 [> DRL order <], gens->nvars, */
                     gens->ngens, normal_form, initial_hts, nr_threads, max_pairs,
                     update_ht, la_option, use_signatures, 1 /* reduce_gb */, 0,
@@ -4752,7 +4756,7 @@ restart:
              * some of the input data is corrupted. */
             if (check_and_set_meta_data_trace(st, gens->lens, gens->exps,
                         (void *)gens->mpz_cfs, invalid_gens, gens->field_char, 0,
-                        elim_block_len, gens->nvars, gens->ngens, saturate,
+                        elim_block_len, blb, gens->nvars, gens->ngens, saturate,
                         initial_hts, nr_threads, max_pairs, update_ht,
                         la_option, use_signatures, 1, prime_start,
                         nr_primes, 0, info_level)) {
@@ -4916,7 +4920,7 @@ restart:
             int32_t truncate_lifting =  0;
             int res = validate_input_data(&invalid_gens, gens->mpz_cfs,
                     gens->lens, &field_char, &monomial_order, &elim_block_len,
-                    &gens->nvars, &gens->ngens, &saturate, &initial_hts,
+                    &blb, &gens->nvars, &gens->ngens, &saturate, &initial_hts,
                     &nr_threads, &max_pairs, &update_ht, &la_option,
                     &use_signatures, &reduce_gb, &truncate_lifting, &info_level);
 
@@ -4931,7 +4935,7 @@ restart:
              * some of the input data is corrupted. */
             if (check_and_set_meta_data_trace(st, gens->lens, gens->exps,
                         (void *)gens->mpz_cfs, invalid_gens,
-                        field_char, 0, elim_block_len, gens->nvars,
+                        field_char, 0, elim_block_len, blb, gens->nvars,
                         gens->ngens, saturate, initial_hts, nr_threads,
                         max_pairs, update_ht, la_option, use_signatures,
                         1, prime_start, nr_primes, 0, truncate_lifting,
@@ -5164,7 +5168,7 @@ restart:
                     real_pts_ptr,
                     gens,
 		            initial_hts, unstable_staircase, nr_threads, max_pairs,
-                    elim_block_len, update_ht,
+                    elim_block_len, blb, update_ht,
                     la_option, use_signatures, lift_matrix,
                     &init_primes, info_level, print_gb,
                     generate_pbm, precision, files, round, get_param);
@@ -5478,6 +5482,7 @@ void msolve_julia(
         const uint32_t field_char,
         const int32_t mon_order,
         const int32_t elim_block_len,
+        const int32_t blb,
         const int32_t nr_vars,
         const int32_t nr_gens,
         const int32_t initial_hts,
@@ -5554,7 +5559,7 @@ void msolve_julia(
 
     /* main msolve functionality */
     int ret = core_msolve(la_option, use_signatures, nr_threads, info_level,
-			  initial_hts, max_nr_pairs, elim_block_len, reset_ht,
+			  initial_hts, max_nr_pairs, elim_block_len, blb, reset_ht,
                           0 /* generate pbm */, 1 /* reduce_gb */,
                           print_gb, 0 /*truncate_lifting*/, get_param,
 			  genericity_handling, 0 /* unstable_staircase -> change to 2?*/,

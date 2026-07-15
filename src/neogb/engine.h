@@ -35,6 +35,7 @@ int initialize_gba_input_data(
         uint32_t field_char,
         int32_t mon_order,
         int32_t elim_block_len,
+        int32_t blb,
         int32_t nr_vars,
         int32_t nr_gens,
         int32_t nr_nf,

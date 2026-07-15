@@ -99,7 +99,9 @@ static void insert_and_update_spairs(
     for (i = 0; i < bl; ++i) {
         pp[i].lcm   =  get_lcm(bs->hm[i][OFFSET], nch, bht, bht);
         pp[i].gen1  = i;
+        pp[i].bdeg1 = get_bilin_difference(pp[i].lcm, bs->hm[i][OFFSET], bht);
         pp[i].gen2  = bl;
+        pp[i].bdeg2 = get_bilin_difference(pp[i].lcm, nch, bht);
         if (bs->red[i] != 0) {
             pp[i].deg   =   -1;
         } else {

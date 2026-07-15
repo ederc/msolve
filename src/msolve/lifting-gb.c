@@ -1729,6 +1729,7 @@ gb_modpoly_t *groebner_qq(
   int32_t nr_threads = flags->nr_threads;
   int32_t max_nr_pairs = flags->max_nr_pairs;
   int32_t elim_block_len = flags->elim_block_len;
+  int32_t blb = flags->blb;
   int32_t reset_ht = flags->reset_ht;
   int32_t la_option = flags->la_option;
   const int32_t use_signatures = flags->use_signatures;
@@ -1769,7 +1770,7 @@ gb_modpoly_t *groebner_qq(
   /*msolve trace data */
   mstrace_t msd;
   success = initialize_gba_input_data(&bs, &bht, &md,
-          lens, exps, cfs, field_char, mon_order, elim_block_len,
+          lens, exps, cfs, field_char, mon_order, elim_block_len, blb,
           nr_vars, nr_gens, 0 /* # normal forms */, ht_size,
           nr_threads, max_nr_pairs, reset_ht, la_option, use_signatures,
           reduce_gb, pbm_file, truncate_lifting, info_level);
@@ -1907,6 +1908,7 @@ int64_t export_groebner_qq(
         const uint32_t field_char,
         const int32_t mon_order,
         const int32_t elim_block_len,
+        const int32_t blb,
         const int32_t nr_vars,
         const int32_t nr_gens,
         const int32_t ht_size,
@@ -1935,7 +1937,7 @@ int64_t export_groebner_qq(
     /*msolve trace data*/
     mstrace_t msd;
     success = initialize_gba_input_data(&bs, &bht, &md,
-            lens, exps, cfs, field_char, mon_order, elim_block_len,
+            lens, exps, cfs, field_char, mon_order, elim_block_len, blb,
             nr_vars, nr_gens, 0 /* # normal forms */, ht_size,
             nr_threads, max_nr_pairs, reset_ht, la_option, 0 /*use_signatures*/,
             reduce_gb, pbm_file, truncate_lifting, info_level);

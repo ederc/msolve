@@ -556,10 +556,14 @@ static int spair_cmp_update(
         if (sa->deg != sb->deg) {
             return (sa->deg < sb->deg) ? -1 : 1;
         } else {
-            if (sa->gen1 != sb->gen1) {
-                return (sa->gen1 < sb->gen1) ? -1 : 1;
+            if (sa->bdeg1 != sb->bdeg1) {
+                return (sa->bdeg1 < sb->bdeg1) ? -1 : 1;
             } else {
-                return 0;
+                if (sa->bdeg2 != sb->bdeg2) {
+                    return (sa->bdeg2 < sb->bdeg2) ? -1 : 1;
+                } else {
+                  return 0;
+                }
             }
         }
     }
@@ -575,6 +579,57 @@ static int spair_cmp_drl(
     const hi_t lb   = ((spair_t *)b)->lcm;
     const ht_t *ht  = (ht_t *)htp;
 
+    int mc = (int)monomial_cmp(la, lb, ht);
+    if (mc != 0) {
+        if (mc < 0)
+            return -1;
+        else
+            return 1;
+
+        /* return mc; */
+    }
+    /* if (((spair_t *)a)->gen1 < ((spair_t *)b)->gen1) {
+     *     return -1;
+     * }
+     * if (((spair_t *)a)->gen1 > ((spair_t *)b)->gen1) {
+     *     return 1;
+     * }
+     * if (((spair_t *)a)->gen2 < ((spair_t *)b)->gen2) {
+     *     return -1;
+     * }
+     * if (((spair_t *)a)->gen2 > ((spair_t *)b)->gen2) {
+     *     return 1;
+     * } */
+    return 0;
+}
+
+static int spair_cmp_drl_bl(
+        const void *a,
+        const void *b,
+        void *htp
+        )
+{
+    const hi_t bda1   = ((spair_t *)a)->bdeg1;
+    const hi_t bda2   = ((spair_t *)a)->bdeg2;
+    const hi_t bdb1   = ((spair_t *)b)->bdeg1;
+    const hi_t bdb2   = ((spair_t *)b)->bdeg2;
+    const hi_t la   = ((spair_t *)a)->lcm;
+    const hi_t lb   = ((spair_t *)b)->lcm;
+    const ht_t *ht  = (ht_t *)htp;
+
+    // printf("%d -- %d\n", bda1, bda2);
+    // printf("%d -- %d\n", bdb1, bdb2);
+    if (bda1 == 0 && bda2 == 0 && bdb1 == 0 && bdb2 == 0) {
+        goto mon_cmp;
+    }
+
+    if (bda1 == 0 && bda2 == 0) {
+        return -1;
+    }
+    if (bdb1 == 0 && bdb2 == 0) {
+        return 1;
+    }
+    mon_cmp:
     int mc = (int)monomial_cmp(la, lb, ht);
     if (mc != 0) {
         if (mc < 0)

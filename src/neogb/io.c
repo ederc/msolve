@@ -646,6 +646,7 @@ int validate_input_data(
         uint32_t *field_charp,
         int32_t *mon_orderp,
         int32_t *elim_block_lenp,
+        int32_t *blbp,
         int32_t *nr_varsp,
         int32_t *nr_gensp,
         int32_t *nr_nfp,
@@ -663,6 +664,10 @@ int validate_input_data(
     /* biggest prime msovle can handle */
     if (*field_charp > 4294967291) {
         fprintf(ERRSTREAM, "Field characteristic not valid.\n");
+        return 0;
+    }
+    if (*blbp < 0) {
+        fprintf(ERRSTREAM, "Bilinear block size not valid.\n");
         return 0;
     }
     if (*nr_varsp < 0) {
@@ -774,6 +779,7 @@ int32_t check_and_set_meta_data(
         const uint32_t field_char,
         const int32_t mon_order,
         const int32_t elim_block_len,
+        const int32_t blb,
         const int32_t nr_vars,
         const int32_t nr_gens,
         const int32_t nr_nf,
@@ -806,6 +812,7 @@ int32_t check_and_set_meta_data(
         ctr +=  invalid_gens[i];
     }
 
+    st->blb = blb;
     /* number of generators given from input file */
     st->ngens_input     = nr_gens - nr_nf;
     /* number of generators from input which are invalid */
@@ -1091,6 +1098,7 @@ int32_t check_and_set_meta_data_trace(
         const uint32_t field_char,
         const int32_t mon_order,
         const int32_t elim_block_len,
+        const int32_t blb,
         const int32_t nr_vars,
         const int32_t nr_gens,
         const int32_t nr_nf,
@@ -1117,7 +1125,7 @@ int32_t check_and_set_meta_data_trace(
         st->nprimes = 10;
     }
     return check_and_set_meta_data(st, lens, exps, cfs, invalid_gens,
-            field_char, mon_order, elim_block_len, nr_vars, nr_gens,
+            field_char, mon_order, elim_block_len, blb, nr_vars, nr_gens,
             nr_nf, ht_size, nr_threads, max_nr_pairs, reset_hash_table,
             la_option, use_signatures, reduce_gb, pbm_file, truncate_lifting,
             info_level);

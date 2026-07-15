@@ -223,7 +223,11 @@ static int32_t select_spairs_by_minimal_degree(
     const len_t evl = bht->evl;
 
     /* sort pair set */
-    sort_r(ps, (unsigned long)psl->ld, sizeof(spair_t), spair_cmp, bht);
+    sort_r(ps, (unsigned long)psl->ld, sizeof(spair_t), spair_cmp_drl_bl, bht);
+    // sort_r(ps, (unsigned long)psl->ld, sizeof(spair_t), spair_cmp_drl, bht);
+
+
+    
     /* get minimal degree */
     mdeg  = ps[0].deg;
 
@@ -245,6 +249,7 @@ static int32_t select_spairs_by_minimal_degree(
             pctr = 0;
         }
         printf("%d --> deg %d --> [%u,%u]", i, ps[i].deg, ps[i].gen1, ps[i].gen2);
+        printf("[%u,%u] -> ", ps[i].bdeg1, ps[i].bdeg2);
         for (int jj = 0; jj < evl; ++jj) {
             printf("%d ", bht->ev[ps[i].lcm][jj]);
         }
@@ -253,12 +258,20 @@ static int32_t select_spairs_by_minimal_degree(
     }
     printf("\n");
 #endif
-    for (i = 0; i < psl->ld; ++i) {
-        if (ps[i].deg > mdeg) {
+    for (i= 0; i < psl->ld; ++i) {
+        if (ps[i].bdeg1 > 0 || ps[i].bdeg2 > 0 || ps[i].deg > mdeg) {
             break;
         }
     }
-    npd  = i;
+    npd = i;
+    if (npd == 0) {
+        for (i = 0; i < psl->ld; ++i) {
+            if (ps[i].deg > mdeg) {
+                break;
+            }
+        }
+        npd  = i;
+    }
     /* printf("npd %d\n", npd); */
     /* sort_r(ps, (unsigned long)npd, sizeof(spair_t), spair_cmp, bht); */
     /* now do maximal selection if it applies */

@@ -54,6 +54,8 @@ ht_t *initialize_basis_hash_table(
 
     ht_t *ht  = (ht_t *)malloc(sizeof(ht_t));
     ht->nv    = nv;
+    ht->bbl = st->blb;
+    
     /* generate map */
     ht->bpv = (len_t)((CHAR_BIT * sizeof(sdm_t)) / (unsigned long)nv);
     if (ht->bpv == 0) {
@@ -136,6 +138,7 @@ ht_t *copy_hash_table(
 
     ht_t *ht  = (ht_t *)malloc(sizeof(ht_t));
 
+    ht->bbl   = bht->bbl;
     ht->nv    = bht->nv;
     ht->evl   = bht->evl;
     ht->ebl   = bht->ebl;
@@ -187,6 +190,7 @@ ht_t *initialize_secondary_hash_table(
     hl_t j;
 
     ht_t *ht  = (ht_t *)malloc(sizeof(ht_t));
+    ht->bbl   = bht->bbl;
     ht->nv    = bht->nv;
     ht->evl   = bht->evl;
     ht->ebl   = bht->ebl;
@@ -631,6 +635,22 @@ restart:
     ht->eld++;
 
     return pos;
+}
+
+static inline deg_t get_bilin_difference(
+    const hm_t lcm,
+    const hm_t lm,
+    const ht_t *ht
+)
+{
+    exp_t *a = ht->ev[lcm];
+    exp_t *b = ht->ev[lm];
+    const int32_t bl = ht->bbl;
+    deg_t d = 0;
+    for (int i = 1; i <=bl; ++i) {
+        d += (a[i] - b[i]);
+    }
+    return d;
 }
 
 static inline hi_t insert_multiplied_signature_in_hash_table(

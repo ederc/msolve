@@ -780,6 +780,7 @@ int64_t export_f4(
         const uint32_t field_char,
         const int32_t mon_order,
         const int32_t elim_block_len,
+        const int32_t blb,
         const int32_t nr_vars,
         const int32_t nr_gens,
         const int32_t ht_size,
@@ -806,7 +807,7 @@ int64_t export_f4(
 
     const int32_t use_signatures    =   0;
     success = initialize_gba_input_data(&bs, &bht, &md,
-            lens, exps, cfs, field_char, mon_order, elim_block_len,
+            lens, exps, cfs, field_char, mon_order, elim_block_len, blb,
             nr_vars, nr_gens, 0 /* # normal forms */, ht_size,
             nr_threads, max_nr_pairs, reset_ht, la_option, use_signatures,
             reduce_gb, pbm_file, 0 /*truncate_lifting*/, info_level);

@@ -107,6 +107,7 @@ static inline void display_help(char *str){
   display_option_help_noopt("0 - Nothing is printed. (default)\n");
   display_option_help_noopt("1 - Leading ideal is printed.\n");
   display_option_help_noopt("2 - Full reduced Groebner basis is printed.\n");
+  display_option_help('b',"", "BILIN", "Bilinear input file\n");
   display_option_help('c',"", "GEN", "Handling genericity: If the staircase is not generic\n");
   display_option_help_noopt("enough, msolve can automatically try to fix this\n");
   display_option_help_noopt("situation via first trying a change of the order of\n");
@@ -220,6 +221,7 @@ static void getoptions(
         int32_t *refine,
         int32_t *isolate,
         int32_t *generate_pbm_files,
+        int32_t *blb,
 	int64_t *seed,
         int32_t *info_level,
         files_gb *files){
@@ -229,7 +231,7 @@ static void getoptions(
   char *out_fname = NULL;
   char *bin_out_fname = NULL;
   opterr = 1;
-  char short_options[] = "c:Cd:e:f:F:g:hiI:l:L:m:M:n:N:o:O:p:P:q:r:R:s:St:u:v:V";
+  char short_options[] = "b:c:Cd:e:f:F:g:hiI:l:L:m:M:n:N:o:O:p:P:q:r:R:s:St:u:v:V";
 
   /* For long options that have no equivalent short option, use a
      non-character as a pseudo short option, starting with CHAR_MAX + 1.
@@ -287,6 +289,9 @@ static void getoptions(
       if (*elim_block_len < 0) {
           *elim_block_len = 0;
       }
+      break;
+    case 'b':
+      *blb = strtol(optarg, NULL, 10);
       break;
     case 'u':
       *update_ht = strtol(optarg, NULL, 10);
@@ -470,6 +475,7 @@ int main(int argc, char **argv){
     int32_t refine                = 0; /* not used at the moment */
     int32_t isolate               = 0; /* not used at the moment */
     int64_t seed                  = -1;
+    int32_t blb                   = 0;
 
     files_gb *files = malloc(sizeof(files_gb));
     if(files == NULL) exit(1);
@@ -483,7 +489,7 @@ int main(int argc, char **argv){
                &unstable_staircase, &saturate, &colon,
                &normal_form, &normal_form_matrix, &is_gb, &lift_matrix, &get_param,
                &precision, &refine, &isolate, &generate_pbm,
-	       &seed, &info_level, files);
+	       &blb, &seed, &info_level, files);
 
     /* srand initialization */
     uint32_t true_seed;
@@ -566,7 +572,7 @@ int main(int argc, char **argv){
 
     /* main msolve functionality */
     int ret = core_msolve(la_option, use_signatures, nr_threads, info_level,
-                          initial_hts, max_pairs, elim_block_len, update_ht,
+                          initial_hts, max_pairs, elim_block_len, blb, update_ht,
                           generate_pbm, reduce_gb, print_gb, truncate_lifting,
                           get_param,
                           genericity_handling, unstable_staircase, saturate,

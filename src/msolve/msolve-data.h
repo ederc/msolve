@@ -357,6 +357,7 @@ typedef struct{
   int32_t nr_threads;
   int32_t max_nr_pairs;
   int32_t elim_block_len;
+  int32_t blb;
   int32_t reset_ht;
   int32_t la_option;
   int32_t use_signatures;
