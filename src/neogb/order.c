@@ -619,16 +619,24 @@ static int spair_cmp_drl_bl(
 
     // printf("%d -- %d\n", bda1, bda2);
     // printf("%d -- %d\n", bdb1, bdb2);
-    if (bda1 == 0 && bda2 == 0 && bdb1 == 0 && bdb2 == 0) {
+    if (bda1+bda2 == bdb1+bdb2) {
         goto mon_cmp;
     }
-
-    if (bda1 == 0 && bda2 == 0) {
+    if (bda1+bda2 < bdb1+bdb2) {
         return -1;
-    }
-    if (bdb1 == 0 && bdb2 == 0) {
+    } else {
         return 1;
     }
+    // if (bda1 == 0 && bda2 == 0 && bdb1 == 0 && bdb2 == 0) {
+    //     goto mon_cmp;
+    // }
+
+    // if (bda1 == 0 && bda2 == 0) {
+    //     return -1;
+    // }
+    // if (bdb1 == 0 && bdb2 == 0) {
+    //     return 1;
+    // }
     mon_cmp:
     int mc = (int)monomial_cmp(la, lb, ht);
     if (mc != 0) {

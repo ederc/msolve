@@ -258,8 +258,9 @@ static int32_t select_spairs_by_minimal_degree(
     }
     printf("\n");
 #endif
+    deg_t min_bdeg = ps[0].bdeg1+ps[0].bdeg2;
     for (i= 0; i < psl->ld; ++i) {
-        if (ps[i].bdeg1 > 0 || ps[i].bdeg2 > 0 || ps[i].deg > mdeg) {
+        if (ps[i].bdeg1 + ps[i].bdeg2 > min_bdeg) {
             break;
         }
     }
