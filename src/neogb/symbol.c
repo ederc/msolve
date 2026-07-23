@@ -223,8 +223,8 @@ static int32_t select_spairs_by_minimal_degree(
     const len_t evl = bht->evl;
 
     /* sort pair set */
-    sort_r(ps, (unsigned long)psl->ld, sizeof(spair_t), spair_cmp_drl_bl, bht);
-    // sort_r(ps, (unsigned long)psl->ld, sizeof(spair_t), spair_cmp_drl, bht);
+    // sort_r(ps, (unsigned long)psl->ld, sizeof(spair_t), spair_cmp_drl_bl, bht);
+    sort_r(ps, (unsigned long)psl->ld, sizeof(spair_t), spair_cmp_drl, bht);
 
 
     
@@ -249,7 +249,7 @@ static int32_t select_spairs_by_minimal_degree(
             pctr = 0;
         }
         printf("%d --> deg %d --> [%u,%u]", i, ps[i].deg, ps[i].gen1, ps[i].gen2);
-        printf("[%u,%u] -> ", ps[i].bdeg1, ps[i].bdeg2);
+        printf("[%u,%u] -> %u", ps[i].bdeg1, ps[i].bdeg2, ps[i].bdeg1+ps[i].bdeg2);
         for (int jj = 0; jj < evl; ++jj) {
             printf("%d ", bht->ev[ps[i].lcm][jj]);
         }
@@ -258,21 +258,43 @@ static int32_t select_spairs_by_minimal_degree(
     }
     printf("\n");
 #endif
+    deg_t fdeg = ps[0].deg;
+    mdeg = ps[0].bdeg1+ps[0].bdeg2;
+    for (i=0; i < psl->ld; ++i) {
+        mdeg = ps[i].bdeg1+ps[i].bdeg2 < mdeg ? ps[i].bdeg1+ps[i].bdeg2 : mdeg;
+    }
+    printf("fdeg %u / %u mdeg\n", fdeg, mdeg);
+    if ((fdeg-mdeg) > 2) {
+        sort_r(ps, (unsigned long)psl->ld, sizeof(spair_t), spair_cmp_drl_bl, bht);
     deg_t min_bdeg = ps[0].bdeg1+ps[0].bdeg2;
     for (i= 0; i < psl->ld; ++i) {
         if (ps[i].bdeg1 + ps[i].bdeg2 > min_bdeg) {
             break;
         }
     }
-    npd = i;
-    if (npd == 0) {
+        npd  = i;
+} else {
+    
+    mdeg  = ps[0].deg;
         for (i = 0; i < psl->ld; ++i) {
             if (ps[i].deg > mdeg) {
                 break;
             }
         }
         npd  = i;
-    }
+}
+    // npd = i;
+    // if (npd == 0) {
+    //     printf("here\n");
+    // /* get minimal degree */
+    // mdeg  = ps[0].deg;
+    //     for (i = 0; i < psl->ld; ++i) {
+    //         if (ps[i].deg > mdeg) {
+    //             break;
+    //         }
+    //     }
+    //     npd  = i;
+    // }
     /* printf("npd %d\n", npd); */
     /* sort_r(ps, (unsigned long)npd, sizeof(spair_t), spair_cmp, bht); */
     /* now do maximal selection if it applies */

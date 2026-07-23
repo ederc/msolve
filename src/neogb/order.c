@@ -20,6 +20,7 @@
 
 
 #include "data.h"
+#include <stdint.h>
 
 /*
  * IMPLEMENTATIONS OF ORDER FUNCTIONIONALITY INDEPENDENT
