@@ -223,8 +223,8 @@ static int32_t select_spairs_by_minimal_degree(
     const len_t evl = bht->evl;
 
     /* sort pair set */
-    // sort_r(ps, (unsigned long)psl->ld, sizeof(spair_t), spair_cmp_drl_bl, bht);
-    sort_r(ps, (unsigned long)psl->ld, sizeof(spair_t), spair_cmp_drl, bht);
+    sort_r(ps, (unsigned long)psl->ld, sizeof(spair_t), spair_cmp_drl_bl, bht);
+    // sort_r(ps, (unsigned long)psl->ld, sizeof(spair_t), spair_cmp_drl, bht);
 
 
     
@@ -258,14 +258,10 @@ static int32_t select_spairs_by_minimal_degree(
     }
     printf("\n");
 #endif
-    deg_t fdeg = ps[0].deg;
-    mdeg = ps[0].bdeg1+ps[0].bdeg2;
-    for (i=0; i < psl->ld; ++i) {
-        mdeg = ps[i].bdeg1+ps[i].bdeg2 < mdeg ? ps[i].bdeg1+ps[i].bdeg2 : mdeg;
-    }
+    deg_t fdeg = ps[0].bdeg1+ps[0].bdeg2;
+    mdeg = ps[psl->ld-1].bdeg1+ps[psl->ld].bdeg2;
     printf("fdeg %u / %u mdeg\n", fdeg, mdeg);
-    if ((fdeg-mdeg) > 2) {
-        sort_r(ps, (unsigned long)psl->ld, sizeof(spair_t), spair_cmp_drl_bl, bht);
+    if ((mdeg-fdeg) >= bht->bbl/2) {
     deg_t min_bdeg = ps[0].bdeg1+ps[0].bdeg2;
     for (i= 0; i < psl->ld; ++i) {
         if (ps[i].bdeg1 + ps[i].bdeg2 > min_bdeg) {
@@ -275,6 +271,7 @@ static int32_t select_spairs_by_minimal_degree(
         npd  = i;
 } else {
     
+        sort_r(ps, (unsigned long)psl->ld, sizeof(spair_t), spair_cmp_drl, bht);
     mdeg  = ps[0].deg;
         for (i = 0; i < psl->ld; ++i) {
             if (ps[i].deg > mdeg) {
