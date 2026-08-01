@@ -258,6 +258,7 @@ static int32_t select_spairs_by_minimal_degree(
     }
     printf("\n");
 #endif
+    deg_t off = bht->nv - bht->bbl < 20 ? 1 : 0;
     deg_t fdeg = ps[0].bdeg1+ps[0].bdeg2;
     mdeg = ps[psl->ld-1].bdeg1+ps[psl->ld].bdeg2;
     // if ((mdeg-fdeg) >= bht->bbl/2) {
@@ -269,7 +270,7 @@ static int32_t select_spairs_by_minimal_degree(
         }
     }
         fdeg = ps[i-1].deg;
-        deg_t rdeg = ps[i].deg;
+        deg_t rdeg = ps[i-1].deg;
         for (j = i; j < psl->ld; ++j) {
             if (ps[j].deg < rdeg) {
                 rdeg = ps[j].deg;
@@ -277,8 +278,15 @@ static int32_t select_spairs_by_minimal_degree(
         }
         npd  = i;
     printf("fdeg %u / %u mdeg / %u rdeg\n", fdeg, mdeg, rdeg);
-        if (rdeg >= mdeg) {
-             mdeg = rdeg < fdeg ? rdeg: fdeg;
+        if (rdeg >= mdeg + off) {
+             // mdeg = rdeg < fdeg ? (fdeg-rdeg) + mdeg: fdeg;
+             printf("-> new mdeg %u\n", mdeg);
+             for (i = 0; i < npd; ++i) {
+                 if (ps[i].deg > mdeg + 1 + off) {
+                     break;
+                 }
+             }
+             npd = i;
              } else {   
         sort_r(ps, (unsigned long)psl->ld, sizeof(spair_t), spair_cmp_drl, bht);
     mdeg  = ps[0].deg;
