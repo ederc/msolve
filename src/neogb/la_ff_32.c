@@ -1011,7 +1011,7 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_31_bit(
     __m512i zerov = _mm512_set1_epi64(0);
     __m512i mod2v = _mm512_set1_epi64(mod2);
 #elif defined HAVE_AVX2
-    int64_t res[4] __attribute__((aligned(32)));
+    // int64_t res[4] __attribute__((aligned(32)));
     __m256i cmpv, redv, drv, mulv, prodv, resv, rresv;
     __m256i zerov= _mm256_set1_epi64x(0);
     __m256i mod2v = _mm256_set1_epi64x(mod2);
@@ -1130,11 +1130,11 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_31_bit(
             resv  = _mm256_sub_epi64(drv, prodv);
             cmpv  = _mm256_cmpgt_epi64(zerov, resv);
             rresv = _mm256_add_epi64(resv, _mm256_and_si256(cmpv, mod2v));
-            _mm256_store_si256((__m256i*)(res), rresv);
-            dr[ds[j+1]] = res[0];
-            dr[ds[j+3]] = res[1];
-            dr[ds[j+5]] = res[2];
-            dr[ds[j+7]] = res[3];
+            // _mm256_store_si256((__m256i*)(res), rresv);
+            dr[ds[j+1]] = _mm256_extract_epi64(rresv, 0);
+            dr[ds[j+3]] = _mm256_extract_epi64(rresv, 1);
+            dr[ds[j+5]] = _mm256_extract_epi64(rresv, 2);
+            dr[ds[j+7]] = _mm256_extract_epi64(rresv, 3);
             /* second four mult-adds -- higher */
             prodv = _mm256_mul_epu32(mulv, redv);
             drv   = _mm256_setr_epi64x(
@@ -1145,11 +1145,11 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_31_bit(
             resv  = _mm256_sub_epi64(drv, prodv);
             cmpv  = _mm256_cmpgt_epi64(zerov, resv);
             rresv = _mm256_add_epi64(resv, _mm256_and_si256(cmpv, mod2v));
-            _mm256_store_si256((__m256i*)(res), rresv);
-            dr[ds[j]]   = res[0];
-            dr[ds[j+2]] = res[1];
-            dr[ds[j+4]] = res[2];
-            dr[ds[j+6]] = res[3];
+            // _mm256_store_si256((__m256i*)(res), rresv);
+            dr[ds[j]]   = _mm256_extract_epi64(rresv, 0);
+            dr[ds[j+2]] = _mm256_extract_epi64(rresv, 1);
+            dr[ds[j+4]] = _mm256_extract_epi64(rresv, 2);
+            dr[ds[j+6]] = _mm256_extract_epi64(rresv, 3);
         }
 #elif defined __aarch64__
         const len_t len       = dts[LENGTH];
