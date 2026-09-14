@@ -2414,7 +2414,7 @@ static void interreduce_matrix_rows_ff_8(
     mat->tr = realloc(mat->tr, (uint64_t)ncols * sizeof(hm_t *));
 
     mat->cf_8  = realloc(mat->cf_8,
-            (uint64_t)ncols * sizeof(cf32_t *));
+            (uint64_t)ncols * sizeof(cf8_t *));
     memset(mat->cf_8, 0, (uint64_t)ncols * sizeof(cf8_t *));
     hm_t **pivs = (hm_t **)calloc((uint64_t)ncols, sizeof(hm_t *));
     /* copy coefficient arrays from basis in matrix, maybe

@@ -22,6 +22,8 @@
 #define GB_IO_H
 
 #include "data.h"
+#include "../msolve/streams.h"
+#include "gf2_ext.h"
 
 void set_function_pointers(
         const md_t *st

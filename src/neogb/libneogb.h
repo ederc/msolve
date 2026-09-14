@@ -36,6 +36,6 @@
 #include "sort_r.h"
 #include "tools.h"
 #include "update.h"
-#include "gf2ext.h"
+#include "gf2_ext.h"
 
 #endif

@@ -22,7 +22,7 @@
 #define GB_BASIS_H
 
 #include "data.h"
-#include "gf2ext.h"
+#include "gf2_ext.h"
 
 void free_basis_without_hash_table(
         bs_t **bsp

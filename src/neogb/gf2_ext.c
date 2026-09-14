@@ -19,7 +19,7 @@
  * Vincent Neiger
  * Mohab Safey El Din */
 
-#include "gf2ext.h"
+#include "gf2_ext.h"
 
 #include <assert.h>
 

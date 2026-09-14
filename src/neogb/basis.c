@@ -21,7 +21,6 @@
 
 #include "basis.h"
 #include "data.h"
-#include "gf2ext.h"
 
 static void free_basis_elements(
         bs_t *bs

@@ -20,8 +20,6 @@
 
 
 #include "io.h"
-#include "../msolve/streams.h"
-#include "gf2ext.h"
 
 /* See exponent vector description in data.h for more information. */
 static inline void set_exponent_vector(
