@@ -686,6 +686,10 @@ static void convert_sparse_matrix_rows_to_basis_elements(
             case 0:
                 bs->cf_qq[bl+k] = mat->cf_qq[rows[i][COEFFS]];
                 break;
+            case -4:
+            case -8:
+                bs->cf2_ext[bl+k]  = mat->cf2_ext[rows[i][COEFFS]];
+                break;
             case 8:
                 bs->cf_8[bl+k]  = mat->cf_8[rows[i][COEFFS]];
                 break;
