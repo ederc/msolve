@@ -20,12 +20,22 @@
 
 
 #include "basis.h"
+#include "data.h"
+#include "gf2ext.h"
 
 static void free_basis_elements(
         bs_t *bs
         )
 {
     len_t i, j, len;
+    if (bs->cf2_ext) {
+        for (i = 0; i < bs->ld; ++i) {
+            free(bs->cf2_ext[i]);
+            bs->cf2_ext[i] = NULL;
+            free(bs->hm[i]);
+            bs->hm[i] = NULL;
+        }
+    }
     if (bs->cf_8) {
         for (i = 0; i < bs->ld; ++i) {
             free(bs->cf_8[i]);
@@ -94,6 +104,16 @@ void free_basis_without_hash_table(
 {
     len_t i, j, len;
     bs_t *bs  = *bsp;
+    if (bs->cf2_ext) {
+        for (i = 0; i < bs->ld; ++i) {
+            free(bs->cf2_ext[i]);
+            free(bs->hm[i]);
+        }
+        free(bs->cf2_ext);
+        bs->cf2_ext  = NULL;
+        free(bs->hm);
+        bs->hm  = NULL;
+    }
     if (bs->cf_8) {
         for (i = 0; i < bs->ld; ++i) {
             free(bs->cf_8[i]);
@@ -187,6 +207,10 @@ bs_t *initialize_basis(
     }
     /* initialize coefficients depending on ground field */
     switch (md->ff_bits) {
+        case -4:
+        case -8:
+            bs->cf2_ext  = (cf2_ext_t **)malloc((unsigned long)bs->sz * sizeof(cf2_ext_t *));
+            break;
         case 8:
             bs->cf_8  = (cf8_t **)malloc((unsigned long)bs->sz * sizeof(cf8_t *));
             break;
@@ -225,6 +249,12 @@ void check_enlarge_basis(
                 (unsigned long)(bs->sz-bs->ld) * sizeof(int8_t));
 
         switch (st->ff_bits) {
+            case -4:
+            case -8:
+                bs->cf2_ext  = realloc(bs->cf2_ext,
+                        (unsigned long)bs->sz * sizeof(cf2_ext_t *));
+                memset(bs->cf2_ext+bs->ld, 0, (unsigned long)(bs->sz-bs->ld) * sizeof(cf2_ext_t *));
+                break;
             case 8:
                 bs->cf_8  = realloc(bs->cf_8,
                         (unsigned long)bs->sz * sizeof(cf8_t *));
@@ -246,6 +276,68 @@ void check_enlarge_basis(
                 break;
             default:
                 exit(1);
+        }
+    }
+}
+
+/* finite field stuff  --  GF(16) */
+static inline void normalize_initial_basis_gf_16(
+        bs_t *bs,
+        const uint32_t fc
+        )
+{
+    len_t i, j;
+
+    cf2_ext_t **cf         = bs->cf2_ext;
+    hm_t * const *hm    = bs->hm;
+    const bl_t ld       = bs->ld;
+
+    for (i = 0; i < ld; ++i) {
+        cf2_ext_t *row  = cf[hm[i][COEFFS]];
+
+        const cf2_ext_t inv = gf16_inv(row[0]);
+        const len_t os    = hm[i][PRELOOP];
+        const len_t len   = hm[i][LENGTH];
+
+        for (j = 0; j < os; ++j) {
+            row[j]  =   gf16_mul(row[j], inv);
+        }
+        for (j = os; j < len; j += UNROLL) {
+            row[j]    =   gf16_mul(row[j], inv);
+            row[j+1]  =   gf16_mul(row[j+1], inv);
+            row[j+2]  =   gf16_mul(row[j+2], inv);
+            row[j+3]  =   gf16_mul(row[j+3], inv);
+        }
+    }
+}
+
+/* finite field stuff  --  GF(256) */
+static inline void normalize_initial_basis_gf_256(
+        bs_t *bs,
+        const uint32_t fc
+        )
+{
+    len_t i, j;
+
+    cf2_ext_t **cf         = bs->cf2_ext;
+    hm_t * const *hm    = bs->hm;
+    const bl_t ld       = bs->ld;
+
+    for (i = 0; i < ld; ++i) {
+        cf2_ext_t *row  = cf[hm[i][COEFFS]];
+
+        const cf2_ext_t inv = gf256_inv(row[0]);
+        const len_t os    = hm[i][PRELOOP];
+        const len_t len   = hm[i][LENGTH];
+
+        for (j = 0; j < os; ++j) {
+            row[j]  =   gf256_mul(row[j], inv);
+        }
+        for (j = os; j < len; j += UNROLL) {
+            row[j]    =   gf256_mul(row[j], inv);
+            row[j+1]  =   gf256_mul(row[j+1], inv);
+            row[j+2]  =   gf256_mul(row[j+2], inv);
+            row[j+3]  =   gf256_mul(row[j+3], inv);
         }
     }
 }

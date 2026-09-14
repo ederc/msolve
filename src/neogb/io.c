@@ -21,6 +21,7 @@
 
 #include "io.h"
 #include "../msolve/streams.h"
+#include "gf2ext.h"
 
 /* See exponent vector description in data.h for more information. */
 static inline void set_exponent_vector(
@@ -656,10 +657,12 @@ int32_t check_ff_bits(int32_t fc){
 void set_ff_bits(md_t *st, int32_t fc){
     if (fc == 16) {
         st->ff_bits = -4;
+        gf_tables_init();
         return;
     }
     if (fc == 256) {
         st->ff_bits = -8;
+        gf_tables_init();
         return;
     }
     if (fc == 0) {
@@ -933,6 +936,12 @@ void linear_algebra(
                 exact_sparse_linear_algebra_qq(mat, tbr, bs, st);
             }
             return;
+        case -4:
+            exact_sparse_linear_algebra_gf_16(mat, tbr, bs, st);
+            return;
+        case -8:
+            exact_sparse_linear_algebra_gf_256(mat, tbr, bs, st);
+            return;
         case 8:
             switch (st->laopt) {
                 case 1:
@@ -1011,6 +1020,12 @@ void exact_linear_algebra(
         case 0:
             exact_sparse_linear_algebra_qq(mat, tbr, bs, st);
             return;
+        case -4:
+            exact_sparse_linear_algebra_gf_16(mat, tbr, bs, st);
+            return;
+        case -8:
+            exact_sparse_linear_algebra_gf_256(mat, tbr, bs, st);
+            return;
         case 8:
             exact_sparse_linear_algebra_ff_8(mat, tbr, bs, st);
             return;
@@ -1073,6 +1088,12 @@ void interreduce_matrix_rows(
         case 0:
             interreduce_matrix_rows_qq(mat, bs, st, free_basis);
             return;
+        case -4:
+            interreduce_matrix_rows_gf_16(mat, bs, st, free_basis);
+            return;
+        case -8:
+            interreduce_matrix_rows_gf_256(mat, bs, st, free_basis);
+            return;
         case 8:
             interreduce_matrix_rows_ff_8(mat, bs, st, free_basis);
             return;
@@ -1092,6 +1113,14 @@ void normalize_initial_basis(
         )
 {
     if (fc == 0) {
+        return;
+    }
+    if (fc == 16) {
+        normalize_initial_basis_gf_16(bs, fc);
+        return;
+    }
+    if (fc == 256) {
+        normalize_initial_basis_gf_256(bs, fc);
         return;
     }
     if (fc < ((uint32_t)1u << 8)) {
