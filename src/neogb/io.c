@@ -327,8 +327,10 @@ void import_input_data(
 
                     for (j = off; j < off+lens[i]; ++j) {
                         /* make coefficient positive */
-                        cf2_ext[j-off]   +=  gf16_from_i32(cfs_ff[j]);
+                        cf2_ext[j-off]   =  gf16_from_i32(cfs_ff[j]);
+                        fprintf(stderr, " %u ", cf2_ext[j-off]);
                     }
+                    fprintf(stderr, "\n");
                     sort_terms_ff_8(&(bs->cf2_ext[ctr]), &(bs->hm[ctr]), ht);
                     ctr++;
                 }
@@ -344,7 +346,7 @@ void import_input_data(
 
                     for (j = off; j < off+lens[i]; ++j) {
                         /* make coefficient positive */
-                        cf2_ext[j-off]   +=  gf256_from_i32(cfs_ff[j]);
+                        cf2_ext[j-off]   =  gf256_from_i32(cfs_ff[j]);
                     }
                     sort_terms_ff_8(&(bs->cf2_ext[ctr]), &(bs->hm[ctr]), ht);
                     ctr++;
