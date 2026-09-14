@@ -265,12 +265,13 @@ void import_input_data(
     hm_t *hm;
     len_t ctr = 0; /* ctr for valid input elements */
 
-    cf8_t *cf8      =   NULL;
-    cf16_t *cf16    =   NULL;
-    cf32_t *cf32    =   NULL;
-    mpz_t *cfq      =   NULL;
-    int32_t *cfs_ff =   NULL;
-    mpz_t **cfs_qq  =   NULL;
+    cf2_ext_t *cf2_ext =   NULL;
+    cf8_t *cf8         =   NULL;
+    cf16_t *cf16       =   NULL;
+    cf32_t *cf32       =   NULL;
+    mpz_t *cfq         =   NULL;
+    int32_t *cfs_ff    =   NULL;
+    mpz_t **cfs_qq     =   NULL;
 
     ht_t *ht = bs->ht;
 
@@ -318,6 +319,40 @@ void import_input_data(
     off = init_off;
     ctr = 0;
     switch (st->ff_bits) {
+        case -4:
+            cfs_ff  =   (int32_t *)vcfs;
+            for (i = start; i < stop; ++i) {
+                if (invalid_gens == NULL || invalid_gens[i] == 0) {
+                    cf2_ext = (cf2_ext_t *)malloc((unsigned long)(lens[i]) * sizeof(cf2_ext_t));
+                    bs->cf2_ext[ctr] = cf2_ext;
+
+                    for (j = off; j < off+lens[i]; ++j) {
+                        /* make coefficient positive */
+                        cf2_ext[j-off]   +=  gf16_from_i32(cfs_ff[j]);
+                    }
+                    sort_terms_ff_8(&(bs->cf2_ext[ctr]), &(bs->hm[ctr]), ht);
+                    ctr++;
+                }
+                off +=  lens[i];
+            }
+            break;
+        case -8:
+            cfs_ff  =   (int32_t *)vcfs;
+            for (i = start; i < stop; ++i) {
+                if (invalid_gens == NULL || invalid_gens[i] == 0) {
+                    cf2_ext = (cf2_ext_t *)malloc((unsigned long)(lens[i]) * sizeof(cf2_ext_t));
+                    bs->cf2_ext[ctr] = cf2_ext;
+
+                    for (j = off; j < off+lens[i]; ++j) {
+                        /* make coefficient positive */
+                        cf2_ext[j-off]   +=  gf256_from_i32(cfs_ff[j]);
+                    }
+                    sort_terms_ff_8(&(bs->cf2_ext[ctr]), &(bs->hm[ctr]), ht);
+                    ctr++;
+                }
+                off +=  lens[i];
+            }
+            break;
         case 8:
             cfs_ff  =   (int32_t *)vcfs;
             for (i = start; i < stop; ++i) {
@@ -619,6 +654,14 @@ int32_t check_ff_bits(int32_t fc){
 }
 
 void set_ff_bits(md_t *st, int32_t fc){
+    if (fc == 16) {
+        st->ff_bits = -4;
+        return;
+    }
+    if (fc == 256) {
+        st->ff_bits = -8;
+        return;
+    }
     if (fc == 0) {
         st->ff_bits = 0;
     } else {

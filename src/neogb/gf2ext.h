@@ -37,6 +37,22 @@ static inline uint8_t gf256_sub(uint8_t a, uint8_t b)
 }
 
 /*
+ * Convert a random 32-bit value to the canonical byte representation.
+ *
+ * If x is uniformly random over 32-bit values, these outputs are
+ * uniformly distributed over GF(16) and GF(256), respectively.
+ */
+static inline uint8_t gf16_from_i32(int32_t x)
+{
+    return (uint8_t)((uint32_t)x & UINT32_C(0x0F));
+}
+
+static inline uint8_t gf256_from_i32(int32_t x)
+{
+    return (uint8_t)((uint32_t)x & UINT32_C(0xFF));
+}
+
+/*
  * Multiply in GF(2^4), reducing modulo x^4 + x + 1.
  *
  * This has a fixed iteration count and no data-dependent branches or
