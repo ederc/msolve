@@ -300,6 +300,15 @@ static inline bool gf256_div(uint8_t a, uint8_t b, uint8_t *out)
 }
 
 /*
+ * Tables must have been initialized by gf_tables_init().
+ *
+ * The returned pointer remains valid for the lifetime of the program.
+ * Table lookups are not cache-side-channel resistant.
+ */
+const uint8_t *gf16_mul_row(uint8_t coefficient);
+const uint8_t *gf256_mul_row(uint8_t coefficient);
+
+/*
  * Optional lookup tables.
  *
  * Call gf_tables_init() once before using these functions. Initialization

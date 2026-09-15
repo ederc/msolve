@@ -221,3 +221,18 @@ gf256_mul_add_region_table(uint8_t *dst, const uint8_t *src,
     for (size_t i = 0; i < count; ++i)
         dst[i] ^= row[src[i]];
 }
+
+const uint8_t *gf16_mul_row(uint8_t coefficient)
+{
+    assert(tables_initialized);
+
+    coefficient &= 0x0Fu;
+    return &gf16_mul_lut[(size_t)coefficient * 16u];
+}
+
+const uint8_t *gf256_mul_row(uint8_t coefficient)
+{
+    assert(tables_initialized);
+
+    return &gf256_mul_lut[(size_t)coefficient * 256u];
+}
