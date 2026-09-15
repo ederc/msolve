@@ -73,6 +73,16 @@ static inline uint8_t gf256_from_i32(int32_t x)
     return (uint8_t)((uint32_t)x & UINT32_C(0xFF));
 }
 
+static inline uint8_t gf16_from_integer(int32_t x)
+{
+    return (uint8_t)((uint32_t)x & 1u);
+}
+
+static inline uint8_t gf256_from_integer(int32_t x)
+{
+    return (uint8_t)((uint32_t)x & 1u);
+}
+
 /*
  * Multiply in GF(2^4), reducing modulo x^4 + x + 1.
  *
