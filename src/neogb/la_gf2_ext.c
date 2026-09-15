@@ -96,7 +96,6 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_gf_16(
     const len_t ncols           = mat->nc;
     const len_t ncl             = mat->ncl;
     cf2_ext_t * const * const mcf  = mat->cf2_ext;
-    const cf2_ext_t gfc         = (cf2_ext_t)fc;
 
 // #if defined HAVE_AVX512_F
 //     __m512i mask1 = _mm512_set1_epi64(0x000000000000FFFF);
@@ -129,7 +128,13 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_gf_16(
         rba = NULL;
     }
     k = 0;
+    fprintf(stderr, "dr = ");
+    for (int ii= 0; ii < ncols; ++ii) {
+        fprintf(stderr, "%u ", dr[ii]);
+    }
+    fprintf(stderr, "\n");
     for (i = dpiv; i < ncols; ++i) {
+        fprintf(stderr, "dr[%d] = %u\n", i, dr[i]);
         if (dr[i] == 0) {
             continue;
         }
@@ -141,7 +146,7 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_gf_16(
             continue;
         }
         /* found reducer row, get multiplier */
-        const cf2_ext_t mul= gfc - dr[i];
+        const cf2_ext_t mul= dr[i];
         dts   = pivs[i];
         if (i < ncl) {
             /* set corresponding bit of reducer in reducer bit array */
@@ -157,6 +162,9 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_gf_16(
         const len_t os  = dts[PRELOOP];
         const len_t len = dts[LENGTH];
         const hm_t * const ds  = dts + OFFSET;
+        for (j = 0; j < len; ++j) {
+            fprintf(stderr, "%u | %u\n", cfs[j], ds[j]);
+        }
         for (j = 0; j < os; ++j) {
             dr[ds[j]] =  gf16_mul_add_table(dr[ds[j]], cfs[j], mul);
         }
@@ -168,7 +176,13 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_gf_16(
         }
 // #endif
         dr[i] = 0;
+    fprintf(stderr, "round end dr = ");
+    for (int ii= 0; ii < ncols; ++ii) {
+        fprintf(stderr, "%u ", dr[ii]);
     }
+    fprintf(stderr, "\n");
+    }
+    fprintf(stderr, "k = %d\n", k);
     if (k == 0) {
         return NULL;
     }
@@ -213,7 +227,6 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_gf_256(
     const len_t ncols           = mat->nc;
     const len_t ncl             = mat->ncl;
     cf2_ext_t * const * const mcf  = mat->cf2_ext;
-    const cf2_ext_t gfc         = (cf2_ext_t)fc;
 
 // #if defined HAVE_AVX512_F
 //     __m512i mask1 = _mm512_set1_epi64(0x000000000000FFFF);
@@ -258,7 +271,7 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_gf_256(
             continue;
         }
         /* found reducer row, get multiplier */
-        const cf2_ext_t mul= gfc - dr[i];
+        const cf2_ext_t mul= dr[i];
         dts   = pivs[i];
         if (i < ncl) {
             /* set corresponding bit of reducer in reducer bit array */
