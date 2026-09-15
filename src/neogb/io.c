@@ -20,6 +20,7 @@
 
 
 #include "io.h"
+#include "data.h"
 
 /* See exponent vector description in data.h for more information. */
 static inline void set_exponent_vector(
@@ -327,10 +328,22 @@ void import_input_data(
 
                     for (j = off; j < off+lens[i]; ++j) {
                         /* make coefficient positive */
-                        cf2_ext[j-off]   =  gf16_from_i32(cfs_ff[j]);
-                        fprintf(stderr, " %u ", cf2_ext[j-off]);
+                        cf2_ext[j-off]   =  gf16_from_integer(cfs_ff[j]);
                     }
-                    fprintf(stderr, "\n");
+                    // We are in char = 2, so several coefficients might be mapped to zero,
+                    // thus we remove them.
+                    len_t nm = 0;
+                    for (j = 0; j < lens[i]; ++j) {
+                        if (cf2_ext[j] != 0) {
+                            cf2_ext[nm] = cf2_ext[j];
+                            bs->hm[ctr][nm+OFFSET] = bs->hm[ctr][j+OFFSET];
+                            nm++;
+                        }
+                    }
+                    bs->hm[ctr][LENGTH] = nm;
+                    bs->hm[ctr][PRELOOP] = nm % UNROLL;
+                    bs->hm[ctr] = realloc(bs->hm[ctr], ((unsigned long)nm+OFFSET) * sizeof(hm_t));
+                    bs->cf2_ext[ctr] = realloc(bs->cf2_ext[ctr], ((unsigned long)nm) * sizeof(cf2_ext_t));
                     sort_terms_ff_8(&(bs->cf2_ext[ctr]), &(bs->hm[ctr]), ht);
                     ctr++;
                 }
@@ -346,8 +359,22 @@ void import_input_data(
 
                     for (j = off; j < off+lens[i]; ++j) {
                         /* make coefficient positive */
-                        cf2_ext[j-off]   =  gf256_from_i32(cfs_ff[j]);
+                        cf2_ext[j-off]   =  gf256_from_integer(cfs_ff[j]);
                     }
+                    // We are in char = 2, so several coefficients might be mapped to zero,
+                    // thus we remove them.
+                    len_t nm = 0;
+                    for (j = 0; j < lens[i]; ++j) {
+                        if (cf2_ext[j] != 0) {
+                            cf2_ext[nm] = cf2_ext[j];
+                            bs->hm[ctr][nm+OFFSET] = bs->hm[ctr][j+OFFSET];
+                            nm++;
+                        }
+                    }
+                    bs->hm[ctr][LENGTH] = nm;
+                    bs->hm[ctr][PRELOOP] = nm % UNROLL;
+                    bs->hm[ctr] = realloc(bs->hm[ctr], ((unsigned long)nm+OFFSET) * sizeof(hm_t));
+                    bs->cf2_ext[ctr] = realloc(bs->cf2_ext[ctr], ((unsigned long)nm) * sizeof(cf2_ext_t));
                     sort_terms_ff_8(&(bs->cf2_ext[ctr]), &(bs->hm[ctr]), ht);
                     ctr++;
                 }
