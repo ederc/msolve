@@ -128,13 +128,7 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_gf_16(
         rba = NULL;
     }
     k = 0;
-    fprintf(stderr, "dr = ");
-    for (int ii= 0; ii < ncols; ++ii) {
-        fprintf(stderr, "%u ", dr[ii]);
-    }
-    fprintf(stderr, "\n");
     for (i = dpiv; i < ncols; ++i) {
-        fprintf(stderr, "dr[%d] = %u\n", i, dr[i]);
         if (dr[i] == 0) {
             continue;
         }
@@ -146,7 +140,6 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_gf_16(
             continue;
         }
         /* found reducer row, get multiplier */
-        const cf2_ext_t mul= dr[i];
         dts   = pivs[i];
         if (i < ncl) {
             /* set corresponding bit of reducer in reducer bit array */
@@ -162,27 +155,19 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_gf_16(
         const len_t os  = dts[PRELOOP];
         const len_t len = dts[LENGTH];
         const hm_t * const ds  = dts + OFFSET;
-        for (j = 0; j < len; ++j) {
-            fprintf(stderr, "%u | %u\n", cfs[j], ds[j]);
-        }
+        const cf2_ext_t *restrict mul = gf16_mul_row(dr[i]);
         for (j = 0; j < os; ++j) {
-            dr[ds[j]] =  gf16_mul_add_table(dr[ds[j]], cfs[j], mul);
+            dr[ds[j]] ^= mul[cfs[j]];
         }
         for (; j < len; j += UNROLL) {
-            dr[ds[j]]   =  gf16_mul_add_table(dr[ds[j]], cfs[j], mul);
-            dr[ds[j+1]] =  gf16_mul_add_table(dr[ds[j+1]], cfs[j+1], mul);
-            dr[ds[j+2]] =  gf16_mul_add_table(dr[ds[j+2]], cfs[j+2], mul);
-            dr[ds[j+3]] =  gf16_mul_add_table(dr[ds[j+3]], cfs[j+3], mul);
+            dr[ds[j]] ^= mul[cfs[j]];
+            dr[ds[j+1]] ^= mul[cfs[j+1]];
+            dr[ds[j+2]] ^= mul[cfs[j+2]];
+            dr[ds[j+3]] ^= mul[cfs[j+3]];
         }
 // #endif
         dr[i] = 0;
-    fprintf(stderr, "round end dr = ");
-    for (int ii= 0; ii < ncols; ++ii) {
-        fprintf(stderr, "%u ", dr[ii]);
     }
-    fprintf(stderr, "\n");
-    }
-    fprintf(stderr, "k = %d\n", k);
     if (k == 0) {
         return NULL;
     }
@@ -271,7 +256,7 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_gf_256(
             continue;
         }
         /* found reducer row, get multiplier */
-        const cf2_ext_t mul= dr[i];
+        // const cf2_ext_t mul= dr[i];
         dts   = pivs[i];
         if (i < ncl) {
             /* set corresponding bit of reducer in reducer bit array */
@@ -287,14 +272,15 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_gf_256(
         const len_t os  = dts[PRELOOP];
         const len_t len = dts[LENGTH];
         const hm_t * const ds  = dts + OFFSET;
+        const cf2_ext_t *restrict mul = gf256_mul_row(dr[i]);
         for (j = 0; j < os; ++j) {
-            dr[ds[j]] =  gf256_mul_add_table(dr[ds[j]], cfs[j], mul);
+            dr[ds[j]] ^= mul[cfs[j]];
         }
         for (; j < len; j += UNROLL) {
-            dr[ds[j]]   =  gf256_mul_add_table(dr[ds[j]], cfs[j], mul);
-            dr[ds[j+1]] =  gf256_mul_add_table(dr[ds[j+1]], cfs[j+1], mul);
-            dr[ds[j+2]] =  gf256_mul_add_table(dr[ds[j+2]], cfs[j+2], mul);
-            dr[ds[j+3]] =  gf256_mul_add_table(dr[ds[j+3]], cfs[j+3], mul);
+            dr[ds[j]] ^= mul[cfs[j]];
+            dr[ds[j+1]] ^= mul[cfs[j+1]];
+            dr[ds[j+2]] ^= mul[cfs[j+2]];
+            dr[ds[j+3]] ^= mul[cfs[j+3]];
         }
 // #endif
         dr[i] = 0;
