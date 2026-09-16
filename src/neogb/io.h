@@ -99,7 +99,8 @@ int32_t check_and_set_meta_data(
         const int32_t reduce_gb,
         const int32_t pbm_file,
         const int32_t truncate_lifting,
-        const int32_t info_level
+        const int32_t info_level,
+        const int32_t byte_encoding
         );
 
 int32_t check_and_set_meta_data_trace(
@@ -125,7 +126,8 @@ int32_t check_and_set_meta_data_trace(
         const int32_t nr_primes,
         const int32_t pbm_file,
         const int32_t truncate_lifting,
-        const int32_t info_level
+        const int32_t info_level,
+        const int32_t byte_encoding
         );
 
 /* for normal form input data */

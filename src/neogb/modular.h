@@ -194,7 +194,8 @@ int64_t f4_trace_julia(
         const uint32_t prime_start,
         const int32_t nr_primes,
         const int32_t pbm_file,
-        const int32_t info_level
+        const int32_t info_level,
+        const int32_t byte_encoding
         );
 
 bs_t *modular_f4(

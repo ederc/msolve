@@ -54,7 +54,8 @@ int64_t export_f4(
         const int32_t la_option,
         const int32_t reduce_gb,
         const int32_t pbm_file,
-        const int32_t info_level
+        const int32_t info_level,
+        const int32_t byte_encoding
         );
 
 int64_t export_results_from_f4(

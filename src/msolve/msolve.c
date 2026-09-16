@@ -2143,6 +2143,7 @@ int msolve_trace_qq(mpz_param_t *mpz_paramp,
                     int *to_split_ptr,
                     primes_t **binit_primes,
                     int32_t info_level,
+                    int32_t byte_encoding,
                     int32_t print_gb,
                     int32_t pbm_file,
                     files_gb *files,
@@ -2190,7 +2191,7 @@ int msolve_trace_qq(mpz_param_t *mpz_paramp,
           elim_block_len, nr_vars, nr_gens, nr_nf, ht_size, nr_threads,
           max_nr_pairs, reset_ht, la_option, use_signatures, reduce_gb,
           prime_start, nr_primes, pbm_file, 0 /*truncate_lifting */,
-          info_level)) {
+          info_level, byte_encoding)) {
     free(st);
     return -3;
   }
@@ -3734,6 +3735,7 @@ int real_msolve_qq(mpz_param_t *mpz_paramp, param_t **nmod_param, int *dim_ptr,
                    int32_t lift_matrix,
                    primes_t **binit_primes,
                    int32_t info_level,
+                   int32_t byte_encoding,
                    int32_t print_gb,
                    int32_t pbm_file,
                    int32_t precision,
@@ -3773,6 +3775,7 @@ int real_msolve_qq(mpz_param_t *mpz_paramp, param_t **nmod_param, int *dim_ptr,
                           &to_split,
                           binit_primes,
                           info_level,
+                          byte_encoding,
                           print_gb,
                           pbm_file,
                           files,
@@ -3971,6 +3974,7 @@ int core_msolve(
   int32_t is_gb,
   int32_t lift_matrix,
   int32_t precision,
+  int32_t byte_encoding,
   files_gb *files,
   data_gens_ff_t *gens,
   param_t **paramp,
@@ -4029,7 +4033,7 @@ restart:
                     /* gens->field_char, 0 [> DRL order <], gens->nvars, */
                     gens->ngens, saturate, initial_hts, nr_threads, max_pairs,
                     update_ht, la_option, use_signatures, 1 /* reduce_gb */, 0,
-                    0 /*truncate_lifting */, info_level);
+                    0 /*truncate_lifting */, info_level, byte_encoding);
 
             if (st->homogeneous != 1) {
                 fprintf(ERRSTREAM,
@@ -4111,7 +4115,7 @@ restart:
                     /* gens->field_char, 0 [> DRL order <], gens->nvars, */
                     gens->ngens, saturate, initial_hts, nr_threads, max_pairs,
                     update_ht, la_option, use_signatures, 1 /* reduce_gb */, 0,
-                    0 /*truncate_lifting */, info_level);
+                    0 /*truncate_lifting */, info_level, byte_encoding);
 
             if (!success) {
                 fprintf(ERRSTREAM,"Bad input data, stopped computation.\n");
@@ -4203,7 +4207,7 @@ restart:
                     /* gens->field_char, 0 [> DRL order <], gens->nvars, */
                     gens->ngens, 1, initial_hts, nr_threads, max_pairs,
                     update_ht, la_option, use_signatures, 1 /* reduce_gb */, 0,
-                    0 /*truncate_lifting */, info_level);
+                    0 /*truncate_lifting */, info_level, byte_encoding);
 
 	    st->gfc  = gens->field_char;
             if(info_level){
@@ -4487,7 +4491,7 @@ restart:
                        initial_hts, unstable_staircase, nr_threads, max_pairs,
                        elim_block_len, update_ht,
                        la_option, use_signatures, lift_matrix,
-                       &init_primes, info_level, print_gb,
+                       &init_primes, info_level, byte_encoding, print_gb,
                        generate_pbm, precision, files, round, get_param);
       if(print_gb){
           return 0;
@@ -4589,7 +4593,7 @@ restart:
                     /* gens->field_char, 0 [> DRL order <], gens->nvars, */
                     gens->ngens, normal_form, initial_hts, nr_threads, max_pairs,
                     update_ht, la_option, use_signatures, 1 /* reduce_gb */, 0,
-                    0 /*truncate_lifting */, info_level);
+                    0 /*truncate_lifting */, info_level, byte_encoding);
 
             st->gfc  = gens->field_char;
             if (!success) {
@@ -4933,7 +4937,7 @@ restart:
                         gens->ngens, saturate, initial_hts, nr_threads,
                         max_pairs, update_ht, la_option, use_signatures,
                         1, prime_start, nr_primes, 0, truncate_lifting,
-                        info_level)) {
+                        info_level, byte_encoding)) {
                 free(st);
                 return -3;
             }
@@ -5164,7 +5168,7 @@ restart:
 		            initial_hts, unstable_staircase, nr_threads, max_pairs,
                     elim_block_len, update_ht,
                     la_option, use_signatures, lift_matrix,
-                    &init_primes, info_level, print_gb,
+                    &init_primes, info_level, byte_encoding, print_gb,
                     generate_pbm, precision, files, round, get_param);
 
             if(print_gb){
@@ -5488,7 +5492,8 @@ void msolve_julia(
         const int32_t get_param,
         const int32_t genericity_handling,
         const int32_t precision,
-        const int32_t info_level
+        const int32_t info_level,
+        const int32_t byte_encoding
         )
 {
     /* timinigs */
@@ -5558,7 +5563,7 @@ void msolve_julia(
 			  genericity_handling, 0 /* unstable_staircase -> change to 2?*/,
 			  0 /* saturate */, 0 /* colon */,
 			  0 /* normal_form */, 0 /* normal_form_matrix */,
-			  0 /* is_gb */, 0 /*lift_matrix */, precision, files,
+			  0 /* is_gb */, 0 /*lift_matrix */, precision, byte_encoding, files,
 			  gens, &param, &mpz_param, &nb_real_roots, &real_roots, &real_pts);
 
     if (ret == -1) {

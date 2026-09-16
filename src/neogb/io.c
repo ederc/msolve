@@ -1284,7 +1284,8 @@ int32_t check_and_set_meta_data(
         const int32_t reduce_gb,
         const int32_t pbm_file,
         const int32_t truncate_lifting,
-        const int32_t info_level
+        const int32_t info_level,
+        const int32_t byte_encoding
         )
 {
     if (nr_gens <= 0
@@ -1317,6 +1318,7 @@ int32_t check_and_set_meta_data(
     st->fc    = field_char;
 
     set_ff_bits(st, st->fc);
+    st->byte_encoding = byte_encoding;
 
     st->use_signatures  =   use_signatures;
 
@@ -1411,7 +1413,8 @@ int32_t check_and_set_meta_data_trace(
         const int32_t nr_primes,
         const int32_t pbm_file,
         const int32_t truncate_lifting,
-        const int32_t info_level
+        const int32_t info_level,
+        const int32_t byte_encoding
         )
 {
     st->prime_start = prime_start;
@@ -1426,7 +1429,7 @@ int32_t check_and_set_meta_data_trace(
             field_char, mon_order, elim_block_len, nr_vars, nr_gens,
             nr_nf, ht_size, nr_threads, max_nr_pairs, reset_hash_table,
             la_option, use_signatures, reduce_gb, pbm_file, truncate_lifting,
-            info_level);
+            info_level, byte_encoding);
 }
 
 static inline void reset_function_pointers(

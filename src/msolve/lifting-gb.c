@@ -1745,6 +1745,7 @@ gb_modpoly_t *groebner_qq(
   int32_t print_gb = flags->print_gb;
   int32_t truncate_lifting = flags->truncate_lifting;
   int mon_order = 0;
+  int32_t byte_encoding = 0;
 
   /* input data */
   uint32_t field_char = gens->field_char;
@@ -1780,7 +1781,7 @@ gb_modpoly_t *groebner_qq(
           lens, exps, cfs, field_char, mon_order, elim_block_len,
           nr_vars, nr_gens, 0 /* # normal forms */, ht_size,
           nr_threads, max_nr_pairs, reset_ht, la_option, use_signatures,
-          reduce_gb, pbm_file, truncate_lifting, info_level);
+          reduce_gb, pbm_file, truncate_lifting, info_level, byte_encoding);
 
   /* all input generators are invalid */
   if (success == -1) {
@@ -1926,7 +1927,8 @@ int64_t export_groebner_qq(
         const int32_t reduce_gb,
         const int32_t pbm_file,
         const int32_t truncate_lifting,
-        const int32_t info_level
+        const int32_t info_level,
+        const int32_t byte_encoding
         )
 {
     /* timings */
@@ -1947,7 +1949,7 @@ int64_t export_groebner_qq(
             lens, exps, cfs, field_char, mon_order, elim_block_len,
             nr_vars, nr_gens, 0 /* # normal forms */, ht_size,
             nr_threads, max_nr_pairs, reset_ht, la_option, 0 /*use_signatures*/,
-            reduce_gb, pbm_file, truncate_lifting, info_level);
+            reduce_gb, pbm_file, truncate_lifting, info_level, byte_encoding);
 
     /* all input generators are invalid */
     if (success == -1) {

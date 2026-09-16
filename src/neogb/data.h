@@ -407,6 +407,7 @@ struct md_t
     int64_t nterms_basis;
     int32_t size_basis;
     int32_t ff_bits;
+    int32_t byte_encoding;
     int32_t nf;
     int32_t f4_qq_round;
     int32_t use_signatures; /* module monomial ordering:

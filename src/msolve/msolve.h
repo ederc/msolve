@@ -47,6 +47,7 @@ int msolve_trace_qq(
         int *to_split_ptr,
         primes_t **binit_primes,
         int32_t info_level,
+        int32_t byte_encoding,
         int32_t print_gb,
         int32_t pbm_file,
         files_gb *files,
@@ -116,6 +117,7 @@ int real_msolve_qq(
         int32_t lift_matrix,
         primes_t **binit_primes,
         int32_t info_level,
+        int32_t byte_encoding,
         int32_t print_gb,
         int32_t pbm_file,
         int32_t precision,
@@ -147,6 +149,7 @@ int core_msolve(
         int32_t is_gb,
         int32_t lift_matrix,
         int32_t precision,
+        int32_t byte_encoding,
         files_gb *files,
         data_gens_ff_t *gens,
         param_t **paramp,
@@ -189,7 +192,8 @@ void msolve_julia(
         const int32_t get_param,
         const int32_t genericity_handling,
         const int32_t precision,
-        const int32_t info_level
+        const int32_t info_level,
+        const int32_t byte_encoding
         );
 
 void free_msolve_julia_result_data(
@@ -228,7 +232,8 @@ int64_t export_groebner_qq(
         const int32_t reduce_gb,
         const int32_t pbm_file,
         const int32_t truncate_lifting,
-        const int32_t info_level
+        const int32_t info_level,
+        const int32_t byte_encoding
         );
 
 // Utility functions to init and deinit data structures

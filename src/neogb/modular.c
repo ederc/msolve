@@ -1814,7 +1814,8 @@ int64_t f4_trace_julia(
         uint32_t prime_start,
         int32_t nr_primes,
         int32_t pbm_file,
-        int32_t info_level
+        int32_t info_level,
+        int32_t byte_encoding
         )
 {
     /* only for computations over the rationals */
@@ -1857,7 +1858,7 @@ int64_t f4_trace_julia(
                 field_char, mon_order, elim_block_len, nr_vars, nr_gens,
                 nr_nf, ht_size, nr_threads, max_nr_pairs, reset_ht, la_option,
                 use_signatures, reduce_gb, prime_start, nr_primes, pbm_file,
-                truncate_lifting, info_level)) {
+                truncate_lifting, info_level, byte_encoding)) {
         return 0;
     }
 
