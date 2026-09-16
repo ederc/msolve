@@ -315,9 +315,9 @@ static void print_msolve_polynomials_ff(
       case -4 :
       case -8 :
         if (st->byte_encoding == 0) {
-          fprintf(file, "+%u", bs->cf2_ext[bs->hm[idx][COEFFS]][0]);
+          fprintf(file, "+%u", bs->cf2_ext[bs->hm[idx][COEFFS]][j]);
         } else {
-          fprintf(file, "+0x%hhx", bs->cf2_ext[bs->hm[idx][COEFFS]][0]);
+          fprintf(file, "+0x%hhx", bs->cf2_ext[bs->hm[idx][COEFFS]][j]);
         }
         break;
 		  case 8:

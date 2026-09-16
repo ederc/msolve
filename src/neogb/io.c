@@ -369,9 +369,7 @@ void import_input_data(
                         } else {
                             cf2_ext[j-off]   =  gf256_from_i32(cfs_ff[j]);
                         }
-                        fprintf(stderr, "%hhu 0x%hhx | ", cf2_ext[j-off], cf2_ext[j-off]);
                     }
-                    fprintf(stderr, "\n");
                     // We are in char = 2, so several coefficients might be mapped to zero,
                     // thus we remove them.
                     len_t nm = 0;

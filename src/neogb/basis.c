@@ -293,19 +293,20 @@ static inline void normalize_initial_basis_gf_16(
 
     for (i = 0; i < ld; ++i) {
         cf2_ext_t *row  = cf[hm[i][COEFFS]];
+        if (row[0] != 1) {
+            const cf2_ext_t inv = gf16_inv(row[0]);
+            const len_t os    = hm[i][PRELOOP];
+            const len_t len   = hm[i][LENGTH];
 
-        const cf2_ext_t inv = gf16_inv(row[0]);
-        const len_t os    = hm[i][PRELOOP];
-        const len_t len   = hm[i][LENGTH];
-
-        for (j = 0; j < os; ++j) {
-            row[j]  =   gf16_mul(row[j], inv);
-        }
-        for (j = os; j < len; j += UNROLL) {
-            row[j]    =   gf16_mul(row[j], inv);
-            row[j+1]  =   gf16_mul(row[j+1], inv);
-            row[j+2]  =   gf16_mul(row[j+2], inv);
-            row[j+3]  =   gf16_mul(row[j+3], inv);
+            for (j = 0; j < os; ++j) {
+                row[j]  =   gf16_mul(row[j], inv);
+            }
+            for (j = os; j < len; j += UNROLL) {
+                row[j]    =   gf16_mul(row[j], inv);
+                row[j+1]  =   gf16_mul(row[j+1], inv);
+                row[j+2]  =   gf16_mul(row[j+2], inv);
+                row[j+3]  =   gf16_mul(row[j+3], inv);
+            }
         }
     }
 }
@@ -324,19 +325,20 @@ static inline void normalize_initial_basis_gf_256(
 
     for (i = 0; i < ld; ++i) {
         cf2_ext_t *row  = cf[hm[i][COEFFS]];
+        if (row[0] != 1) {
+            const cf2_ext_t inv = gf256_inv(row[0]);
+            const len_t os    = hm[i][PRELOOP];
+            const len_t len   = hm[i][LENGTH];
 
-        const cf2_ext_t inv = gf256_inv(row[0]);
-        const len_t os    = hm[i][PRELOOP];
-        const len_t len   = hm[i][LENGTH];
-
-        for (j = 0; j < os; ++j) {
-            row[j]  =   gf256_mul(row[j], inv);
-        }
-        for (j = os; j < len; j += UNROLL) {
-            row[j]    =   gf256_mul(row[j], inv);
-            row[j+1]  =   gf256_mul(row[j+1], inv);
-            row[j+2]  =   gf256_mul(row[j+2], inv);
-            row[j+3]  =   gf256_mul(row[j+3], inv);
+            for (j = 0; j < os; ++j) {
+                row[j]  =   gf256_mul(row[j], inv);
+            }
+            for (j = os; j < len; j += UNROLL) {
+                row[j]    =   gf256_mul(row[j], inv);
+                row[j+1]  =   gf256_mul(row[j+1], inv);
+                row[j+2]  =   gf256_mul(row[j+2], inv);
+                row[j+3]  =   gf256_mul(row[j+3], inv);
+            }
         }
     }
 }

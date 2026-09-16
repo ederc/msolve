@@ -710,6 +710,18 @@ static void convert_sparse_matrix_rows_to_basis_elements(
             bs->constant  = 1;
         }
 #if 0
+    if (st->ff_bits == -4 || st->ff_bits == -8) {
+            printf("new element (%u): length %u | degree %d | ", bl+k, bs->hm[bl+k][LENGTH], bs->hm[bl+k][DEG]);
+            int kk = 0;
+            for (int kk=0; kk<bs->hm[bl+k][LENGTH]; ++kk) {
+            printf("%hhx | ", bs->cf2_ext[bl+k][kk]);
+            for (int jj=0; jj < bht->evl; ++jj) {
+                printf("%u ", bht->ev[bs->hm[bl+k][OFFSET+kk]][jj]);
+            }
+            printf(" || ");
+            }
+            printf("\n");
+        }
         if (st->ff_bits == 32) {
             printf("new element (%u): length %u | degree %d | ", bl+k, bs->hm[bl+k][LENGTH], bs->hm[bl+k][DEG]);
             int kk = 0;
