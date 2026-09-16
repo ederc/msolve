@@ -233,7 +233,7 @@ static void getoptions(
   char *out_fname = NULL;
   char *bin_out_fname = NULL;
   opterr = 1;
-  char short_options[] = "c:Cd:e:f:F:g:hiI:l:L:m:M:n:N:o:O:p:P:q:r:R:s:St:u:v:V";
+  char short_options[] = "b:c:Cd:e:f:F:g:hiI:l:L:m:M:n:N:o:O:p:P:q:r:R:s:St:u:v:V";
 
   /* For long options that have no equivalent short option, use a
      non-character as a pseudo short option, starting with CHAR_MAX + 1.
