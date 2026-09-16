@@ -21,6 +21,7 @@
 
 #include "io.h"
 #include "data.h"
+#include "gf2_ext.h"
 
 /* See exponent vector description in data.h for more information. */
 static inline void set_exponent_vector(
@@ -328,7 +329,11 @@ void import_input_data(
 
                     for (j = off; j < off+lens[i]; ++j) {
                         /* make coefficient positive */
-                        cf2_ext[j-off]   =  gf16_from_integer(cfs_ff[j]);
+                        if (st->byte_encoding == 0) {
+                            cf2_ext[j-off]   =  gf16_from_integer(cfs_ff[j]);
+                        } else {
+                            cf2_ext[j-off]   =  gf16_from_i32(cfs_ff[j]);
+                        }
                     }
                     // We are in char = 2, so several coefficients might be mapped to zero,
                     // thus we remove them.
@@ -359,8 +364,14 @@ void import_input_data(
 
                     for (j = off; j < off+lens[i]; ++j) {
                         /* make coefficient positive */
-                        cf2_ext[j-off]   =  gf256_from_integer(cfs_ff[j]);
+                        if (st->byte_encoding == 0) {
+                            cf2_ext[j-off]   =  gf256_from_integer(cfs_ff[j]);
+                        } else {
+                            cf2_ext[j-off]   =  gf256_from_i32(cfs_ff[j]);
+                        }
+                        fprintf(stderr, "%hhu 0x%hhx | ", cf2_ext[j-off], cf2_ext[j-off]);
                     }
+                    fprintf(stderr, "\n");
                     // We are in char = 2, so several coefficients might be mapped to zero,
                     // thus we remove them.
                     len_t nm = 0;
