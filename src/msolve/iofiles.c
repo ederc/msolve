@@ -199,7 +199,21 @@ static void print_msolve_polynomials_ff(
             fprintf(file, "#Reduced Groebner basis data\n");
         }
         fprintf(file, "#---\n");
-        fprintf(file, "#field characteristic: %u\n", st->gfc);
+        if (st->ff_bits < 0) {
+          fprintf(file, "#field characteristic: %u^%u -> GF(%u)", st->sfc, st->ext_deg, st->gfc);
+          if (st->byte_encoding == 0) {
+            fprintf(file, "\n");
+          } else {
+            if (st->ff_bits == -4) {
+              fprintf(file, ", coefficient byte encoding via: @^4 + @ + 1\n");
+            }
+            if (st->ff_bits == -8) {
+              fprintf(file, ", coefficient byte encoding via: @^8 + @^4 + @^3 + @ + 1\n");
+            }
+          }
+        } else {
+          fprintf(file, "#field characteristic: %u\n", st->gfc);
+        }
         fprintf(file, "#variable order:       ");
         for (i = 0; i < nv-1; ++i) {
             fprintf(file, "%s, ", vnames[i]);
