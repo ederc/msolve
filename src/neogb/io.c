@@ -22,7 +22,55 @@
 #include "io.h"
 #include "data.h"
 #include "gf2_ext.h"
+#include <stdint.h>
 
+/*
+ * For q = p^m, return true and set
+ *
+ *     *characteristic = p
+ *     *extension_degree = m
+ *
+ * Returns false if q < 2 or q is not a prime power.
+ *
+ * Trial division is suitable for small and moderately sized field orders.
+ */
+bool get_field_extension_parameters(uint32_t q,
+                             uint32_t *characteristic,
+                             uint32_t *extension_degree)
+{
+    if (q < 2 || characteristic == NULL || extension_degree == NULL)
+        return false;
+
+    uint32_t p;
+
+    if ((q & 1u) == 0) {
+        p = 2;
+    } else {
+        p = q;  /* Assume q is prime until a divisor is found. */
+
+        for (uint32_t d = 3; d <= q / d; d += 2) {
+            if (q % d == 0) {
+                p = d;
+                break;
+            }
+        }
+    }
+
+    uint32_t rem = q;
+    uint32_t deg = 0;
+
+    do {
+        if (rem % p != 0)
+            return false;
+
+        rem /= p;
+        ++deg;
+    } while (rem != 1);
+
+    *characteristic = p;
+    *extension_degree = deg;
+    return true;
+}
 /* See exponent vector description in data.h for more information. */
 static inline void set_exponent_vector(
         exp_t *ev,
@@ -1327,6 +1375,10 @@ int32_t check_and_set_meta_data(
     st->fc    = field_char;
 
     set_ff_bits(st, st->fc);
+
+    if (st->ff_bits < 0) {
+        get_field_extension_parameters(st->fc, &st->sfc, &st->ext_deg);
+    }
     st->byte_encoding = byte_encoding;
 
     st->use_signatures  =   use_signatures;

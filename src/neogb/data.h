@@ -390,6 +390,8 @@ struct md_t
     int32_t nvars;
     int32_t mnsel;
     int32_t homogeneous;
+    uint32_t sfc; /* subfield characteristic in extensions */
+    uint32_t ext_deg; /* extension degree */
     uint32_t gfc; /* global field characteristic */
     uint32_t fc;
     int32_t nev; /* number of elimination variables */
