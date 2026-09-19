@@ -155,15 +155,28 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_gf_16(
         const len_t os  = dts[PRELOOP];
         const len_t len = dts[LENGTH];
         const hm_t * const ds  = dts + OFFSET;
-        const cf2_ext_t *restrict mul = gf16_mul_row(dr[i]);
-        for (j = 0; j < os; ++j) {
-            dr[ds[j]] ^= mul[cfs[j]];
-        }
-        for (; j < len; j += UNROLL) {
-            dr[ds[j]] ^= mul[cfs[j]];
-            dr[ds[j+1]] ^= mul[cfs[j+1]];
-            dr[ds[j+2]] ^= mul[cfs[j+2]];
-            dr[ds[j+3]] ^= mul[cfs[j+3]];
+
+        if (dr[i] == 1) {
+            for (j = 0; j < os; ++j) {
+                dr[ds[j]] ^= cfs[j];
+            }
+            for (; j < len; j += UNROLL) {
+                dr[ds[j]] ^= cfs[j];
+                dr[ds[j+1]] ^= cfs[j+1];
+                dr[ds[j+2]] ^= cfs[j+2];
+                dr[ds[j+3]] ^= cfs[j+3];
+            }
+        } else {
+            const cf2_ext_t *restrict mul = gf16_mul_row(dr[i]);
+            for (j = 0; j < os; ++j) {
+                dr[ds[j]] ^= mul[cfs[j]];
+            }
+            for (; j < len; j += UNROLL) {
+                dr[ds[j]] ^= mul[cfs[j]];
+                dr[ds[j+1]] ^= mul[cfs[j+1]];
+                dr[ds[j+2]] ^= mul[cfs[j+2]];
+                dr[ds[j+3]] ^= mul[cfs[j+3]];
+            }
         }
 // #endif
         dr[i] = 0;
@@ -272,15 +285,27 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_gf_256(
         const len_t os  = dts[PRELOOP];
         const len_t len = dts[LENGTH];
         const hm_t * const ds  = dts + OFFSET;
-        const cf2_ext_t *restrict mul = gf256_mul_row(dr[i]);
-        for (j = 0; j < os; ++j) {
-            dr[ds[j]] ^= mul[cfs[j]];
-        }
-        for (; j < len; j += UNROLL) {
-            dr[ds[j]] ^= mul[cfs[j]];
-            dr[ds[j+1]] ^= mul[cfs[j+1]];
-            dr[ds[j+2]] ^= mul[cfs[j+2]];
-            dr[ds[j+3]] ^= mul[cfs[j+3]];
+        if (dr[i] == 1) {
+            for (j = 0; j < os; ++j) {
+                dr[ds[j]] ^= cfs[j];
+            }
+            for (; j < len; j += UNROLL) {
+                dr[ds[j]] ^= cfs[j];
+                dr[ds[j+1]] ^= cfs[j+1];
+                dr[ds[j+2]] ^= cfs[j+2];
+                dr[ds[j+3]] ^= cfs[j+3];
+            }
+        } else {
+            const cf2_ext_t *restrict mul = gf256_mul_row(dr[i]);
+            for (j = 0; j < os; ++j) {
+                dr[ds[j]] ^= mul[cfs[j]];
+            }
+            for (; j < len; j += UNROLL) {
+                dr[ds[j]] ^= mul[cfs[j]];
+                dr[ds[j+1]] ^= mul[cfs[j+1]];
+                dr[ds[j+2]] ^= mul[cfs[j+2]];
+                dr[ds[j+3]] ^= mul[cfs[j+3]];
+            }
         }
 // #endif
         dr[i] = 0;
