@@ -285,6 +285,11 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_gf_256(
         const len_t os  = dts[PRELOOP];
         const len_t len = dts[LENGTH];
         const hm_t * const ds  = dts + OFFSET;
+        // fprintf(stderr, "reducer [%d]-> ", i);
+        // for (j=0; j < len; ++j) {
+        //     fprintf(stderr, "%d ", cfs[j]);
+        // }
+        // fprintf(stderr, "\n");
         if (dr[i] == 1) {
             for (j = 0; j < os; ++j) {
                 dr[ds[j]] ^= cfs[j];
@@ -317,7 +322,7 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_gf_256(
     cf2_ext_t *cf  = (cf2_ext_t *)malloc((uint64_t)(k) * sizeof(cf2_ext_t));
     j = 0;
     hm_t *rs = row + OFFSET;
-    for (i = ncl; i < ncols; ++i) {
+    for (i = np; i < ncols; ++i) {
         if (dr[i] != 0) {
             rs[j] = (hm_t)i;
             cf[j] = dr[i];
@@ -718,17 +723,67 @@ static void exact_sparse_reduced_echelon_form_gf_256(
         }
     }
     j = nrl;
+    // copy coefficients of known pivots, interreduce them first
     for (i = 0; i < mat->nru; ++i) {
-        mat->cf2_ext[j]      = bs->cf2_ext[mat->rr[i][COEFFS]];
+        mat->cf2_ext[j]      = malloc((unsigned long)mat->rr[i][LENGTH] * sizeof(cf2_ext_t));
+        memcpy(mat->cf2_ext[j], bs->cf2_ext[mat->rr[i][COEFFS]],(unsigned long)mat->rr[i][LENGTH] * sizeof(cf2_ext_t));
         mat->rr[i][COEFFS] = j;
         ++j;
     }
 
+    cf2_ext_t *dr  = (cf2_ext_t *)malloc(
+            (uint64_t)ncols * nthrds * sizeof(cf2_ext_t));
+    /* interreduce old pivots */
+    cf2_ext_t *cfs;
+    hm_t cf_array_pos;
+    for (i = 0; i < mat->nru; ++i) {
+        k = mat->nru-1-i;
+        // fprintf(stderr, "prered pivs[%d] = %p\n", k, pivs[k]);
+        if (pivs[k]) {
+            memset(dr, 0, (uint64_t)ncols * sizeof(cf2_ext_t));
+            // fprintf(stderr,"cf_idx %d\n", pivs[k][COEFFS]);
+            cfs = mat->cf2_ext[pivs[k][COEFFS]];
+            cf_array_pos    = pivs[k][COEFFS];
+            const len_t os  = pivs[k][PRELOOP];
+            const len_t len = pivs[k][LENGTH];
+            const len_t bi  = pivs[k][BINDEX];
+            const len_t mh  = pivs[k][MULT];
+            const hm_t * const ds = pivs[k] + OFFSET;
+            sc  = ds[0];
+            for (j = 0; j < os; ++j) {
+                dr[ds[j]] = cfs[j];
+            }
+            for (; j < len; j += UNROLL) {
+                dr[ds[j]]    = cfs[j];
+                dr[ds[j+1]]  = cfs[j+1];
+                dr[ds[j+2]]  = cfs[j+2];
+                dr[ds[j+3]]  = cfs[j+3];
+            }
+            // fprintf(stderr, "sc = %d || dr[%d] = ", sc, k);
+            // for (j = 0; j < ncols; j++) {
+            //     fprintf(stderr, "%ld ", dr[j]);
+            // }
+            // fprintf(stderr, "\n");
+            free(pivs[k]);
+            free(cfs);
+            pivs[k] = NULL;
+            pivs[k] =
+                reduce_dense_row_by_known_pivots_sparse_gf_256(
+                    dr, mat, bs, pivs, sc, cf_array_pos, mh, bi, 0, st->fc);
+            // fprintf(stderr, "dr red done\n");
+            // if (mat->cf2_ext[pivs[k][COEFFS]][0] != 1) {
+            //     normalize_sparse_row_gf_256(
+            //             mat->cf2_ext[pivs[k][COEFFS]], pivs[k][PRELOOP], pivs[k][LENGTH], st->fc);
+            // }
+        }
+    }
+    
+
     /* unkown pivot rows we have to reduce with the known pivots first */
     hm_t **upivs  = mat->tr;
 
-    cf2_ext_t *dr  = (cf2_ext_t *)malloc(
-            (uint64_t)ncols * nthrds * sizeof(cf2_ext_t));
+    // cf2_ext_t *dr  = (cf2_ext_t *)malloc(
+    //         (uint64_t)ncols * nthrds * sizeof(cf2_ext_t));
     /* mo need to have any sharing dependencies on parallel computation,
      * no data to be synchronized at this step of the linear algebra */
 #pragma omp parallel for num_threads(nthrds) \
