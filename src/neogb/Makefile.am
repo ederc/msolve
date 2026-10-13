@@ -14,6 +14,7 @@ EXTRA_DIST	=		basis.h \
 								sba.h \
 								hash.h \
 								io.h \
+								la_ff.h \
 								modular.h \
 								nf.h \
 								f4sat.h \
