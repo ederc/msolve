@@ -657,7 +657,7 @@ static void convert_sparse_matrix_rows_to_basis_elements(
 
     hm_t **rows = mat->tr;
     deg_t pairs_deg = sht->hd[hcm[0]].deg;
-    switch_hcm_data_to_basis_hash_table(hcm, bht, mat, sht);
+    switch_hcm_data_to_basis_hash_table(hcm, bht, mat, sht, st->nthrds);
 #pragma omp parallel for num_threads(st->nthrds) \
     private(i, j, k)
     for (k = 0; k < np; ++k) {

@@ -1235,12 +1235,19 @@ static inline void copy_nf_in_matrix_from_bs_8(sp_matfglm_t* matrix,
     long N = nrows * matrix->ncols ;
     long i = 0;
     long k = 0;
-    while(k < len) {
+    while(k < len && i < matrix->ncols) {
       if(is_equal_exponent_bs(bht,hm[len-1-k],evi,lmb + i * nv,nv)){
 	matrix->dense_mat[N + i] = tbr->cf_8[tbr->hm[idx][COEFFS]][len-1-k];
 	k++;
       }
       i++;
+    }
+    if(k != len) {
+      fprintf(ERRSTREAM,
+	      "FGLM: normal form %ld has %lu monomials not in the monomial basis"
+	      " (of %ld); the basis is inconsistent, aborting.\n",
+	      (long)pos, (unsigned long)(len-k), (long)matrix->ncols);
+      exit(1);
     }
   }
 }
@@ -1261,12 +1268,19 @@ static inline void copy_nf_in_matrix_from_bs_16(sp_matfglm_t* matrix,
     long N = nrows * matrix->ncols ;
     long i = 0;
     long k = 0;
-    while(k < len) {
+    while(k < len && i < matrix->ncols) {
       if(is_equal_exponent_bs(bht,hm[len-1-k],evi,lmb + i * nv,nv)){
 	matrix->dense_mat[N + i] = tbr->cf_16[tbr->hm[idx][COEFFS]][len-1-k];
 	k++;
       }
       i++;
+    }
+    if(k != len) {
+      fprintf(ERRSTREAM,
+	      "FGLM: normal form %ld has %lu monomials not in the monomial basis"
+	      " (of %ld); the basis is inconsistent, aborting.\n",
+	      (long)pos, (unsigned long)(len-k), (long)matrix->ncols);
+      exit(1);
     }
   }
 }
@@ -1287,12 +1301,19 @@ static inline void copy_nf_in_matrix_from_bs_32(sp_matfglm_t* matrix,
     long N = nrows * matrix->ncols ;
     long i = 0;
     long k = 0;
-    while(k < len) {
+    while(k < len && i < matrix->ncols) {
       if(is_equal_exponent_bs(bht,hm[len-1-k],evi,lmb + i * nv,nv)){
 	matrix->dense_mat[N + i] = tbr->cf_32[tbr->hm[idx][COEFFS]][len-1-k];
 	k++;
       }
       i++;
+    }
+    if(k != len) {
+      fprintf(ERRSTREAM,
+	      "FGLM: normal form %ld has %lu monomials not in the monomial basis"
+	      " (of %ld); the basis is inconsistent, aborting.\n",
+	      (long)pos, (unsigned long)(len-k), (long)matrix->ncols);
+      exit(1);
     }
   }
 }

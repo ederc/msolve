@@ -23,6 +23,7 @@
 
 #include "../msolve/streams.h"
 
+
 #ifdef HAVE_AVX2
 #include <immintrin.h>
 #endif
@@ -203,14 +204,8 @@ static int32_t select_spairs_by_minimal_degree(
         md_t *md
         )
 {
-    len_t i, j, k, l, mdeg, nps, npd, nrr = 0, ntr = 0;
-    hm_t *b;
-    len_t load = 0;
-    hi_t lcm;
-    len_t *gens;
-    exp_t *elcm, *eb;
+    len_t i, j, k, l, mdeg, nps, npd;
     ht_t *bht   = bs->ht;
-    exp_t etmp[bht->evl];
     ps_t *psl   = md->ps;
     ht_t *sht   = md->ht;
 
@@ -233,42 +228,19 @@ static int32_t select_spairs_by_minimal_degree(
     }
 
     /* select pairs of this degree respecting maximal selection size mnsel */
-#if 0
-    printf("pair set sorted for symbolic preprocessing\n");
-    int pctr = 0;
-    deg_t degtest = 0;
-    for (i = 0; i < psl->ld; ++i) {
-        if (degtest != ps[i].deg) {
-            printf("%d elements\n", pctr);
-            printf("-- degree %d --\n", ps[i].deg);
-            degtest = ps[i].deg;
-            pctr = 0;
-        }
-        printf("%d --> deg %d --> [%u,%u]", i, ps[i].deg, ps[i].gen1, ps[i].gen2);
-        for (int jj = 0; jj < evl; ++jj) {
-            printf("%d ", bht->ev[ps[i].lcm][jj]);
-        }
-        pctr++;
-        printf("\n");
-    }
-    printf("\n");
-#endif
     for (i = 0; i < psl->ld; ++i) {
         if (ps[i].deg > mdeg) {
             break;
         }
     }
     npd  = i;
-    /* printf("npd %d\n", npd); */
-    /* sort_r(ps, (unsigned long)npd, sizeof(spair_t), spair_cmp, bht); */
-    /* now do maximal selection if it applies */
 
     /* if we stopped due to maximal selection size we still get the following
      * pairs of the same lcm in this matrix */
     if (npd > md->mnsel) {
         nps = md->mnsel;
-        lcm = ps[nps].lcm;
-        while (nps < npd && ps[nps+1].lcm == lcm) {
+        const hi_t lcmsel = ps[nps].lcm;
+        while (nps < npd && ps[nps+1].lcm == lcmsel) {
             nps++;
         }
     } else {
@@ -280,8 +252,9 @@ static int32_t select_spairs_by_minimal_degree(
     }
     /* statistics */
     md->num_pairsred  +=  nps;
-    /* list for generators */
-    gens  = (len_t *)malloc(2 * (unsigned long)nps * sizeof(len_t));
+    /* list for generators (2 entries per selected pair, one slice per
+     * lcm group) */
+    len_t *gens  = (len_t *)malloc(2 * (unsigned long)nps * sizeof(len_t));
     /* preset matrix meta data */
     mat->rr       = (hm_t **)malloc(2 * (unsigned long)nps * sizeof(hm_t *));
     hm_t **rrows  = mat->rr;
@@ -291,94 +264,168 @@ static int32_t select_spairs_by_minimal_degree(
     mat->nc = mat->ncl = mat->ncr = 0;
     mat->nr = 0;
 
+    /* group boundaries: group g covers the pairs [gs[g], gs[g+1]),
+     * nlcms is the number of groups (i.e. of different lcms) */
+    len_t *gs    = (len_t *)malloc((unsigned long)(nps+1) * sizeof(len_t));
+    len_t nlcms  = 0;
     i = 0;
-
     while (i < nps) {
-        /* ncols initially counts number of different lcms */
-        mat->nc++;
-        load  = 0;
-        lcm   = ps[i].lcm;
-        j = i;
-
-        while (j < nps && ps[j].lcm == lcm) {
-            gens[load++] = ps[j].gen1;
-            gens[load++] = ps[j].gen2;
-            ++j;
+        gs[nlcms++] = i;
+        const hi_t lcm1 = ps[i].lcm;
+        while (i < nps && ps[i].lcm == lcm1) {
+            i++;
         }
-        /* sort gens set */
-        qsort(gens, (unsigned long)load, sizeof(len_t), gens_cmp);
+    }
+    gs[nlcms] = nps;
 
-        len_t prev  = -1;
+    /* per group: number of distinct generators (one matrix row each)
+     * and the total number of terms (each row term is inserted into sht) */
+    len_t *nd     = (len_t *)malloc((unsigned long)nlcms * sizeof(len_t));
+    len_t *tcount = (len_t *)malloc((unsigned long)nlcms * sizeof(len_t));
 
-        /* first element with given lcm goes into reducer part of matrix,
-         * all remaining ones go to to be reduced part */
-        prev  = gens[0];
-        /* ev might change when enlarging the hash table during insertion of a new
-            * row in the matrix, thus we have to reset elcm inside the for loop */
-        elcm  = bht->ev[lcm];
-        b     = bs->hm[prev];
-        eb    = bht->ev[b[OFFSET]];
-        for (l = 0; l < evl; ++l) {
-            etmp[l]   =   (exp_t)(elcm[l] - eb[l]);
+    /* phase A: sort the generators of each group and count the
+     * distinct ones. The generator slice of group i occupies
+     * gens[2*s .. 2*e) (two entries per pair). */
+#pragma omp parallel for num_threads(md->nthrds) schedule(dynamic) \
+    private(j, k)
+    for (i = 0; i < nlcms; ++i) {
+        const len_t s    = gs[i];
+        const len_t e    = gs[i+1];
+        const len_t ngen = 2 * (e - s);
+        for (j = s; j < e; ++j) {
+            gens[2*j]   = ps[j].gen1;
+            gens[2*j+1] = ps[j].gen2;
         }
-        const hi_t h    = bht->hd[lcm].val - bht->hd[b[OFFSET]].val;
-        /* note that we use index mat->nc and not mat->nr since for each new
-         * lcm we add exactly one row to mat->rr */
-        rrows[nrr]  = multiplied_poly_to_matrix_row(sht, bht, h, etmp, b);
-        /* track trace information ? */
-        if (md->trace_level == LEARN_TRACER) {
-           rrows[nrr][BINDEX]  = prev;
-            if (bs->ht->eld == bs->ht->esz-1) {
-                enlarge_hash_table(bs->ht);
-            }
-#if PARALLEL_HASHING
-            rrows[nrr][MULT]    = check_insert_in_hash_table(etmp, h, bs->ht);
-#else
-            rrows[nrr][MULT]    = insert_in_hash_table(etmp, bs->ht);
-#endif
-        }
-
-        /* mark lcm column as lead term column */
-        sht->hd[rrows[nrr++][OFFSET]].idx = 2;
-        /* still we have to increase the number of rows */
-        mat->nr++;
-        for (k = 1; k < load; ++k) {
-            /* check sorted list for doubles */
-            if (gens[k] ==  prev) {
+        qsort(gens + 2*s, (unsigned long)ngen, sizeof(len_t), gens_cmp);
+        len_t prev = gens[2*s];
+        len_t ndg  = 1;
+        len_t tc   = bs->hm[prev][LENGTH];
+        for (k = 1; k < ngen; ++k) {
+            if (gens[2*s+k] == prev) {
                 continue;
             }
-            prev  = gens[k];
-            /* ev might change when enlarging the hash table during insertion of a new
-             * row in the matrix, thus we have to reset elcm inside the for loop */
-            elcm  = bht->ev[lcm];
-            if (elcm[0] > 0) {
+            prev = gens[2*s+k];
+            ndg++;
+            tc += bs->hm[prev][LENGTH];
+        }
+        nd[i]     = ndg;
+        tcount[i] = tc;
+    }
+
+    /* prefix sums: trows offset per group, total number of rows and terms */
+    len_t *pre_t     = (len_t *)malloc((unsigned long)nlcms * sizeof(len_t));
+    len_t total_nd   = 0;
+    len_t total_terms = 0;
+    for (i = 0; i < nlcms; ++i) {
+        pre_t[i]     = total_nd;
+        total_nd    += nd[i] - 1;
+        total_terms += tcount[i];
+    }
+
+    /* phase B: build the rows, one thread per lcm group.
+     * The first distinct generator of a group goes into the reducer
+     * part of the matrix, all remaining ones go to the to-be-reduced
+     * part. All rows of a group have the group lcm as lead monomial.
+     *
+     * A parallel pass requires that sht does not resize (and does not
+     * overflow) while it runs, so before each pass the table is
+     * pre-enlarged with a factor 2 headroom (which also covers the
+     * slots reserved but lost in concurrent insert races). If a pass
+     * overflows anyway, its rows are discarded and the pass is
+     * repeated on the enlarged table. */
+    int ovflag = 0;
+    for (;;) {
+    while (sht->esz < sht->eld + 2ULL * (hl_t)total_terms + 1) {
+        enlarge_hash_table(sht);
+    }
+    /* pre-enlarge bht for the tracer multiplier insertions
+     * (one insertion per matrix row: nlcms reducer rows plus
+     * total_nd to-be-reduced rows) */
+    if (md->trace_level == LEARN_TRACER) {
+        while (bht->esz - bht->eld < 2ULL * ((hl_t)total_nd + (hl_t)nlcms) + 1) {
+            enlarge_hash_table(bht);
+        }
+    }
+    ovflag = 0;
+
+#pragma omp parallel for num_threads(md->nthrds) schedule(dynamic) \
+    private(k, l)
+    for (i = 0; i < nlcms; ++i) {
+        const len_t s    = gs[i];
+        const len_t e    = gs[i+1];
+        const len_t ngen = 2 * (e - s);
+        const hi_t lcmg  = ps[s].lcm;
+        const exp_t * const elcm = bht->ev[lcmg];
+        len_t prev = gens[2*s];
+
+        /* reducer row */
+        const hm_t *b  = bs->hm[prev];
+        exp_t etmp[evl];
+        const exp_t *eb = bht->ev[b[OFFSET]];
+        for (l = 0; l < evl; ++l) {
+            etmp[l] = (exp_t)(elcm[l] - eb[l]);
+        }
+        int ov = 0;
+        hm_t *row = ts_multiplied_poly_to_matrix_row(
+                sht, bht, etmp, b, NULL, NULL, &ov);
+        if (md->trace_level == LEARN_TRACER) {
+            row[BINDEX]  = prev;
+            row[MULT]    = thread_safe_insert_in_hash_table(etmp, bht, NULL);
+        }
+        /* mark lcm column as lead term column */
+        __atomic_store_n(&sht->hd[row[OFFSET]].idx, 2, __ATOMIC_RELAXED);
+        rrows[i] = row;
+        if (ov) {
+            __atomic_store_n(&ovflag, 1, __ATOMIC_RELAXED);
+        }
+
+        len_t tn = 0;
+        for (k = 1; k < ngen; ++k) {
+            /* check sorted list for doubles */
+            if (gens[2*s+k] == prev) {
+                continue;
             }
+            prev  = gens[2*s+k];
             b     = bs->hm[prev];
             eb    = bht->ev[b[OFFSET]];
             for (l = 0; l < evl; ++l) {
-                etmp[l]   =   (exp_t)(elcm[l] - eb[l]);
+                etmp[l] = (exp_t)(elcm[l] - eb[l]);
             }
-            const hi_t h  = bht->hd[lcm].val - bht->hd[b[OFFSET]].val;
-            trows[ntr] = multiplied_poly_to_matrix_row(sht, bht, h, etmp, b);
-            /* track trace information ? */
+            ov = 0;
+            row = ts_multiplied_poly_to_matrix_row(
+                    sht, bht, etmp, b, NULL, NULL, &ov);
+            if (ov) {
+                __atomic_store_n(&ovflag, 1, __ATOMIC_RELAXED);
+            }
             if (md->trace_level == LEARN_TRACER) {
-                trows[ntr][BINDEX]  = prev;
-                if (bs->ht->eld == bs->ht->esz-1) {
-                    enlarge_hash_table(bs->ht);
-                }
-#if PARALLEL_HASHING
-                trows[ntr][MULT]    = check_insert_in_hash_table(etmp, h, bs->ht);
-#else
-                trows[ntr][MULT]    = insert_in_hash_table(etmp, bs->ht);
-#endif
+                row[BINDEX]  = prev;
+                row[MULT]    = thread_safe_insert_in_hash_table(etmp, bht, NULL);
             }
             /* mark lcm column as lead term column */
-            sht->hd[trows[ntr++][OFFSET]].idx = 2;
-            mat->nr++;
+            __atomic_store_n(&sht->hd[row[OFFSET]].idx, 2, __ATOMIC_RELAXED);
+            trows[pre_t[i] + tn] = row;
+            tn++;
         }
-        i = j;
     }
-    /* printf("%u pairs in degree %u\n", ctr, mdeg); */
+
+    if (!ovflag) {
+        break;
+    }
+    /* the pass overflowed: discard the rows it built and repeat it
+     * on the (now enlarged) table */
+    for (i = 0; i < nlcms; ++i) {
+        free(rrows[i]);
+        for (k = 0; k < nd[i]-1; ++k) {
+            free(trows[pre_t[i]+k]);
+        }
+    }
+    }
+
+    /* ncols counts the number of different lcms; the total number
+     * of rows is one reducer row plus the trows per lcm group */
+    mat->nc = nlcms;
+    mat->nr = total_nd + nlcms;
+
     /* fix rows to be reduced */
     mat->tr = realloc(mat->tr, (unsigned long)(mat->nr - mat->nc) * sizeof(hm_t *));
 
@@ -387,6 +434,10 @@ static int32_t select_spairs_by_minimal_degree(
     mat->cd         =   mdeg;
 
     free(gens);
+    free(gs);
+    free(nd);
+    free(tcount);
+    free(pre_t);
 
     /* remove selected spairs from pairset */
     memmove(ps, ps+nps, (unsigned long)(psl->ld-nps) * sizeof(spair_t));
@@ -544,15 +595,83 @@ start:
             if (bht->eld == bht->esz-1) {
                 enlarge_hash_table(bht);
             }
-#if PARALLEL_HASHING
-            rows[rr][MULT]    = check_insert_in_hash_table(etmp, h, bht);
-#else
             rows[rr][MULT]    = insert_in_hash_table(etmp, bht);
-#endif
         }
         sht->hd[m].idx  = 2;
         *nr             = rr + 1;
     }
+}
+
+/* thread-safe version of find_multiplied_reducer() for use inside an
+ * OpenMP parallel region. The table sht must be pre-enlarged so that
+ * no resize can occur. If q and q_tail are not NULL, every newly
+ * created sht entry is appended to the queue q (atomically).
+ * Returns 1 if a reducer was found (a row was added), 0 if no reducer
+ * exists, and -1 if the table sht overflowed (no row was added, m has
+ * to be processed again). */
+static int32_t ts_find_multiplied_reducer(
+        const bs_t *bs,
+        const hm_t m,
+        hl_t *nr,
+        hm_t **rows,
+        ht_t *sht,
+        const md_t * const md,
+        qent_t *q,
+        hl_t *q_tail
+        )
+{
+    len_t i, k;
+
+    ht_t *bht = bs->ht;
+
+    const len_t evl = bht->evl;
+
+    const exp_t * const e  = sht->ev[m];
+
+    const hd_t hdm    = sht->hd[m];
+    const len_t lml   = bs->lml;
+    const sdm_t ns    = ~hdm.sdm;
+
+    const sdm_t * const lms = bs->lm;
+    const bl_t * const lmps = bs->lmps;
+
+    exp_t etmp[bht->evl];
+    exp_t * const * const evb = bht->ev;
+
+    i = 0;
+start:
+    while (i < lml && lms[i] & ns) {
+        i++;
+    }
+    if (i < lml) {
+        const hm_t *b = bs->hm[lmps[i]];
+        const exp_t * const f = evb[b[OFFSET]];
+        for (k=0; k < evl; ++k) {
+            if (e[k] < f[k]) {
+                i++;
+                goto start;
+            }
+            etmp[k] = (exp_t)(e[k]-f[k]);
+        }
+
+        int ov = 0;
+        hm_t *row = ts_multiplied_poly_to_matrix_row(
+                sht, bht, etmp, b, q, q_tail, &ov);
+        if (ov) {
+            free(row);
+            return -1;
+        }
+        const hl_t rr = __atomic_fetch_add(nr, 1, __ATOMIC_RELAXED);
+        rows[rr] = row;
+        /* track trace information ? */
+        if (md->trace_level == LEARN_TRACER) {
+            row[BINDEX]  = lmps[i];
+            row[MULT]    = thread_safe_insert_in_hash_table(etmp, bht, NULL);
+        }
+        __atomic_store_n(&sht->hd[m].idx, 2, __ATOMIC_RELAXED);
+        return 1;
+    }
+    return 0;
 }
 
 static void symbolic_preprocessing(
@@ -572,6 +691,7 @@ static void symbolic_preprocessing(
     len_t nrr = mat->nc;
 
     ht_t *sht = md->ht;
+    ht_t *bht = bs->ht;
 
     /* note that we have already counted the different lcms, i.e.
      * ncols until this step. moreover, we have also already marked
@@ -581,38 +701,239 @@ static void symbolic_preprocessing(
 
     const hl_t oesld = sht->eld;
     const len_t onrr  = mat->nc;
-    i = 1;
-    /* we only have to check if idx is set for the elements already set
-     * when selecting spairs, afterwards (second for loop) we do not
-     * have to do this check */
-    while (mat->sz <= nrr + oesld) {
-        mat->sz *=  2;
-        mat->rr =   realloc(mat->rr, (unsigned long)mat->sz * sizeof(hm_t *));
-        if (mat->rr == NULL) {
-            fprintf(ERRSTREAM, "Allocating memory for matrix failed,\n");
-            fprintf(ERRSTREAM, "segmentation fault will follow.\n");
+
+    /* ---- parallel version ----
+     *
+     * The monomials form a closure: processing a monomial may
+     * create new monomials (the terms of its multiplier row) that
+     * have to be processed as well. We maintain a shared work
+     * queue of sht entries; every entry is enqueued exactly once
+     * (by its creator) and processed exactly once. The reducer of
+     * a monomial is the first dividing lead monomial in lmps
+     * order, so the closure (and hence the set of rows) does not
+     * depend on the processing order.
+     *
+     * A parallel phase requires that sht does not resize (and
+     * does not overflow) while it runs, so before each phase the
+     * table is enlarged with a factor 2 headroom. If the table
+     * overflows during a phase, the overflowing monomials are
+     * processed serially (which may enlarge sht on demand) and a
+     * new parallel phase starts on the larger table. Since each
+     * overflow at least doubles the table, the loop terminates. */
+
+     qent_t *q  = NULL;
+     hi_t *ovf  = (hi_t *)calloc((unsigned long)md->nthrds, sizeof(hi_t));
+     hl_t q_head = 0;
+     hl_t q_tail = 0;
+     hl_t q_cap  = 0;
+
+     for (;;) {
+        /* ensure a factor 2 headroom in sht so that no resize
+         * (and no overflow) can occur during the parallel phase */
+        while (sht->esz < 2ULL * (hl_t)sht->eld + 64) {
+            enlarge_hash_table(sht);
         }
-    }
-    for (; i < oesld; ++i) {
-        if (!sht->hd[i].idx) {
-            sht->hd[i].idx = 1;
-            mat->nc++;
-            find_multiplied_reducer(bs, i, &nrr, mat->rr, sht, md);
-        }
-    }
-    for (; i < sht->eld; ++i) {
-        if (mat->sz == nrr) {
+        const hl_t cap = sht->esz;
+
+        /* grow the row array so it can hold one row per table
+         * entry (at most one row is added per processed entry) */
+        while (mat->sz <= (hl_t)onrr + cap) {
             mat->sz *=  2;
-            mat->rr  =  realloc(mat->rr, (unsigned long)mat->sz * sizeof(hm_t *));
+            mat->rr =   realloc(mat->rr, (unsigned long)mat->sz * sizeof(hm_t *));
             if (mat->rr == NULL) {
                 fprintf(ERRSTREAM, "Allocating memory for matrix failed,\n");
                 fprintf(ERRSTREAM, "segmentation fault will follow.\n");
             }
         }
-        sht->hd[i].idx = 1;
-        mat->nc++;
-        find_multiplied_reducer(bs, i, &nrr, mat->rr, sht, md);
+
+        /* pre-enlarge bht for the tracer multiplier insertions
+         * (at most one insertion per processed entry, plus the
+         * slots lost in concurrent insert races) */
+        if (md->trace_level == LEARN_TRACER) {
+            while (bht->esz - bht->eld < 2ULL * cap + 1) {
+                enlarge_hash_table(bht);
+            }
+        }
+
+        /* grow the work queue to cover the whole table; new slots
+         * must start with flag 0 ("not yet produced"), the memory
+         * may otherwise hold garbage that a consumer's flag spin
+         * would mistake for a published slot */
+        if (q_cap < cap) {
+            const hl_t old_cap = q_cap;
+            q_cap = cap;
+            q = (qent_t *)realloc(q, (unsigned long)q_cap * sizeof(qent_t));
+            if (q != NULL) {
+                memset(q + old_cap, 0,
+                       (q_cap - old_cap) * sizeof(qent_t));
+            }
+        }
+
+        /* enqueue all not-yet-counted entries of the current
+         * table (only needed in the first iteration); the plain
+         * stores are published by the omp barrier below */
+        if (q_head == 0 && q_tail == 0) {
+            for (i = 1; i < oesld; ++i) {
+                if (!sht->hd[i].idx) {
+                    q[q_tail].v = (hi_t)i;
+                    q[q_tail].flag = 1;
+                    q_tail++;
+                }
+            }
+        }
+
+        for (i = 0; i < (hl_t)md->nthrds; ++i) {
+            ovf[i] = 0;
+        }
+
+        hl_t pnrr     = nrr;
+        hl_t nc_inc   = 0;
+        hl_t q_idle   = 0;
+        int overflow  = 0;
+
+        /* each thread pops entries from the shared queue. A slot
+         * is claimed with a CAS on q_head only after seeing that
+         * the slot has been produced (q_tail has passed it), and
+         * producers publish slot values with a per-slot ready
+         * flag, so a consumer never observes a stale slot value.
+         * A thread that finds the queue empty does not leave
+         * right away: other threads may still append, so it
+         * waits until the queue is refilled or all threads are
+         * idle. */
+        #pragma omp parallel num_threads(md->nthrds)
+        {
+            int my_ovf = 0;
+            for (;;) {
+                if (__atomic_load_n(&overflow, __ATOMIC_ACQUIRE)) {
+                    break;
+                }
+                hl_t pos = __atomic_load_n(&q_head, __ATOMIC_ACQUIRE);
+                if (pos >= __atomic_load_n(&q_tail, __ATOMIC_ACQUIRE)) {
+                    /* the queue is empty; a concurrent producer
+                     * may still append, so wait until the queue
+                     * is refilled or no thread is active any
+                     * more. q_idle counts threads that are
+                     * waiting here or have already retired from
+                     * this phase: it reaches nthrds exactly when
+                     * every thread is idle, and it stays there. */
+                    __atomic_add_fetch(&q_idle, 1, __ATOMIC_RELAXED);
+                    int reenter = 0;
+                    for (;;) {
+                        if (__atomic_load_n(&overflow,
+                                __ATOMIC_ACQUIRE)) {
+                            break;
+                        }
+                        if (__atomic_load_n(&q_tail,
+                                __ATOMIC_ACQUIRE)
+                                > __atomic_load_n(&q_head,
+                                      __ATOMIC_ACQUIRE)) {
+                            /* refilled: become active again */
+                            __atomic_sub_fetch(&q_idle, 1,
+                                    __ATOMIC_RELAXED);
+                            reenter = 1;
+                            break;
+                        }
+                        if (__atomic_load_n(&q_idle,
+                                __ATOMIC_ACQUIRE)
+                                >= (hl_t)md->nthrds) {
+                            break;
+                        }
+                    }
+                    if (reenter
+                            && !__atomic_load_n(&overflow,
+                                 __ATOMIC_ACQUIRE)) {
+                        continue;
+                    }
+                    break;
+                }
+                if (!__atomic_compare_exchange_n(
+                        &q_head, &pos, pos + 1, 0,
+                        __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+                    continue;
+                }
+                /* wait until the producer of slot pos published
+                 * its value */
+                while (!__atomic_load_n(&q[pos].flag,
+                        __ATOMIC_ACQUIRE)) {
+                }
+                __atomic_store_n(&q[pos].flag, 0, __ATOMIC_RELAXED);
+                const hi_t m = q[pos].v;
+                if (__atomic_load_n(&sht->hd[m].idx,
+                        __ATOMIC_ACQUIRE) == 2) {
+                    continue;
+                }
+                __atomic_add_fetch(&nc_inc, 1, __ATOMIC_RELAXED);
+                const int32_t r = ts_find_multiplied_reducer(
+                        bs, m, &pnrr, mat->rr, sht, md, q, &q_tail);
+                if (r < 0) {
+                    /* sht overflowed: this monomial is processed
+                     * serially after the barrier */
+                    __atomic_fetch_sub(&nc_inc, 1, __ATOMIC_RELAXED);
+                    __atomic_store_n(&overflow, 1, __ATOMIC_RELEASE);
+                    my_ovf = m;
+                    break;
+                }
+            }
+            if (my_ovf) {
+                __atomic_store_n(&ovf[omp_get_thread_num()], my_ovf,
+                        __ATOMIC_RELEASE);
+            }
+        }
+
+        /* continue the row counter with the parallel part */
+        nrr    = (len_t)pnrr;
+        mat->nc += (len_t)nc_inc;
+
+        /* serial processing of the overflowing monomials; the
+         * serial row builder enlarges sht on demand, and the
+         * entries created by the new rows are enqueued */
+        for (i = 0; i < (hl_t)md->nthrds; ++i) {
+            const hi_t m = __atomic_load_n(&ovf[i], __ATOMIC_ACQUIRE);
+            if (!m || sht->hd[m].idx == 2) {
+                continue;
+            }
+            sht->hd[m].idx = 1;
+            mat->nc++;
+            if (mat->sz == nrr) {
+                mat->sz *= 2;
+                mat->rr  =  realloc(mat->rr, (unsigned long)mat->sz * sizeof(hm_t *));
+                if (mat->rr == NULL) {
+                    fprintf(ERRSTREAM, "Allocating memory for matrix failed,\n");
+                    fprintf(ERRSTREAM, "segmentation fault will follow.\n");
+                }
+            }
+            const hl_t before = sht->eld;
+            find_multiplied_reducer(bs, m, &nrr, mat->rr, sht, md);
+            if (q_tail + (sht->eld - before) > q_cap) {
+                const hl_t old_cap = q_cap;
+                q_cap = 2 * q_cap + (sht->eld - before);
+                q = (qent_t *)realloc(q,
+                        (unsigned long)q_cap * sizeof(qent_t));
+                if (q != NULL) {
+                    memset(q + old_cap, 0,
+                           (q_cap - old_cap) * sizeof(qent_t));
+                }
+            }
+            /* plain stores; published by the next omp barrier */
+            for (hl_t s2 = before; s2 < sht->eld; ++s2) {
+                q[q_tail].v = (hi_t)s2;
+                q[q_tail].flag = 1;
+                q_tail++;
+            }
+        }
+
+        if (q_head >= q_tail) {
+            /* queue exhausted: all monomials of the closure
+             * have been processed */
+            break;
+        }
+        /* otherwise start a new parallel phase on the (possibly
+         * enlarged) table */
     }
+
+    free(q);
+    free(ovf);
+
     /* realloc to real size */
     mat->rr   =   realloc(mat->rr, (unsigned long)nrr * sizeof(hm_t *));
     mat->nr   +=  nrr - onrr;

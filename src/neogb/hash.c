@@ -354,6 +354,19 @@ static void enlarge_hash_table(
      * enlarge the hash table size any further and have to live with more
      * than 50% fill in. */
     if (ht->hsz < (hl_t)pow(2,32)) {
+        /* remember which positions are currently published in hmap;
+         * unpublished positions are lost CAS slots of the
+         * thread-safe insert and must stay unreachable, otherwise
+         * the rehash would revive them as duplicates of the same
+         * vector */
+        const hl_t old_hsz = ht->hsz;
+        hi_t *pub = (hi_t *)calloc(eld > 1 ? eld : 1, sizeof(hi_t));
+        for (i = 0; i < old_hsz; ++i) {
+            const hi_t p = ht->hmap[i];
+            if (p) {
+                pub[p] = 1;
+            }
+        }
         ht->hsz = 2 * ht->hsz;
         const hl_t hsz  = ht->hsz;
         ht->hmap  = realloc(ht->hmap, hsz * sizeof(hi_t));
@@ -364,8 +377,11 @@ static void enlarge_hash_table(
         memset(ht->hmap, 0, hsz * sizeof(hi_t));
         const hi_t mod =  (hi_t )(hsz-1);
 
-        /* reinsert known elements */
+        /* reinsert known elements (published ones only) */
         for (i = 1; i < eld; ++i) {
+            if (!pub[i]) {
+                continue;
+            }
             h = ht->hd[i].val;
 
             /* probing */
@@ -379,6 +395,7 @@ static void enlarge_hash_table(
                 break;
             }
         }
+        free(pub);
     } else {
         if (ht->hsz == (hl_t)pow(2,32)) {
           fprintf(ERRSTREAM, "Exponent space is now 2^32 elements wide, we cannot\n");
@@ -702,120 +719,6 @@ restart:
     return pos;
 }
 
-/* If the exponent vector is not contained in the hash table
- * we return 0 and hp is a pointer to the hash value and kp is
- * a pointer to the index of hmap where to store the exponent.
- * If the exponent vector is contained in the hash table we
- * return 1 and kp is the pointer of the index where the
- * exponent vector is stored in the exponents array of the
- * hash table. */
-static inline int32_t is_contained_in_hash_table(
-        const exp_t *a,
-        const ht_t * const ht,
-        const val_t h,
-        hi_t *kp
-        )
-{
-    hl_t i;
-    hi_t k;
-    len_t j;
-    /* const len_t evl = ht->evl;
-     * const hl_t hsz = ht->hsz; */
-    /* ht->hsz <= 2^32 => mod is always uint32_t */
-    const hi_t mod = (hi_t)(ht->hsz - 1);
-
-    /* probing */
-    k = h;
-    i = 0;
-restart:
-    for (; i < ht->hsz; ++i) {
-        k = (hi_t)((k+i) & mod);
-        const hi_t hm = ht->hmap[k];
-        if (!hm) {
-            *kp = k;
-            return 0;
-        }
-        if (ht->hd[hm].val != h) {
-            continue;
-        }
-        const exp_t * const ehm = ht->ev[hm];
-        for (j = 0; j < ht->evl-1; j += 2) {
-            if (a[j] != ehm[j] || a[j+1] != ehm[j+1]) {
-                i++;
-                goto restart;
-            }
-        }
-        if (a[ht->evl-1] != ehm[ht->evl-1]) {
-            i++;
-            goto restart;
-        }
-        *kp = hm;
-        return 1;
-    }
-    return -1;
-}
-
-/* This function assumes that is_contained_in_hash_table() was
- * called beforehand such that the values for h and k are already
- * precomputed. */
-static inline len_t add_to_hash_table(
-    const exp_t * const a,
-    const val_t h,
-    const hi_t k,
-    ht_t *ht
-    )
-{
-    /* add element to hash table */
-    hi_t pos;
-    ht->hmap[k] = pos = (hi_t)ht->eld;
-    exp_t *e    = ht->ev[pos];
-    hd_t *d     = ht->hd + pos;
-    memcpy(e, a, (unsigned long)ht->evl * sizeof(exp_t));
-    d->sdm  =   generate_short_divmask(e, ht);
-    d->deg  =   e[0];
-    d->deg  +=  ht->ebl > 0 ? e[ht->ebl] : 0;
-    d->val  =   h;
-
-    ht->eld++;
-
-    return pos;
-}
-
-static inline len_t check_insert_in_hash_table(
-        const exp_t *a,
-        val_t h,
-        ht_t *ht
-        )
-{
-    if (h == 0) {
-        /* generate hash value */
-        for (len_t j = 0; j < ht->evl; ++j) {
-            h +=  ht->rn[j] * a[j];
-        }
-    }
-
-    hi_t k  = 0;
-
-#if 1
-    len_t ld = 0;
-    while (1) {
-        ld = ht->eld;
-        if (is_contained_in_hash_table(a, ht, h, &k)) {
-            return k;
-        } else {
-            if (ht->eld == ld) {
-#pragma omp critical
-                ld = add_to_hash_table(a, h, k, ht);
-                return ld;
-            }
-        }
-    }
-#else
-    return is_contained_in_hash_table(a, ht, h, &k) ?
-        k : add_to_hash_table(a, h, k, ht);
-#endif
-}
-
 static inline hi_t insert_in_hash_table(
     const exp_t *a,
     ht_t *ht
@@ -876,6 +779,141 @@ restart:
     ht->eld++;
 
     return pos;
+}
+
+/* Thread-safe version of insert_in_hash_table() for use inside
+ * OpenMP parallel regions. The table must be pre-enlarged such
+ * that no resize (enlarge_hash_table) can occur while threads
+ * are running.
+ *
+ * Returns the index of the exponent vector in the hash table.
+ * If created is not NULL it is set to 1 if a new entry was
+ * created, 0 if the vector was already contained, and -1 if the
+ * table overflowed (in which case 0 is returned).
+ *
+ * Correctness:
+ * - Writers fill ev[pos]/hd[pos] BEFORE publishing hmap[k] = pos
+ *   (release). Readers acquire hmap[k] before touching hd/ev.
+ * - hmap slots are never reset to 0, so an empty slot reached
+ *   during probing proves that the vector is absent.
+ * - If two threads insert the same vector, both probe to the same
+ *   first empty slot; one wins the CAS, the other re-checks the
+ *   slot and finds the winner's published entry.
+ * - Lost CAS races only leave unused (hole) slots in ev/hd, which
+ *   does not affect correctness, only capacity. */
+static inline hi_t thread_safe_insert_in_hash_table(
+    const exp_t *a,
+    ht_t *ht,
+    int *created
+    )
+{
+    hl_t i;
+    hi_t k;
+    len_t j;
+    val_t h = 0;
+    const len_t evl = ht->evl;
+    /* ht->hsz <= 2^32 => mod is always uint32_t */
+    const hi_t mod = (hi_t)(ht->hsz - 1);
+
+    /* generate hash value */
+    for (j = 0; j < evl; ++j) {
+        h +=  ht->rn[j] * a[j];
+    }
+    /* probing */
+    k = h;
+    i = 0;
+restart:
+    for (; i < ht->hsz; ++i) {
+        k = (hi_t)((k+i) & mod);
+        const hi_t hm = __atomic_load_n(&ht->hmap[k], __ATOMIC_ACQUIRE);
+        if (!hm) {
+            /* a is not in the table; try to claim slot k. Reserve a
+             * new position for the vector without letting eld run
+             * past esz: a position that is counted but never written
+             * would be rehashed with an uninitialised vector as soon
+             * as the table enlarges. The CAS loop below only
+             * succeeds while the position is still in bounds. */
+            hl_t expected = __atomic_load_n(&ht->eld, __ATOMIC_RELAXED);
+            while (expected < (hl_t)ht->esz
+                    && !__atomic_compare_exchange_n(
+                           &ht->eld, &expected, expected + 1, 0,
+                           __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+            }
+            if (expected >= (hl_t)ht->esz) {
+                if (created != NULL) {
+                    *created = -1;
+                }
+                return 0;
+            }
+            const hi_t pos = (hi_t)expected;
+            exp_t *e   = ht->ev[pos];
+            hd_t *d    = ht->hd + pos;
+            memcpy(e, a, (unsigned long)evl * sizeof(exp_t));
+            d->sdm  =   generate_short_divmask(e, ht);
+            d->deg  =   e[0];
+            d->deg  +=  ht->ebl > 0 ? e[ht->ebl] : 0;
+            d->val  =   h;
+            hi_t zero = 0;
+            if (__atomic_compare_exchange_n(
+                    &ht->hmap[k], &zero, (hi_t)pos, 0,
+                    __ATOMIC_RELEASE, __ATOMIC_RELAXED)) {
+                if (created != NULL) {
+                    *created = 1;
+                }
+                return pos;
+            }
+            /* lost the race: another thread published hmap[k]
+             * concurrently; re-check whether it is our vector */
+            {
+                const hi_t hm2 = __atomic_load_n(&ht->hmap[k], __ATOMIC_ACQUIRE);
+                if (ht->hd[hm2].val == h) {
+                    const exp_t * const ehm = ht->ev[hm2];
+                    len_t eq = 1;
+                    for (j = 0; j < evl-1; j += 2) {
+                        if (a[j] != ehm[j] || a[j+1] != ehm[j+1]) {
+                            eq = 0;
+                            break;
+                        }
+                    }
+                    if (eq && a[evl-1] != ehm[evl-1]) {
+                        eq = 0;
+                    }
+                    if (eq) {
+                        if (created != NULL) {
+                            *created = 0;
+                        }
+                        return hm2;
+                    }
+                }
+            }
+            i++;
+            goto restart;
+        }
+        if (ht->hd[hm].val != h) {
+            continue;
+        }
+        const exp_t * const ehm = ht->ev[hm];
+        for (j = 0; j < evl-1; j += 2) {
+            if (a[j] != ehm[j] || a[j+1] != ehm[j+1]) {
+                i++;
+                goto restart;
+            }
+        }
+        if (a[evl-1] != ehm[evl-1]) {
+            i++;
+            goto restart;
+        }
+        if (created != NULL) {
+            *created = 0;
+        }
+        return hm;
+    }
+    /* table is full, which must not happen if the table was
+     * pre-enlarged properly */
+    if (created != NULL) {
+        *created = -1;
+    }
+    return 0;
 }
 
 static inline void reinitialize_hash_table(
@@ -1041,24 +1079,39 @@ static inline void switch_hcm_data_to_basis_hash_table(
     hi_t *hcm,
     ht_t *bht,
     const mat_t *mat,
-    const ht_t * const sht
+    const ht_t * const sht,
+    const int nthrds
     )
 {
     const len_t start = mat->ncl;
     const len_t end   = mat->nc;
 
-    while (bht->esz - bht->eld < mat->ncr) {
+    /* pre-size bht so that no table growth is needed inside the
+     * parallel region (the factor two also covers slots reserved
+     * but lost in concurrent insertion races). Insertions that
+     * overflow anyway are retried serially on an enlarged table. */
+    while (bht->esz - bht->eld < 2ULL * (hl_t)mat->ncr + 1) {
         enlarge_hash_table(bht);
     }
 
+    int *cr = (int *)malloc((unsigned long)(end - start) * sizeof(int));
+    #pragma omp parallel for num_threads(nthrds) schedule(static)
     for (len_t i = start; i < end; ++i) {
-#if PARALLEL_HASHING
-        hcm[i] = check_insert_in_hash_table(
-                sht->ev[hcm[i]], sht->hd[hcm[i]].val, bht);
-#else
-        hcm[i] = insert_in_hash_table(sht->ev[hcm[i]], bht);
-#endif
+        hcm[i] = thread_safe_insert_in_hash_table(
+                sht->ev[hcm[i]], bht, &cr[i-start]);
     }
+    /* serial retry for the insertions that overflowed the
+     * pre-enlarged table (rare; the factor two headroom only
+     * fails when many concurrent races waste slots) */
+    for (len_t i = start; i < end; ++i) {
+        if (cr[i-start] < 0) {
+            while (bht->esz - bht->eld < 2) {
+                enlarge_hash_table(bht);
+            }
+            hcm[i] = insert_in_hash_table(sht->ev[hcm[i]], bht);
+        }
+    }
+    free(cr);
 }
 
 static inline void insert_in_basis_hash_table_pivots(
@@ -1104,11 +1157,7 @@ static inline void insert_poly_in_hash_table(
     l = OFFSET;
 
     for (; l < len; ++l) {
-#if PARALLEL_HASHING
-        row[l] = check_insert_in_hash_table(ht1->ev[b[l]], ht1->hd[b[l]].val, ht2);
-#else
         row[l] = insert_in_hash_table(ht1->ev[b[l]], ht2);
-#endif
     }
 }
 
@@ -1128,7 +1177,6 @@ static inline void insert_multiplied_poly_in_hash_table(
     const len_t evl = ht1->evl;
 
     exp_t * const *ev1      = ht1->ev;
-    /* const hd_t * const hd1  = ht1->hd; */
 
     exp_t **ev2     = ht2->ev;
 
@@ -1142,12 +1190,7 @@ static inline void insert_multiplied_poly_in_hash_table(
             n[j]  = (exp_t)(ea[j] + eb[j]);
         }
 
-#if PARALLEL_HASHING
-        const val_t h   = h1 + hd1[b[l]].val;
-        row[l] = check_insert_in_hash_table(n, h, ht2);
-#else
         row[l] = insert_in_hash_table(n, ht2);
-#endif
     }
 }
 
@@ -1284,11 +1327,7 @@ static void reset_hash_table(
     }
     for (i = 0; i < pld; ++i) {
         e = oev[ps[i].lcm];
-#if PARALLEL_HASHING
-        ps[i].lcm = check_insert_in_hash_table(e, 0, ht);
-#else
         ps[i].lcm = insert_in_hash_table(e, ht);
-#endif
     }
     /* note: all memory is allocated as a big block, so it is
      *       enough to free oev[0].       */
@@ -1335,15 +1374,50 @@ static inline hi_t get_lcm(
         etmp[ebl] += etmp[i];
     }
     /* printf("lcm -> ");
-     * for (int ii = 0; ii < evl; ++ii) {
-     *     printf("%d ", etmp[ii]);
-     * }
-     * printf("\n"); */
-#if PARALLEL_HASHING
-    return check_insert_in_hash_table(etmp, 0, ht2);
-#else
+      * for (int ii = 0; ii < evl; ++ii) {
+      *     printf("%d ", etmp[ii]);
+      * }
+      * printf("\n"); */
     return insert_in_hash_table(etmp, ht2);
-#endif
+}
+
+/* computes lcm of a and b from ht1 and inserts it in ht2 in a
+ * thread-safe way; created (if not NULL) receives 1 if a new
+ * entry was created, 0 if the lcm was already present, -1 on
+ * table overflow. ht2 must be pre-enlarged. */
+static inline hi_t get_lcm_thread_safe(
+    const hi_t a,
+    const hi_t b,
+    const ht_t *ht1,
+    ht_t *ht2,
+    int *created
+    )
+{
+    len_t i;
+
+    /* exponents of basis elements, thus from basis hash table */
+    const exp_t * const ea = ht1->ev[a];
+    const exp_t * const eb = ht1->ev[b];
+    exp_t etmp[ht1->evl];
+    const len_t evl = ht1->evl;
+    const len_t ebl = ht1->ebl;
+
+    /* set degree(s), if ebl == 0, i.e. we do not have an elimination block
+     * order then the second for loop is just not executed and the third one
+     * computes correctly the full degree of the lcm. */
+    for (i = 1; i < evl; ++i) {
+        etmp[i]  = ea[i] < eb[i] ? eb[i] : ea[i];
+    }
+    /* reset degree entries */
+    etmp[0]   = 0;
+    etmp[ebl] = 0;
+    for (i = 1; i < ebl; ++i) {
+        etmp[0]  += etmp[i];
+    }
+    for (i = ebl+1; i < evl; ++i) {
+        etmp[ebl] += etmp[i];
+    }
+    return thread_safe_insert_in_hash_table(etmp, ht2, created);
 }
 
 static inline hm_t *poly_to_matrix_row(
@@ -1387,4 +1461,57 @@ static inline hm_t *multiplied_poly_to_matrix_row(
   insert_multiplied_poly_in_hash_table(row, hm, em, poly, bht, sht);
 
   return row;
+}
+
+/* Thread-safe version of multiplied_poly_to_matrix_row() for use inside
+ * OpenMP parallel regions. The table sht must be pre-enlarged so that
+ * no resize can occur; if the table overflows, *overflow is set and the
+ * row is left incomplete (the caller must discard it). If q and q_tail
+ * are not NULL, every newly created sht entry is appended to the queue
+ * q at position *q_tail (which is incremented atomically). */
+static inline hm_t *ts_multiplied_poly_to_matrix_row(
+    ht_t *sht,
+    const ht_t *bht,
+    const exp_t * const em,
+    const hm_t *poly,
+    qent_t *q,
+    hl_t *q_tail,
+    int *overflow
+    )
+{
+    hm_t *row = (hm_t *)malloc((uint64_t)(poly[LENGTH]+OFFSET) * sizeof(hm_t));
+    row[COEFFS]   = poly[COEFFS];
+    row[PRELOOP]  = poly[PRELOOP];
+    row[LENGTH]   = poly[LENGTH];
+
+    const len_t len = poly[LENGTH]+OFFSET;
+    const len_t evl = bht->evl;
+
+    exp_t *n = (exp_t *)malloc((unsigned long)evl * sizeof(exp_t));
+
+    for (len_t l = OFFSET; l < len; ++l) {
+        const exp_t * const eb = bht->ev[poly[l]];
+        for (len_t j = 0; j < evl; ++j) {
+            n[j]  = (exp_t)(em[j] + eb[j]);
+        }
+        int cr = 0;
+        const hi_t pos = thread_safe_insert_in_hash_table(n, sht, &cr);
+        row[l] = pos;
+        if (cr < 0) {
+            *overflow = 1;
+            break;
+        }
+        if (cr > 0 && q != NULL) {
+            const hl_t slot = __atomic_fetch_add(q_tail, 1,
+                    __ATOMIC_RELAXED);
+            /* publish the value first, then the ready flag: the
+             * consumer of this slot spins on the flag before
+             * reading the value */
+            q[slot].v = pos;
+            __atomic_store_n(&q[slot].flag, 1, __ATOMIC_RELEASE);
+        }
+    }
+    free(n);
+
+    return row;
 }

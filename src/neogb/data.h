@@ -39,7 +39,6 @@ static inline omp_int_t omp_get_thread_num(void) { return 0;}
 static inline omp_int_t omp_get_max_threads(void) { return 1;}
 #endif
 
-#define PARALLEL_HASHING 0
 #define ORDER_COLUMNS 1
 /* loop unrolling in sparse linear algebra:
  * we store the offset of the first elements not unrolled
@@ -197,6 +196,16 @@ struct bs_t
     cf32_t **cf_32; /* coefficients for finite fields (32 bit) */
     mpz_t **cf_qq;  /* coefficients for rationals (always multiplied such that
                        the denominator is 1) */
+};
+
+/* work queue entry for the parallel symbolic preprocessing: v holds
+ * the sht position, flag is the ready marker published by the
+ * producer thread (see symbolic_preprocessing in symbol.c) */
+typedef struct qent_t qent_t;
+struct qent_t
+{
+    hi_t v;
+    hi_t flag;
 };
 
 /* matrix stuff */

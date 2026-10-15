@@ -92,10 +92,6 @@ static void insert_and_update_spairs(
     while (bht->esz - bht->eld < bl) {
         enlarge_hash_table(bht);
     }
-#if PARALLEL_HASHING
-#pragma omp parallel for num_threads(nthrds) \
-    private(i)
-#endif
     for (i = 0; i < bl; ++i) {
         pp[i].lcm   =  get_lcm(bs->hm[i][OFFSET], nch, bht, bht);
         pp[i].gen1  = i;
@@ -169,10 +165,6 @@ static void insert_and_update_spairs(
     /* mark redundant elements in basis */
     deg_t dd = ndeg - bht->hd[nch].deg;
     if (bs->mltdeg > ndeg) {
-#if PARALLEL_HASHING
-#pragma omp parallel for num_threads(nthrds) \
-    private(i)
-#endif
         for (i = 0; i < lml; ++i) {
             hm_t lm = bs->hm[lmps[i]][OFFSET];
             if (bs->red[lmps[i]] == 0
@@ -266,8 +258,220 @@ static void update_basis_f4(
     }
     check_enlarge_pairset(ps, np);
 
-    for (i = 0; i < npivs; ++i) {
-        insert_and_update_spairs(ps, bs, bht, st);
+    #ifdef _OPENMP
+    const int nthrds = st->nthrds;
+    if (npivs > 1 && nthrds > 1) {
+        const len_t ld0   = bs->ld;
+        const len_t pl0   = ps->ld;
+        const bl_t lml    = bs->lml;
+        const bl_t * const lmps = bs->lmps;
+        const deg_t mltdeg0 = bs->mltdeg;
+
+        /* pre-size bht so that no table growth is needed inside the
+         * parallel region (the factor two covers slots lost to
+         * concurrent insertion races) */
+        while (bht->esz - bht->eld < 2ULL * (hl_t)np + 1) {
+            enlarge_hash_table(bht);
+        }
+
+        hm_t *nch  = (hm_t *)malloc((unsigned long)npivs * sizeof(hm_t));
+        deg_t *ndeg = (deg_t *)malloc((unsigned long)npivs * sizeof(deg_t));
+        deg_t *emax = (deg_t *)malloc((unsigned long)npivs * sizeof(deg_t));
+        len_t *off  = (len_t *)malloc((unsigned long)npivs * sizeof(len_t));
+        len_t *bll  = (len_t *)malloc((unsigned long)npivs * sizeof(len_t));
+
+        deg_t mx   = mltdeg0;
+        len_t offk = pl0;
+        for (i = 0; i < npivs; ++i) {
+            nch[i]  = bs->hm[ld0+i][OFFSET];
+            ndeg[i] = bs->hm[ld0+i][DEG];
+            off[i]  = offk;
+            bll[i]  = ld0 + i;
+            offk   += bll[i];
+            if (ndeg[i] > mx) {
+                mx = ndeg[i];
+            }
+            emax[i] = mx;
+        }
+
+        /* kmark[m] = first block whose redundancy loop would mark the
+         * element lmps[m] as redundant, or a sentinel if none does */
+        deg_t *kmark = (deg_t *)malloc((unsigned long)lml * sizeof(deg_t));
+        for (i = 0; i < (len_t)lml; ++i) {
+            kmark[i] = 0x7fffffff;
+        }
+        int overflow = 0;
+
+        #pragma omp parallel for num_threads(nthrds) schedule(dynamic)
+        for (i = 0; i < npivs; ++i) {
+            if (emax[i] > ndeg[i]) {
+                const deg_t dd = ndeg[i] - bht->hd[nch[i]].deg;
+                for (len_t m = 0; m < (len_t)lml; ++m) {
+                    if (check_monomial_division(bs->hm[lmps[m]][OFFSET], nch[i], bht)
+                            && bs->hm[lmps[m]][DEG]-bht->hd[bs->hm[lmps[m]][OFFSET]].deg >= dd) {
+                        deg_t old = __atomic_load_n(&kmark[m], __ATOMIC_RELAXED);
+                        while ((deg_t)i < old
+                                && !__atomic_compare_exchange_n(&kmark[m], &old, (deg_t)i,
+                                                                0, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+                        }
+                    }
+                }
+            }
+        }
+
+        /* same information at element level, for elements older than
+         * the new basis elements */
+        deg_t *kmark_el = (deg_t *)malloc((unsigned long)ld0 * sizeof(deg_t));
+        for (i = 0; i < ld0; ++i) {
+            kmark_el[i] = 0x7fffffff;
+        }
+        for (i = 0; i < (len_t)lml; ++i) {
+            if (kmark[i] < kmark_el[lmps[i]]) {
+                kmark_el[lmps[i]] = kmark[i];
+            }
+        }
+
+        /* creation-time degree and lcm of each new pair, indexed
+         * relatively to the start of the pairset before this update
+         * (the blocks are sorted later, so the creation-time lcm of the
+         * pair (j1, ld0+k) is not found at its sorted position) */
+        deg_t *cdeg = (deg_t *)malloc((unsigned long)np * sizeof(deg_t));
+        hi_t  *clcm = (hi_t *)malloc((unsigned long)np * sizeof(hi_t));
+
+        #pragma omp parallel for num_threads(nthrds) schedule(dynamic)
+        for (i = 0; i < npivs; ++i) {
+            spair_t *pp = ps->p + off[i];
+            int cr = 0;
+            for (int j = 0; j < (int)bll[i]; ++j) {
+                pp[j].lcm  = get_lcm_thread_safe(bs->hm[j][OFFSET], nch[i], bht, bht, &cr);
+                pp[j].gen1 = j;
+                pp[j].gen2 = ld0 + i;
+                if (bs->red[j] != 0 || (j < ld0 && kmark_el[j] < (deg_t)i)) {
+                    pp[j].deg = -1;
+                } else if (prime_monomials(bs->hm[j][OFFSET], nch[i], bht)) {
+                    pp[j].deg = -2;
+                } else if (st->nev == 0) {
+                    pp[j].deg = bht->hd[pp[j].lcm].deg;
+                } else {
+                    deg_t deg1 = bht->hd[pp[j].lcm].deg - bht->hd[bs->hm[j][OFFSET]].deg + bs->hm[j][DEG];
+                    deg_t deg2 = bht->hd[pp[j].lcm].deg - bht->hd[nch[i]].deg + bs->hm[ld0+i][DEG];
+                    pp[j].deg  = deg1 > deg2 ? deg1 : deg2;
+                }
+                cdeg[off[i]-pl0+j] = pp[j].deg;
+                clcm[off[i]-pl0+j] = pp[j].lcm;
+                if (cr < 0) {
+                    __atomic_store_n(&overflow, 1, __ATOMIC_RELAXED);
+                }
+            }
+            sort_r(pp, (unsigned long)bll[i], sizeof(spair_t), spair_cmp_update, bht);
+            /* local Gebauer-Moeller within this block's new pairs */
+            for (int j = 1; j < (int)bll[i]; ++j) {
+                if (pp[j].deg < 0) {
+                    continue;
+                }
+                for (int l = 0; l < j; ++l) {
+                    if (pp[l].deg == -1) {
+                        continue;
+                    }
+                    if (check_monomial_division(pp[j].lcm, pp[l].lcm, bht)) {
+                        pp[j].deg = -1;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (overflow) {
+            /* pre-sizing was insufficient: discard and run the serial update */
+            ps->ld = pl0;
+            for (i = 0; i < npivs; ++i) {
+                insert_and_update_spairs(ps, bs, bht, st);
+            }
+        } else {
+            /* Gebauer-Moeller against new pairs of later blocks; every
+             * pair is handled by exactly one thread */
+            len_t *k0of = (len_t *)malloc((unsigned long)np * sizeof(len_t));
+            for (i = 0; i < npivs; ++i) {
+                for (len_t r = 0; r < bll[i]; ++r) {
+                    k0of[off[i]-pl0+r] = i;
+                }
+            }
+
+            #pragma omp parallel
+            {
+                #pragma omp for schedule(dynamic)
+                for (i = 0; i < pl0; ++i) {
+                    spair_t *p = ps->p + i;
+                    const len_t j1 = p->gen1;
+                    const len_t l1 = p->gen2;
+                    for (len_t k = 0; k < npivs; ++k) {
+                        if (cdeg[off[k]-pl0+j1] <= p->deg
+                                && cdeg[off[k]-pl0+l1] <= p->deg
+                                && clcm[off[k]-pl0+j1] != p->lcm
+                                && clcm[off[k]-pl0+l1] != p->lcm
+                                && check_monomial_division(p->lcm, nch[k], bht)) {
+                            p->deg = -1;
+                            break;
+                        }
+                    }
+                }
+                #pragma omp for schedule(dynamic)
+                for (i = 0; i < np; ++i) {
+                    const len_t k0 = k0of[i];
+                    spair_t *p = ps->p + off[k0] + (i - (off[k0]-pl0));
+                    if (p->deg < 0) {
+                        continue;
+                    }
+                    for (len_t k = k0+1; k < npivs; ++k) {
+                        if (cdeg[off[k]-pl0+p->gen1] <= p->deg
+                                && cdeg[off[k]-pl0+p->gen2] <= p->deg
+                                && clcm[off[k]-pl0+p->gen1] != p->lcm
+                                && clcm[off[k]-pl0+p->gen2] != p->lcm
+                                && check_monomial_division(p->lcm, nch[k], bht)) {
+                            p->deg = -1;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            /* mark redundant elements, as the serial version would have */
+            for (i = 0; i < (len_t)lml; ++i) {
+                if (kmark[i] != 0x7fffffff && bs->red[lmps[i]] == 0) {
+                    bs->red[lmps[i]] = 1;
+                    st->num_redundant++;
+                }
+            }
+            bs->mltdeg = mx;
+
+            /* single compaction of the whole pairset */
+            len_t jj = 0;
+            for (i = 0; i < pl0+np; ++i) {
+                if (ps->p[i].deg >= 0) {
+                    ps->p[jj++] = ps->p[i];
+                }
+            }
+            ps->ld = jj;
+            st->num_gb_crit += (int64_t)(pl0+np) - (int64_t)ps->ld;
+            bs->ld += npivs;
+
+            free(k0of);
+        }
+        free(nch);
+        free(ndeg);
+        free(emax);
+        free(off);
+        free(bll);
+        free(kmark);
+        free(kmark_el);
+        free(cdeg);
+        free(clcm);
+    } else
+    #endif
+    {
+        for (i = 0; i < npivs; ++i) {
+            insert_and_update_spairs(ps, bs, bht, st);
+        }
     }
 
     const bl_t lml          = bs->lml;
