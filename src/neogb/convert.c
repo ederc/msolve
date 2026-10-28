@@ -705,44 +705,47 @@ static void convert_sparse_matrix_rows_to_basis_elements(
         if (deg == 0) {
             bs->constant  = 1;
         }
-#if 0
-        if (st->ff_bits == 32) {
-            printf("new element (%u): length %u | degree %d | ", bl+k, bs->hm[bl+k][LENGTH], bs->hm[bl+k][DEG]);
-            int kk = 0;
-            for (int kk=0; kk<bs->hm[bl+k][LENGTH]; ++kk) {
-            printf("%u | ", bs->cf_32[bl+k][kk]);
-            for (int jj=0; jj < bht->evl; ++jj) {
-                printf("%u ", bht->ev[bs->hm[bl+k][OFFSET+kk]][jj]);
-            }
-            printf(" || ");
-            }
+#if 1
+        if (bs->hm[bl+k][DEG] == 1) {
             printf("\n");
-        }
-        if (st->ff_bits == 16) {
-            printf("new element (%u): length %u | degree %d (difference %d) | ", bl+k, bs->hm[bl+k][LENGTH], bs->hm[bl+k][DEG],
-                    bs->hm[bl+k][DEG] - bht->hd[bs->hm[bl+k][OFFSET]].deg);
-            int kk = 0;
-            for (int kk=0; kk<bs->hm[bl+k][LENGTH]; ++kk) {
-            printf("%u | ", bs->cf_16[bl+k][kk]);
-            for (int jj=0; jj < bht->evl; ++jj) {
-                printf("%u ", bht->ev[bs->hm[bl+k][OFFSET+kk]][jj]);
+            if (st->ff_bits == 32) {
+                printf("new element (%u): length %u | degree %d | ", bl+k, bs->hm[bl+k][LENGTH], bs->hm[bl+k][DEG]);
+                int kk = 0;
+                for (int kk=0; kk<bs->hm[bl+k][LENGTH]; ++kk) {
+                printf("%u | ", bs->cf_32[bl+k][kk]);
+                for (int jj=0; jj < bht->evl; ++jj) {
+                    printf("%u ", bht->ev[bs->hm[bl+k][OFFSET+kk]][jj]);
+                }
+                printf(" || ");
+                }
+                printf("\n");
             }
-            printf(" || ");
+            if (st->ff_bits == 16) {
+                printf("new element (%u): length %u | degree %d (difference %d) | ", bl+k, bs->hm[bl+k][LENGTH], bs->hm[bl+k][DEG],
+                        bs->hm[bl+k][DEG] - bht->hd[bs->hm[bl+k][OFFSET]].deg);
+                int kk = 0;
+                for (int kk=0; kk<bs->hm[bl+k][LENGTH]; ++kk) {
+                printf("%u | ", bs->cf_16[bl+k][kk]);
+                for (int jj=0; jj < bht->evl; ++jj) {
+                    printf("%u ", bht->ev[bs->hm[bl+k][OFFSET+kk]][jj]);
+                }
+                printf(" || ");
+                }
+                printf("\n");
             }
-            printf("\n");
-        }
-        if (st->ff_bits == 8) {
-            printf("new element (%u): length %u | degree %d (difference %d) | ", bl+k, bs->hm[bl+k][LENGTH], bs->hm[bl+k][DEG],
-                    bs->hm[bl+k][DEG] - bht->hd[bs->hm[bl+k][OFFSET]].deg);
-            int kk = 0;
-            for (int kk=0; kk<bs->hm[bl+k][LENGTH]; ++kk) {
-            printf("%u | ", bs->cf_8[bl+k][kk]);
-            for (int jj=0; jj < bht->evl; ++jj) {
-                printf("%u ", bht->ev[bs->hm[bl+k][OFFSET+kk]][jj]);
+            if (st->ff_bits == 8) {
+                printf("new element (%u): length %u | degree %d (difference %d) | ", bl+k, bs->hm[bl+k][LENGTH], bs->hm[bl+k][DEG],
+                        bs->hm[bl+k][DEG] - bht->hd[bs->hm[bl+k][OFFSET]].deg);
+                int kk = 0;
+                for (int kk=0; kk<bs->hm[bl+k][LENGTH]; ++kk) {
+                printf("%u | ", bs->cf_8[bl+k][kk]);
+                for (int jj=0; jj < bht->evl; ++jj) {
+                    printf("%u ", bht->ev[bs->hm[bl+k][OFFSET+kk]][jj]);
+                }
+                printf(" || ");
+                }
+                printf("\n");
             }
-            printf(" || ");
-            }
-            printf("\n");
         }
 #endif
     }
