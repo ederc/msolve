@@ -124,6 +124,13 @@ static inline void display_help(char *str){
   display_option_help_noopt("2 - Some normal forms are computed. (default)\n");
   display_option_help_noopt("3 - Lots of normal forms are computed.\n");
   display_option_help_noopt("4 - All the normal forms are computed.\n");
+  display_option_help('b', "byte-encoding", "BENC", "Interpretation of the input coefficients over GF(16) and\n");
+  display_option_help_noopt("GF(256), i.e. for field characteristic 16 resp. 256:\n");
+  display_option_help_noopt("0 - Coefficients are integers, i.e. they are taken modulo 2.\n");
+  display_option_help_noopt("1 - Coefficients are the byte representations of the field\n");
+  display_option_help_noopt("    elements: bit i is the coefficient of t^i, the fields are\n");
+  display_option_help_noopt("    GF(2)[t]/(t^4+t+1) resp. GF(2)[t]/(t^8+t^4+t^3+t+1).\n");
+  display_option_help_noopt("    Hexadecimal coefficients like 0x1b are accepted. (default)\n");
   display_option_help('C', "", "", "Use sparse-FGLM-col algorithm:\n");
   display_option_help_noopt("Given an input file with k polynomials\n");
   display_option_help_noopt("compute the quotient of the ideal\n");
@@ -211,6 +218,7 @@ static void getoptions(
         int32_t *get_param,
         int32_t *precision,
         int32_t *generate_pbm_files,
+        int32_t *byte_encoding,
 	int64_t *seed,
         int32_t *info_level,
         files_gb *files){
@@ -218,7 +226,7 @@ static void getoptions(
   char *filename = NULL;
   char *out_fname = NULL;
   opterr = 1;
-  char short_options[] = "c:Cd:e:f:g:hil:L:m:M:n:N:o:p:P:q:r:s:St:u:v:V";
+  char short_options[] = "b:c:Cd:e:f:g:hil:L:m:M:n:N:o:p:P:q:r:s:St:u:v:V";
 
   /* For long options that have no equivalent short option, use a
      non-character as a pseudo short option, starting with CHAR_MAX + 1.
@@ -230,6 +238,7 @@ static void getoptions(
     /* NEXT_OPTION */
   };
   struct option long_options[] = {
+    {"byte-encoding", required_argument, NULL, 'b'},
     {"elimination", required_argument, NULL, 'e'},
     {"file", required_argument, NULL, 'f'},
     {"groebner-basis", required_argument, NULL, 'g'},
@@ -308,6 +317,12 @@ static void getoptions(
       break;
     case 'C':
       *colon = 1;
+      break;
+    case 'b':
+      *byte_encoding = strtol(optarg, NULL, 10);
+      if (*byte_encoding < 0 || *byte_encoding > 1) {
+        *byte_encoding = 1;
+      }
       break;
     case 'r':
       *reduce_gb = strtol(optarg, NULL, 10);
@@ -498,6 +513,7 @@ int main(int argc, char **argv){
     int32_t lift_matrix           = 0;
     int32_t get_param             = 0;
     int32_t precision             = 64;
+    int32_t byte_encoding         = 1;
     int64_t seed                  = -1;
 
     files_gb *files = malloc(sizeof(files_gb));
@@ -509,7 +525,7 @@ int main(int argc, char **argv){
                &reduce_gb, &print_gb, &truncate_lifting, &genericity_handling,
                &unstable_staircase, &saturate, &colon,
                &normal_form, &normal_form_matrix, &is_gb, &lift_matrix, &get_param,
-               &precision, &generate_pbm,
+               &precision, &generate_pbm, &byte_encoding,
 	       &seed, &info_level, files);
 
     /* srand initialization */
@@ -555,6 +571,7 @@ int main(int argc, char **argv){
     display_gens(VERBSTREAM, gens);
 #endif
 
+    gens->byte_encoding         = byte_encoding;
     gens->rand_linear           = 0;
     gens->random_linear_form = malloc(sizeof(int32_t)*(nr_vars));
     gens->elim = elim_block_len;
