@@ -1101,6 +1101,10 @@ void linear_algebra(
             }
             return;
         case 8:
+            if (st->fc == 2) {
+                exact_sparse_linear_algebra_gf2(mat, tbr, bs, st);
+                return;
+            }
             if (is_gf2_ext(st->fc)) {
                 exact_sparse_linear_algebra_gf2x(mat, tbr, bs, st);
                 return;
@@ -1204,6 +1208,10 @@ void exact_linear_algebra(
             exact_sparse_linear_algebra_qq(mat, tbr, bs, st);
             return;
         case 8:
+            if (st->fc == 2) {
+                exact_sparse_linear_algebra_gf2(mat, tbr, bs, st);
+                return;
+            }
             if (is_gf2_ext(st->fc)) {
                 exact_sparse_linear_algebra_gf2x(mat, tbr, bs, st);
                 return;
@@ -1278,6 +1286,10 @@ void interreduce_matrix_rows(
             interreduce_matrix_rows_qq(mat, bs, st, free_basis);
             return;
         case 8:
+            if (st->fc == 2) {
+                interreduce_matrix_rows_gf2(mat, bs, st, free_basis);
+                return;
+            }
             if (is_gf2_ext(st->fc)) {
                 interreduce_matrix_rows_gf2x(mat, bs, st, free_basis);
                 return;
