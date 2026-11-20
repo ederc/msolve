@@ -1021,6 +1021,16 @@ static void LA_FF(probabilistic_sparse_reduced_echelon_form)(
     }
     const int64_t mod2  = tmp;
 #endif
+    /* the least number zs of combinations reducing to zero with
+     * (fc-1)^zs >= 2^31 */
+    len_t zs = 1;
+    {
+        long double q = (long double)(fc - 1);
+        while (q < 2147483648.0L) {
+            q *= (long double)(fc - 1);
+            zs++;
+        }
+    }
     /* compute rows per block */
     const len_t nb  = (len_t)(floor(sqrt(nrl/3)))+1;
     const len_t rem = (nrl % nb == 0) ? 0 : 1;
@@ -1061,6 +1071,10 @@ static void LA_FF(probabilistic_sparse_reduced_echelon_form)(
             /* starting column, offset, coefficient array position in tmpcf */
             hm_t sc, cfp;
             len_t bctr  = 0;
+            /* the block is done once zs combinations reduced to zero:
+             * then all rows of the block reduce to zero with probability
+             * at least 1 - 2^-31 */
+            len_t nz    = 0;
             /* the combinations start at the smallest lead term of the
              * rows of the block. As in the exact linear algebra, they are
              * only reduced together if the rows fill at least 1/32 of
@@ -1132,7 +1146,9 @@ static void LA_FF(probabilistic_sparse_reduced_echelon_form)(
                     npiv  = LA_FF(reduce_dense_row_by_known_pivots_sparse)(
                             drl, mat, bs, pivs, sc, cfp, 0, 0, 0, st);
                     if (!npiv) {
-                        bctr  = nrbl;
+                        if (++nz >= zs) {
+                            bctr  = nrbl;
+                        }
                         break;
                     }
                     /* normalize coefficient array
@@ -1147,7 +1163,9 @@ static void LA_FF(probabilistic_sparse_reduced_echelon_form)(
                     sc  = npiv[OFFSET];
                     k   = __sync_bool_compare_and_swap(&pivs[npiv[OFFSET]], NULL, npiv);
                 } while (!k);
-                bctr++;
+                if (npiv != NULL) {
+                    bctr++;
+                }
             }
             if (batch && bctr < (len_t)nrbl) {
                 const int tid = omp_get_thread_num();
@@ -1216,8 +1234,11 @@ static void LA_FF(probabilistic_sparse_reduced_echelon_form)(
                     for (lane = 0; lane < nl; ++lane) {
                         if (rems[lane] == NULL) {
                             /* the combination reduces to zero */
-                            bctr  = nrbl;
-                            break;
+                            if (++nz >= zs) {
+                                bctr  = nrbl;
+                                break;
+                            }
+                            continue;
                         }
                         memset(drl, 0, (uint64_t)ncl * sizeof(int64_t));
                         for (j = ncl; j < ncols; ++j) {
@@ -1250,8 +1271,11 @@ static void LA_FF(probabilistic_sparse_reduced_echelon_form)(
                                     &pivs[npiv[OFFSET]], NULL, npiv);
                         } while (!k);
                         if (!npiv) {
-                            bctr  = nrbl;
-                            break;
+                            if (++nz >= zs) {
+                                bctr  = nrbl;
+                                break;
+                            }
+                            continue;
                         }
                         bctr++;
                     }
