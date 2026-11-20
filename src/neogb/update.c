@@ -72,18 +72,23 @@ static inline void lcm_exponents(
     len_t i;
     const len_t evl = ht->evl;
     const len_t ebl = ht->ebl;
+    deg_t d0 = 0, d1 = 0;
 
+    /* the loops are vectorized for the SIMD extensions of the build */
+#pragma omp simd
     for (i = 1; i < evl; ++i) {
         etmp[i]  = ea[i] < eb[i] ? eb[i] : ea[i];
     }
-    etmp[0]   = 0;
-    etmp[ebl] = 0;
+#pragma omp simd reduction(+:d0)
     for (i = 1; i < ebl; ++i) {
-        etmp[0]  += etmp[i];
+        d0  += etmp[i];
     }
+#pragma omp simd reduction(+:d1)
     for (i = ebl+1; i < evl; ++i) {
-        etmp[ebl] += etmp[i];
+        d1  += etmp[i];
     }
+    etmp[0]   = (exp_t)d0;
+    etmp[ebl] = (exp_t)d1;
 }
 
 /* total degree of the monomial with exponents e as computed by
@@ -108,6 +113,8 @@ static inline deg_t gcd_degree(
     const len_t evl = ht->evl;
     const len_t ebl = ht->ebl;
 
+    /* the loop is vectorized for the SIMD extensions of the build */
+#pragma omp simd reduction(+:d)
     for (i = 0; i < evl; ++i) {
         d += ea[i] < eb[i] ? ea[i] : eb[i];
     }
@@ -162,6 +169,35 @@ static int spair_cmp_update_local(
     if (mc != 0) {
         return mc;
     }
+    if (sa->deg != sb->deg) {
+        return (sa->deg < sb->deg) ? -1 : 1;
+    }
+    if (sa->gen1 != sb->gen1) {
+        return (sa->gen1 < sb->gen1) ? -1 : 1;
+    }
+    return 0;
+}
+
+/* order of the pairs of one new element with lcms of one degree for
+ * finding the equal lcms: by the hash values of the lcms, stored in the
+ * local hash table view, then as spair_cmp_update_local() for pairs of
+ * equal lcms; equal lcms have equal hash values */
+static int spair_cmp_update_hash(
+        const void *a,
+        const void *b,
+        void *ctx
+        )
+{
+    const spair_cmp_local_t *c = (spair_cmp_local_t *)ctx;
+    const len_t ta = *((len_t *)a);
+    const len_t tb = *((len_t *)b);
+    const val_t ha = c->ht->hd[ta].val;
+    const val_t hb = c->ht->hd[tb].val;
+    if (ha != hb) {
+        return ha < hb ? -1 : 1;
+    }
+    const spair_t *sa = c->p + ta;
+    const spair_t *sb = c->p + tb;
     if (sa->deg != sb->deg) {
         return (sa->deg < sb->deg) ? -1 : 1;
     }
@@ -443,14 +479,36 @@ static void insert_and_update_spairs(
                 lcm_exponents(ev[x], ea, eb, bht);
                 srt[m++] = x;
             }
-            /* only the first pair with a given lcm remains */
+            /* only the first pair with a given lcm remains: the pairs are
+             * sorted by the hash values of their lcms, a pair is removed
+             * if an earlier pair with the same hash value has its lcm */
             if (m - b0 > 1) {
+                for (l = b0; l < m; ++l) {
+                    const exp_t * const el = ev[srt[l]];
+                    val_t h = 0;
+#pragma omp simd reduction(+:h)
+                    for (t = 0; t < evl; ++t) {
+                        h += bht->rn[t] * el[t];
+                    }
+                    hd[srt[l]].val = h;
+                }
                 sort_r(srt+b0, (unsigned long)(m - b0), sizeof(len_t),
-                        spair_cmp_update_local, &ctx);
+                        spair_cmp_update_hash, &ctx);
             }
+            len_t r0 = b0;  /* start of the run of equal hash values */
             for (l = b0; l < m; ++l) {
                 const len_t x = srt[l];
-                if (l > b0 && monomial_cmp(srt[l-1], x, &lht) == 0) {
+                if (m - b0 == 1 || (l > b0 && hd[srt[l-1]].val != hd[x].val)) {
+                    r0 = l;
+                }
+                len_t q;
+                for (q = r0; q < l; ++q) {
+                    if (memcmp(ev[srt[q]], ev[x],
+                                (uint64_t)evl * sizeof(exp_t)) == 0) {
+                        break;
+                    }
+                }
+                if (q < l) {
                     if (p[x].deg >= 0) {
                         p[x].deg = -1;
                     }
