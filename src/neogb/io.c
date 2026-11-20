@@ -38,16 +38,29 @@ static inline void set_exponent_vector(
     const len_t nev = st->nev;
     const len_t off = ebl - nev + 1;
 
+    const int32_t * const e = iev + (int64_t)nv * idx;
+    int64_t d0 = 0, d1 = 0;
+    for (i = 0; i < nev; ++i) {
+        d0  +=  e[i];
+    }
+    for (i = nev; i < nv; ++i) {
+        d1  +=  e[i];
+    }
+    /* each exponent is bounded by its block degree */
+    if (d0 > EXP_MAX || d1 > EXP_MAX) {
+        exponent_overflow();
+    }
+
     ev[0]   = 0;
     ev[ebl] = 0;
 
     for (i = 0; i < nev; ++i) {
-        ev[i+1] = (exp_t)(iev+((int64_t)nv * idx))[i];
+        ev[i+1] = (exp_t)e[i];
         /* degree */
         ev[0]   +=  ev[i+1];
     }
     for (i = nev; i < nv; ++i) {
-        ev[i+off] = (exp_t)(iev+((int64_t)nv * idx))[i];
+        ev[i+off] = (exp_t)e[i];
         /* degree */
         ev[ebl]    +=  ev[i+off];
     }

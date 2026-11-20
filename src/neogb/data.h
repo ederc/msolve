@@ -89,9 +89,11 @@ typedef uint32_t len_t;  /* length type for different structures */
 #ifdef EXP32
 typedef uint32_t exp_t;
 #define EXP_LANES 4
+#define EXP_MAX   INT32_MAX   /* degrees are also stored as deg_t */
 #else
 typedef uint16_t exp_t;
 #define EXP_LANES 8
+#define EXP_MAX   UINT16_MAX
 #endif
 typedef int32_t deg_t;   /* (total) degree of polynomial */
 typedef len_t bi_t;      /* basis index of element */

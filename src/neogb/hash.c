@@ -1360,6 +1360,31 @@ static inline int is_product_of(
 
 /* returns the index of the product of a and b in ht if it is already
  * stored there, 0 otherwise; does not change ht */
+/* a degree, and thus an exponent, of a monomial cannot exceed EXP_MAX */
+static void exponent_overflow(
+    void
+    )
+{
+    fprintf(ERRSTREAM, "A degree exceeds %lu, the largest one the exponent\n",
+            (unsigned long)EXP_MAX);
+    fprintf(ERRSTREAM, "type of this build can hold, exit...\n");
+    exit(1);
+}
+
+/* each exponent is bounded by its block degree, so it suffices to check
+ * the degrees of the product of a and b */
+static inline void check_product_degree(
+    const exp_t * const ea,
+    const exp_t * const eb,
+    const ht_t * const ht
+    )
+{
+    if ((uint64_t)ea[0] + eb[0] > EXP_MAX
+            || (uint64_t)ea[ht->ebl] + eb[ht->ebl] > EXP_MAX) {
+        exponent_overflow();
+    }
+}
+
 static inline hi_t find_multiplied_in_hash_table(
     const val_t h,
     const exp_t * const ea,
@@ -1369,6 +1394,8 @@ static inline hi_t find_multiplied_in_hash_table(
 {
     hl_t i;
     hi_t k;
+
+    check_product_degree(ea, eb, ht);
 
     const len_t evl = ht->evl;
     const hl_t hsz  = ht->hsz;
@@ -1405,6 +1432,8 @@ static inline hi_t insert_multiplied_in_hash_table(
     hl_t i;
     hi_t k;
     len_t j;
+
+    check_product_degree(ea, eb, ht);
 
     const len_t evl = ht->evl;
     const hl_t hsz  = ht->hsz;
