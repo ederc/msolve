@@ -72,7 +72,8 @@ static inline void lcm_exponents(
     len_t i;
     const len_t evl = ht->evl;
     const len_t ebl = ht->ebl;
-    deg_t d0 = 0, d1 = 0;
+    /* sums modulo the width of exp_t, see gcd_degree() */
+    exp_t d0 = 0, d1 = 0;
 
     /* the loops are vectorized for the SIMD extensions of the build */
 #pragma omp simd
@@ -87,8 +88,8 @@ static inline void lcm_exponents(
     for (i = ebl+1; i < evl; ++i) {
         d1  += etmp[i];
     }
-    etmp[0]   = (exp_t)d0;
-    etmp[ebl] = (exp_t)d1;
+    etmp[0]   = d0;
+    etmp[ebl] = d1;
 }
 
 /* total degree of the monomial with exponents e as computed by
@@ -109,11 +110,13 @@ static inline deg_t gcd_degree(
         )
 {
     len_t i;
-    deg_t d = 0;
+    /* the sum is taken modulo the width of exp_t, so that the loop is
+     * vectorized for the SIMD extensions of the build without widening;
+     * the degree of the gcd fits exp_t, so the result is exact */
+    exp_t d = 0;
     const len_t evl = ht->evl;
     const len_t ebl = ht->ebl;
 
-    /* the loop is vectorized for the SIMD extensions of the build */
 #pragma omp simd reduction(+:d)
     for (i = 0; i < evl; ++i) {
         d += ea[i] < eb[i] ? ea[i] : eb[i];
@@ -122,7 +125,7 @@ static inline deg_t gcd_degree(
     if (ebl > 0) {
         d -= ea[ebl] < eb[ebl] ? ea[ebl] : eb[ebl];
     }
-    return d;
+    return (deg_t)d;
 }
 
 /* mask of the variables of the monomial with exponents e, folded to 64
@@ -355,7 +358,7 @@ static void insert_and_update_spairs(
     const len_t nmax  = bl + npivs - 1;
 #pragma omp parallel num_threads(nthrds) private(i, k)
     {
-    exp_t *e      = (exp_t *)malloc((uint64_t)nmax * evl * sizeof(exp_t));
+    exp_t *e      = (exp_t *)calloc((uint64_t)nmax * evl + 8, sizeof(exp_t));
     exp_t **ev    = (exp_t **)malloc((uint64_t)nmax * sizeof(exp_t *));
     hd_t *hd      = (hd_t *)calloc((uint64_t)nmax, sizeof(hd_t));
     len_t *srt    = (len_t *)malloc((uint64_t)nmax * sizeof(len_t));
@@ -483,14 +486,26 @@ static void insert_and_update_spairs(
              * sorted by the hash values of their lcms, a pair is removed
              * if an earlier pair with the same hash value has its lcm */
             if (m - b0 > 1) {
+                /* any function of the exponents groups equal lcms; the
+                 * exponent vectors are read as 64-bit words, the buffer
+                 * holds one more word after the last one */
+                const len_t nby = evl * sizeof(exp_t);
+                const len_t nwd = (nby + 7) / 8;
+                /* the bytes of the last word past the exponent vector
+                 * belong to the next one */
+                const uint64_t lmk = nby % 8 == 0 ? ~(uint64_t)0
+                    : (((uint64_t)1 << (8 * (nby % 8))) - 1);
                 for (l = b0; l < m; ++l) {
                     const exp_t * const el = ev[srt[l]];
-                    val_t h = 0;
-#pragma omp simd reduction(+:h)
-                    for (t = 0; t < evl; ++t) {
-                        h += bht->rn[t] * el[t];
+                    uint64_t h = 0, w;
+                    for (t = 0; t < nwd; ++t) {
+                        memcpy(&w, (const char *)el + 8 * t, 8);
+                        if (t == nwd - 1) {
+                            w &= lmk;
+                        }
+                        h = (h ^ w) * 0x9E3779B97F4A7C15ULL;
                     }
-                    hd[srt[l]].val = h;
+                    hd[srt[l]].val = (val_t)(h >> 32);
                 }
                 sort_r(srt+b0, (unsigned long)(m - b0), sizeof(len_t),
                         spair_cmp_update_hash, &ctx);
@@ -571,12 +586,25 @@ static void insert_and_update_spairs(
      * equal iff their total degrees are equal. Thus we do not need to look
      * up the lcms of the new pairs in the hash table. */
     spair_t *ps = psl->p;
+    /* the complements of the divmasks of the old pairs' lcms side by side:
+     * the scan over the old pairs for each new element reads them first
+     * and not the hash table at each lcm */
+    sdm_t *pnm  = (sdm_t *)malloc((unsigned long)(pl + 1) * sizeof(sdm_t));
+#pragma omp parallel for num_threads(nthrds) private(i) \
+        schedule(static, 4096)
+    for (i = 0; i < pl; ++i) {
+        pnm[i]  = ~bht->hd[ps[i].lcm].sdm;
+    }
     for (k = 0; k < npivs; ++k) {
         const deg_t *kd = pdeg + off[k];
         const deg_t *kt = ptd + off[k];
+        const sdm_t nsdm  = bht->hd[nch[k]].sdm;
 #pragma omp parallel for num_threads(nthrds) private(i) \
         schedule(static, 4096)
         for (i = 0; i < pl; ++i) {
+            if (nsdm & pnm[i]) {
+                continue;
+            }
             const bi_t g1 = ps[i].gen1;
             const bi_t g2 = ps[i].gen2;
             if (ps[i].deg >= 0 && kd[g1] <= ps[i].deg && kd[g2] <= ps[i].deg
@@ -588,6 +616,7 @@ static void insert_and_update_spairs(
             }
         }
     }
+    free(pnm);
 
     /* in the Boolean ring each new element f also gets the pairs with the
      * field equations x^2 + x of the variables x of its lead monomial,
@@ -636,12 +665,22 @@ static void insert_and_update_spairs(
 
     /* Gebauer-Moeller: the old pair check of the later new elements for
      * the pairs of the earlier ones, the lcms are compared as above */
+    sdm_t *qnm  = (sdm_t *)malloc((unsigned long)(soff[npivs] + 1) * sizeof(sdm_t));
+#pragma omp parallel for num_threads(nthrds) private(j) \
+        schedule(static, 4096)
+    for (j = 0; j < soff[npivs]; ++j) {
+        qnm[j]  = ~bht->hd[pp[j].lcm].sdm;
+    }
     for (k = 1; k < npivs; ++k) {
         const deg_t *kd = pdeg + off[k];
         const deg_t *kt = ptd + off[k];
+        const sdm_t nsdm  = bht->hd[nch[k]].sdm;
 #pragma omp parallel for num_threads(nthrds) private(j) \
         schedule(static, 4096)
         for (j = 0; j < soff[k]; ++j) {
+            if (nsdm & qnm[j]) {
+                continue;
+            }
             const bi_t g1 = pp[j].gen1;
             const bi_t g2 = pp[j].gen2;
             if (pp[j].deg >= 0 && kd[g1] <= pp[j].deg && kd[g2] <= pp[j].deg
@@ -653,6 +692,7 @@ static void insert_and_update_spairs(
             }
         }
     }
+    free(qnm);
 
     /* remove useless pairs from pairset, old ones first, then the new
      * ones in the order of the new elements */
