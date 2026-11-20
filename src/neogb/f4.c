@@ -352,6 +352,143 @@ start:
     print_round_information_footer(VERBSTREAM, md);
 }
 
+/* Puts the input generators bs->hm[0], ..., bs->hm[ngens-1] in reduced row
+ * echelon form: one matrix holds the generators alone, without reducers,
+ * and its new pivots replace them. The new generators span the same vector
+ * space, so the ideal is unchanged; generators depending on the others
+ * vanish. The signature-based F4 reduces a row only by rows of smaller
+ * signature, so without this step the tails of the generators may keep
+ * lead terms of other generators, which blows up the first matrices. */
+static void echelonize_input_generators(
+        mat_t *mat,
+        bs_t *bs,
+        md_t *md
+        )
+{
+    len_t i, j, k;
+
+    ht_t *bht      = bs->ht;
+    ht_t *sht      = md->ht;
+    const len_t ng = (len_t)md->ngens;
+
+    if (ng < 2 || bht->boolean || md->ff_bits == 0) {
+        return;
+    }
+
+    exp_t etmp[bht->evl];
+    memset(etmp, 0, (unsigned long)(bht->evl) * sizeof(exp_t));
+
+    mat->tr = (hm_t **)malloc((unsigned long)ng * sizeof(hm_t *));
+    mat->rr = NULL;
+    mat->sz = mat->nr = mat->nrl = ng;
+    mat->nru = mat->nc = 0;
+    for (i = 0; i < ng; ++i) {
+        mat->tr[i]         = multiplied_poly_to_matrix_row(
+                sht, bht, 0, etmp, bs->hm[i]);
+        mat->tr[i][MULT]   = 0;
+        mat->tr[i][BINDEX] = i;
+    }
+    /* the generators' monomials are in the basis hash table already,
+     * so the new rows are mapped back without inserting into it */
+    hi_t *s2b = (hi_t *)malloc((unsigned long)sht->eld * sizeof(hi_t));
+    for (i = 0; i < ng; ++i) {
+        const hm_t * const r = mat->tr[i];
+        const hm_t * const b = bs->hm[i];
+        for (j = OFFSET; j < r[LENGTH]+OFFSET; ++j) {
+            s2b[r[j]] = b[j];
+        }
+    }
+    /* no known pivots: all columns are right columns */
+    for (i = 1; i < sht->eld; ++i) {
+        sht->hd[i].idx = 1;
+    }
+    if (md->info_level > 1) {
+        fprintf(VERBSTREAM, "input in echelon form ");
+    }
+    convert_hashes_to_columns(mat, md, sht);
+    mat->nc = mat->ncl + mat->ncr;
+
+    linear_algebra(mat, bs, bs, md);
+    if (md->info_level > 1) {
+        fprintf(VERBSTREAM, "\n");
+    }
+
+    const len_t np  = mat->np;
+    const hi_t *hcm = md->hcm;
+    hm_t **rows     = mat->tr;
+
+    /* the old generators are not needed anymore */
+    for (i = 0; i < ng; ++i) {
+        const len_t ci = bs->hm[i][COEFFS];
+        switch (md->ff_bits) {
+            case 8:
+                free(bs->cf_8[ci]);
+                bs->cf_8[ci] = NULL;
+                break;
+            case 16:
+                free(bs->cf_16[ci]);
+                bs->cf_16[ci] = NULL;
+                break;
+            case 32:
+                free(bs->cf_32[ci]);
+                bs->cf_32[ci] = NULL;
+                break;
+            case 64:
+                free(bs->cf_64[ci]);
+                bs->cf_64[ci] = NULL;
+                break;
+            default:
+                break;
+        }
+        free(bs->hm[i]);
+        bs->hm[i] = NULL;
+    }
+    /* the rows come by increasing leading monomial, the basis takes
+     * the largest first as for the new elements of a round */
+    for (k = 0; k < np; ++k) {
+        hm_t *r         = rows[np-1-k];
+        const len_t len = r[LENGTH]+OFFSET;
+        for (j = OFFSET; j < len; ++j) {
+            r[j] = s2b[hcm[r[j]]];
+        }
+        deg_t deg = bht->hd[r[OFFSET]].deg;
+        if (md->nev > 0) {
+            for (j = OFFSET+1; j < len; ++j) {
+                if (deg < bht->hd[r[j]].deg) {
+                    deg = bht->hd[r[j]].deg;
+                }
+            }
+        }
+        switch (md->ff_bits) {
+            case 8:
+                bs->cf_8[k]  = mat->cf_8[r[COEFFS]];
+                break;
+            case 16:
+                bs->cf_16[k] = mat->cf_16[r[COEFFS]];
+                break;
+            case 32:
+                bs->cf_32[k] = mat->cf_32[r[COEFFS]];
+                break;
+            case 64:
+                bs->cf_64[k] = mat->cf_64[r[COEFFS]];
+                break;
+            default:
+                break;
+        }
+        r[COEFFS] = k;
+        r[DEG]    = deg;
+        bs->hm[k] = r;
+        if (deg == 0) {
+            bs->constant = 1;
+        }
+    }
+    free(s2b);
+    clean_hash_table(sht);
+    clear_matrix(mat);
+
+    md->ngens = np;
+}
+
 static int32_t initialize_f4(
         bs_t **lbsp,
         md_t **lmdp,
@@ -413,6 +550,19 @@ static int32_t initialize_f4(
         md->min_deg_in_first_deg_fall = INT32_MAX;
     }
 
+    /* the signature-based F4 computes the basis or hands over to F4,
+     * which then starts from the input generators in echelon form */
+    md->sig_f4 = neogb_sig_f4;
+    if (sig_f4_applicable(bs, md)) {
+        bs->ld = 0;
+        echelonize_input_generators(mat, bs, md);
+        if (sig_f4(bs, md)) {
+            *lbsp  = bs;
+            *matp  = mat;
+            *lmdp  = md;
+            return 1;
+        }
+    }
 
     /* move input generators to basis and generate first spairs.
        always check redundancy since input generators may be redundant

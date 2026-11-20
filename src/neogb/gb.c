@@ -48,6 +48,7 @@
 #include "symbol.c"   /* symbolic preprocessing */
 #include "io.c"       /* input and output data handling */
 #include "engine.c"   /* global, shared parts of gb engine */
+#include "sigf4.c"    /* implementation of signature-based f4 */
 #include "f4.c"       /* implemenation of f4 algorithm */
 #include "sba.c"      /* implemenation of sba algorithm */
 #include "nf.c"       /* implemenation of normal form algorithm */

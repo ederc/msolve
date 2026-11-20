@@ -21,6 +21,8 @@
 
 #include "data.h"
 
+int32_t neogb_sig_f4 = 0;
+
 /* functions */
 /* bs_t *initialize_basis(
  *         const int32_t ngens

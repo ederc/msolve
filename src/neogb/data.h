@@ -439,6 +439,7 @@ struct md_t
     double update_rtime;
     double convert_rtime;
     double f4_rtime;
+    double sig_f4_rtime;
     double reduce_gb_rtime;
     double tracer_rtime;
     double rht_rtime;
@@ -488,6 +489,7 @@ struct md_t
     int32_t boolean; /* computation in the Boolean ring over GF(2) */
     int32_t mo; /* monomial ordering: 0=DRL, 1=LEX*/
     int32_t laopt;
+    int32_t sig_f4;   /* 1 if the signature-based F4 is tried first */
     int32_t init_hts;
     int32_t nthrds;
     int32_t reset_ht;
@@ -538,6 +540,9 @@ struct md_t
 /* extern bs_t *initialize_basis(
  *         const int32_t ngens
  *         ); */
+/* 1 if the signature-based F4 is tried first, see sigf4.c */
+extern int32_t neogb_sig_f4;
+
 extern void normalize_initial_basis(
         bs_t *bs,
         const uint64_t fc

@@ -1,0 +1,1812 @@
+/* This file is part of msolve.
+ *
+ * msolve is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * msolve is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with msolve.  If not, see <https://www.gnu.org/licenses/>
+ *
+ * Authors:
+ * Jérémy Berthomieu
+ * Christian Eder
+ * Mohab Safey El Din */
+
+/* Signature-based F4: a batched F5 whose rounds are F4 matrices.
+ *
+ * Each input generator f_i gets the signature e_i, a multiple t*e_i of it
+ * is compared in Schreyer's order: by the monomial t*lm(f_i), then by the
+ * index, e_i > e_j for i > j. Each round takes all pending signatures of
+ * least degree, the signatures of the S-pairs, and builds one matrix:
+ * the row at a signature s is a*g for the basis element g of largest
+ * sig-lead ratio whose signature divides s (rewriting). Symbolic
+ * preprocessing adds for each monomial a reducer, a multiple of the
+ * basis element of least sig-lead ratio whose lead term divides it. All
+ * rows are sorted by signature and reduced in this order, each row only
+ * by pivots of smaller signature (F4-RB). A row reducing to zero gives a
+ * syzygy signature, any other reduced row a new element. Syzygy
+ * signatures also come from the Koszul syzygies of the input generators
+ * and from S-pairs with coprime lead terms; no pending signature divisible
+ * by a syzygy signature of the same index is kept.
+ *
+ * Where the signature run does not pay off, it hands over: the plain F4
+ * algorithm starts from the input generators. The tests read the S-pairs
+ * an update would form against the work of the round,
+ * the zero reductions and the divisible new elements at the first rounds
+ * whose signature degree passes the lead degree by 2 resp. 4, and the
+ * divisible new elements of each round.
+ *
+ * References: Eder, Faugere, A survey on signature-based algorithms for
+ * computing Groebner bases (2017), sections 6, 7, 13, 14; Roune,
+ * Stillman, Practical Groebner basis computation (2012); Arri, Perry,
+ * The F5 criterion revised (2011). */
+
+/* handover parameters */
+#define SG_PAIRS        1000  /* least S-pairs of an update to be tested */
+#define SG_EARLY        2     /* gap between signature and lead degree */
+#define SG_GAP          4
+#define SG_EARLY_ROUND  25    /* least new elements of the early round */
+#define SG_OUTGROWN_MIN 5     /* least new elements of a round tested */
+
+/* Packed monomials: the exponents of the variables in lanes of SG_LB bits,
+ * SG_LPW lanes in a 64-bit word, the low lanes first, the lanes past the
+ * last variable 0. Every lane stays below 2^(SG_LB-1), so operations on
+ * whole words act on all lanes at once without carries or borrows between
+ * lanes: a product is a sum of words, divisibility the absence of a borrow
+ * in the difference. A degree past SG_LMAX hands over to F4. */
+#ifdef EXP32
+#define SG_LB   32
+#else
+#define SG_LB   16
+#endif
+#define SG_LPW  (64 / SG_LB)
+#define SG_LANE (~(uint64_t)0 >> (64 - SG_LB))
+#define SG_ONES (~(uint64_t)0 / SG_LANE)
+#define SG_HIGH (SG_ONES << (SG_LB - 1))
+#define SG_LMAX ((deg_t)((SG_LANE >> 1)))
+
+/* the top bit of each lane where the lane of a is at least the one of b */
+static inline uint64_t sg_ge(
+        const uint64_t a,
+        const uint64_t b
+        )
+{
+    return ((a | SG_HIGH) - b) & SG_HIGH;
+}
+
+/* each lane whose top bit is set in h filled with ones */
+static inline uint64_t sg_widen(
+        const uint64_t h
+        )
+{
+    return (h >> (SG_LB - 1)) * SG_LANE;
+}
+
+static inline uint64_t sg_max(
+        const uint64_t a,
+        const uint64_t b
+        )
+{
+    const uint64_t m = sg_widen(sg_ge(a, b));
+    return (a & m) | (b & ~m);
+}
+
+/* the top bit of each nonzero lane */
+static inline uint64_t sg_nonzero(
+        const uint64_t a
+        )
+{
+    return (a + (SG_HIGH - SG_ONES)) & SG_HIGH;
+}
+
+/* the sum of the lanes */
+static inline deg_t sg_lane_sum(
+        uint64_t w
+        )
+{
+#if SG_LB == 16
+    w = (w & 0x0000FFFF0000FFFFULL) + ((w >> 16) & 0x0000FFFF0000FFFFULL);
+#endif
+    return (deg_t)((w & 0xFFFFFFFFULL) + (w >> 32));
+}
+
+/* does a divide b? */
+static inline int sg_divides_packed(
+        const uint64_t * const a,
+        const uint64_t * const b,
+        const len_t nw
+        )
+{
+    len_t i;
+    for (i = 0; i < nw; ++i) {
+        if ((b[i] - a[i]) & SG_HIGH) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* packs the variables of the exponent vector e, returns its degree */
+static inline deg_t sg_pack(
+        const exp_t * const e,
+        uint64_t *w,
+        const len_t evl,
+        const len_t nw
+        )
+{
+    len_t i;
+    deg_t d = 0;
+    memset(w, 0, (unsigned long)nw * sizeof(uint64_t));
+    for (i = 1; i < evl; ++i) {
+        w[(i-1) / SG_LPW] |= (uint64_t)e[i] << (SG_LB * ((i-1) % SG_LPW));
+        d += e[i];
+    }
+    return d;
+}
+
+/* the exponent vector of the packed monomial w, with its degree */
+static inline void sg_unpack(
+        const uint64_t * const w,
+        exp_t *e,
+        const len_t evl
+        )
+{
+    len_t i;
+    deg_t d = 0;
+    for (i = 1; i < evl; ++i) {
+        e[i] = (exp_t)((w[(i-1) / SG_LPW] >> (SG_LB * ((i-1) % SG_LPW))) & SG_LANE);
+        d   += e[i];
+    }
+    e[0] = (exp_t)d;
+}
+
+/* the packed lead term and module monomial of the signature of element n */
+#define SG_PL(sg, n) ((sg)->pw + (unsigned long)(n) * 2 * (sg)->nw)
+#define SG_PS(sg, n) ((sg)->pw + ((unsigned long)(n) * 2 + 1) * (sg)->nw)
+
+/* the syzygy signatures of one index: their packed module monomials, each
+ * with a divisor mask of 64 bits */
+typedef struct sg_syz_t sg_syz_t;
+struct sg_syz_t
+{
+    uint64_t *m;  /* divisor masks */
+    uint64_t *w;  /* packed monomials, one after the other */
+    len_t ld;
+    len_t sz;
+};
+
+typedef struct sg_el_t sg_el_t;
+struct sg_el_t
+{
+    hm_t *p;      /* terms as hashes of the basis hash table, decreasing,
+                   * with the header of basis elements */
+    cf32_t *cf;   /* monic coefficients */
+    len_t ix;     /* index of the signature */
+    hm_t sm;      /* module monomial of the signature */
+    hm_t sc;      /* Schreyer monomial sm * lm(f_ix) */
+    uint64_t tau; /* rank of the class (sig-lead ratio, index): elements
+                   * compare as their classes iff their ranks do */
+};
+
+typedef struct sg_sig_t sg_sig_t;
+struct sg_sig_t
+{
+    len_t ix;
+    hm_t sm;
+    hm_t sc;
+    deg_t deg;    /* degree of sc */
+};
+
+typedef struct sg_row_t sg_row_t;
+struct sg_row_t
+{
+    hm_t *r;            /* terms, first as hashes of the symbolic hash
+                         * table, then as columns */
+    const cf32_t *cf;   /* coefficients of the multiplied element */
+    len_t ix;
+    hm_t sm;
+    hm_t sc;
+    int8_t reducer;     /* 1 for rows from symbolic preprocessing */
+    int8_t gen;         /* 1 for the input generator at its signature e_i */
+};
+
+typedef struct sg_t sg_t;
+struct sg_t
+{
+    sg_el_t *e;         /* elements of the signature basis */
+    len_t ld;
+    len_t sz;
+    len_t **ixe;        /* elements of each index */
+    len_t *ixld;
+    len_t *ixsz;
+    sg_el_t *g;         /* input generators with signature e_i */
+    len_t ng;
+    sg_syz_t *syz;      /* syzygy signatures of each index */
+    len_t *syzhit;      /* the syzygy of each index that divided last */
+    sg_sig_t *ps;       /* pending signatures */
+    len_t pld;
+    len_t psz;
+    uint32_t fc;
+    ht_t *bht;
+    ht_t *sht;
+    exp_t *e0, *e1, *e2, *e3; /* scratch exponent vectors */
+    /* handover state */
+    int early_done;
+    int gap_done;
+    /* statistics */
+    uint64_t nsubs;     /* multiply-adds of the current round */
+    len_t nzero;        /* rows reduced to zero in the current round */
+    len_t ndiv;         /* new elements whose lead term is divisible
+                         * by a lead term from before the round */
+    len_t maxgap;       /* largest signature degree minus lead degree */
+    uint64_t cnt_pairs, cnt_singular, cnt_syz, cnt_koszul, cnt_queued, cnt_base;
+    uint64_t **tri;     /* triangle of bits, see sg_tri_get() */
+    uint64_t nearly;    /* rows dropped before the matrix is built */
+    uint64_t seed;      /* random state of the zero tests */
+    uint64_t ntested;   /* rows found zero by random combinations */
+    len_t *rord;        /* the elements by increasing rank */
+    len_t nw;           /* words of a packed monomial */
+    uint64_t *gpl;      /* packed lead terms of the input generators */
+    uint64_t *pw;       /* packed lead term and packed module monomial of
+                         * the signature of each element */
+    int wide;           /* 1 if a degree passes SG_LMAX */
+    len_t trisz;
+};
+
+static inline hm_t sg_insert(
+        const exp_t *e,
+        ht_t *ht
+        )
+{
+    if (ht->eld >= ht->esz) {
+        enlarge_hash_table(ht);
+    }
+    return insert_in_hash_table(e, ht);
+}
+
+/* degree reverse lexicographical comparison of exponent vectors,
+ * as monomial_cmp_drl() */
+static inline int sg_cmp_exp(
+        const exp_t * const a,
+        const exp_t * const b,
+        const len_t evl
+        )
+{
+    len_t i;
+    if (a[0] != b[0]) {
+        return a[0] > b[0] ? 1 : -1;
+    }
+    for (i = evl-1; i > 0; --i) {
+        if (a[i] != b[i]) {
+            return a[i] < b[i] ? 1 : -1;
+        }
+    }
+    return 0;
+}
+
+static inline int sg_divides_exp(
+        const exp_t * const a, /* divisor */
+        const exp_t * const b,
+        const len_t evl
+        )
+{
+    len_t i;
+    for (i = 0; i < evl; ++i) {
+        if (a[i] > b[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* signature comparison in Schreyer's order */
+static inline int sg_cmp_sig(
+        const len_t ia,
+        const hm_t sca,
+        const len_t ib,
+        const hm_t scb,
+        const ht_t * const ht
+        )
+{
+    const int c = monomial_cmp_drl(sca, scb, ht);
+    if (c != 0) {
+        return c > 0 ? 1 : -1;
+    }
+    return ia == ib ? 0 : (ia > ib ? 1 : -1);
+}
+
+/* compares the sig-lead ratios sc_a/lm(a) and sc_b/lm(b) */
+static inline int sg_cmp_ratio(
+        const sg_el_t * const a,
+        const sg_el_t * const b,
+        sg_t *sg
+        )
+{
+    len_t j;
+    const ht_t * const ht = sg->bht;
+    const len_t evl = ht->evl;
+    const exp_t * const sa = ht->ev[a->sc];
+    const exp_t * const sb = ht->ev[b->sc];
+    const exp_t * const la = ht->ev[a->p[OFFSET]];
+    const exp_t * const lb = ht->ev[b->p[OFFSET]];
+    for (j = 0; j < evl; ++j) {
+        sg->e0[j] = sa[j] + lb[j];
+        sg->e1[j] = sb[j] + la[j];
+    }
+    const int c = sg_cmp_exp(sg->e0, sg->e1, evl);
+    if (c != 0) {
+        return c;
+    }
+    return a->ix == b->ix ? 0 : (a->ix > b->ix ? 1 : -1);
+}
+
+/* divisor mask of 64 bits: with n <= 64 variables each variable takes
+ * 64/n bits, bit k set where its exponent passes k, past 64 variables
+ * variable i sets bit i modulo 64 where its exponent is not zero. The
+ * thresholds do not depend on the input, so the masks keep filtering at
+ * higher degrees. */
+static inline uint64_t sg_mask(
+        const uint64_t * const w,
+        const len_t nv
+        )
+{
+    len_t i;
+    uint64_t m = 0;
+    if (nv > 64) {
+        for (i = 0; i < nv; ++i) {
+            if ((w[i / SG_LPW] >> (SG_LB * (i % SG_LPW))) & SG_LANE) {
+                m |= (uint64_t)1 << (i % 64);
+            }
+        }
+        return m;
+    }
+    const len_t b = 64 / nv;
+    for (i = 0; i < nv; ++i) {
+        const uint64_t e = (w[i / SG_LPW] >> (SG_LB * (i % SG_LPW))) & SG_LANE;
+        const len_t x    = e < b ? (len_t)e : b;
+        const uint64_t f = x >= 64 ? ~(uint64_t)0 : (((uint64_t)1 << x) - 1);
+        m |= f << (i * b);
+    }
+    return m;
+}
+
+/* is the signature with index ix and packed module monomial w divisible
+ * by a syzygy signature? */
+static inline int sg_is_syzygy(
+        const sg_t * const sg,
+        const len_t ix,
+        const uint64_t * const w
+        )
+{
+    len_t i;
+    const len_t nw  = sg->nw;
+    const sg_syz_t * const s = sg->syz + ix;
+    if (s->ld == 0) {
+        return 0;
+    }
+    const uint64_t nm = ~sg_mask(w, sg->bht->nv);
+    /* the syzygy that divided last is tried first */
+    const len_t h = sg->syzhit[ix];
+    if (!(s->m[h] & nm) && sg_divides_packed(s->w + (unsigned long)h * nw, w, nw)) {
+        return 1;
+    }
+    for (i = 0; i < s->ld; ++i) {
+        if (s->m[i] & nm) {
+            continue;
+        }
+        if (sg_divides_packed(s->w + (unsigned long)i * nw, w, nw)) {
+            /* the syzygies dividing often move to the front */
+            const len_t f = i / 2;
+            if (f < i) {
+                sg_syz_t *u = ((sg_t *)sg)->syz + ix;
+                len_t j;
+                const uint64_t tm = u->m[f];
+                u->m[f] = u->m[i];
+                u->m[i] = tm;
+                for (j = 0; j < nw; ++j) {
+                    const uint64_t t = u->w[(unsigned long)f * nw + j];
+                    u->w[(unsigned long)f * nw + j] = u->w[(unsigned long)i * nw + j];
+                    u->w[(unsigned long)i * nw + j] = t;
+                }
+            }
+            ((sg_t *)sg)->syzhit[ix] = f;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void sg_add_syzygy(
+        sg_t *sg,
+        const len_t ix,
+        const uint64_t * const w
+        )
+{
+    if (sg_is_syzygy(sg, ix, w)) {
+        return;
+    }
+    const len_t nw = sg->nw;
+    sg_syz_t *s = sg->syz + ix;
+    /* the syzygies stay minimal: the multiples of the new one go */
+    const uint64_t m = sg_mask(w, sg->bht->nv);
+    len_t i, k = 0;
+    for (i = 0; i < s->ld; ++i) {
+        const uint64_t * const f = s->w + (unsigned long)i * nw;
+        if (!(m & ~s->m[i]) && sg_divides_packed(w, f, nw)) {
+            continue;
+        }
+        if (k < i) {
+            s->m[k] = s->m[i];
+            memmove(s->w + (unsigned long)k * nw, f, (unsigned long)nw * sizeof(uint64_t));
+        }
+        k++;
+    }
+    s->ld = k;
+    if (sg->syzhit[ix] >= k) {
+        sg->syzhit[ix] = 0;
+    }
+    if (s->ld >= s->sz) {
+        s->sz = s->sz > 0 ? 2 * s->sz : 8;
+        s->m  = realloc(s->m, (unsigned long)s->sz * sizeof(uint64_t));
+        s->w  = realloc(s->w, (unsigned long)s->sz * nw * sizeof(uint64_t));
+    }
+    memcpy(s->w + (unsigned long)s->ld * nw, w, (unsigned long)nw * sizeof(uint64_t));
+    s->m[s->ld] = m;
+    s->ld++;
+}
+
+/* the same for an exponent vector */
+static inline int sg_is_syzygy_exp(
+        sg_t *sg,
+        const len_t ix,
+        const exp_t * const e
+        )
+{
+    uint64_t w[sg->nw];
+    sg_pack(e, w, sg->bht->evl, sg->nw);
+    return sg_is_syzygy(sg, ix, w);
+}
+
+static void sg_add_syzygy_exp(
+        sg_t *sg,
+        const len_t ix,
+        const exp_t * const e
+        )
+{
+    uint64_t w[sg->nw];
+    if (sg_pack(e, w, sg->bht->evl, sg->nw) > SG_LMAX) {
+        sg->wide = 1;
+        return;
+    }
+    sg_add_syzygy(sg, ix, w);
+}
+
+static void sg_add_pending(
+        sg_t *sg,
+        const len_t ix,
+        const exp_t * const sm,
+        const exp_t * const sc
+        )
+{
+    if (sg->pld >= sg->psz) {
+        sg->psz = 2 * sg->psz;
+        sg->ps  = realloc(sg->ps, (unsigned long)sg->psz * sizeof(sg_sig_t));
+    }
+    sg_sig_t *s = sg->ps + sg->pld;
+    s->ix  = ix;
+    s->deg = sc[0];
+    /* sm and sc may point into the hash table, the insertions may
+     * move it */
+    memcpy(sg->e2, sm, (unsigned long)sg->bht->evl * sizeof(exp_t));
+    memcpy(sg->e3, sc, (unsigned long)sg->bht->evl * sizeof(exp_t));
+    s->sm  = sg_insert(sg->e2, sg->bht);
+    s->sc  = sg_insert(sg->e3, sg->bht);
+    sg->pld++;
+}
+
+/* inserts the element n in the elements ordered by their classes (sig-lead
+ * ratio, index) and gives it the rank of its class: the one of an equal
+ * class, otherwise the middle of the ranks of its neighbours; where there
+ * is no room between them, all classes are ranked anew with equal gaps */
+static void sg_rank_element(
+        sg_t *sg,
+        const len_t n
+        )
+{
+    len_t lo = 0, hi = n, i;
+    sg_el_t *e = sg->e;
+    int c = 1;
+    while (lo < hi) {
+        const len_t mid = lo + (hi - lo) / 2;
+        c = sg_cmp_ratio(e + n, e + sg->rord[mid], sg);
+        if (c == 0) {
+            lo = mid;
+            break;
+        }
+        if (c > 0) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    memmove(sg->rord + lo + 1, sg->rord + lo, (unsigned long)(n - lo) * sizeof(len_t));
+    sg->rord[lo] = n;
+    if (c == 0 && lo < hi) {
+        e[n].tau = e[sg->rord[lo+1]].tau;
+        return;
+    }
+    const uint64_t a = lo > 0 ? e[sg->rord[lo-1]].tau : 0;
+    const uint64_t b = lo < n ? e[sg->rord[lo+1]].tau : UINT64_MAX;
+    if (b - a >= 2) {
+        e[n].tau = a + (b - a) / 2;
+        return;
+    }
+    /* rank all classes anew */
+    len_t ncl = 0;
+    for (i = 0; i <= n; ++i) {
+        if (i == 0 || sg_cmp_ratio(e + sg->rord[i], e + sg->rord[i-1], sg) != 0) {
+            ncl++;
+        }
+    }
+    const uint64_t step = UINT64_MAX / (ncl + 1);
+    uint64_t t = 0;
+    for (i = 0; i <= n; ++i) {
+        if (i == 0 || sg_cmp_ratio(e + sg->rord[i], e + sg->rord[i-1], sg) != 0) {
+            t += step;
+        }
+        e[sg->rord[i]].tau = t;
+    }
+}
+
+static void sg_add_element(
+        sg_t *sg,
+        hm_t *p,
+        cf32_t *cf,
+        const len_t ix,
+        const hm_t sm,
+        const hm_t sc
+        )
+{
+    if (sg->ld >= sg->sz) {
+        sg->sz   = 2 * sg->sz;
+        sg->e    = realloc(sg->e, (unsigned long)sg->sz * sizeof(sg_el_t));
+        sg->rord = realloc(sg->rord, (unsigned long)sg->sz * sizeof(len_t));
+        sg->pw   = realloc(sg->pw, (unsigned long)sg->sz * 2 * sg->nw * sizeof(uint64_t));
+    }
+    if (sg_pack(sg->bht->ev[p[OFFSET]], SG_PL(sg, sg->ld), sg->bht->evl, sg->nw) > SG_LMAX
+            || sg_pack(sg->bht->ev[sm], SG_PS(sg, sg->ld), sg->bht->evl, sg->nw) > SG_LMAX) {
+        sg->wide = 1;
+    }
+    sg_el_t *e = sg->e + sg->ld;
+    e->p  = p;
+    e->cf = cf;
+    e->ix = ix;
+    e->sm = sm;
+    e->sc = sc;
+    sg_rank_element(sg, sg->ld);
+    if (sg->ixld[ix] >= sg->ixsz[ix]) {
+        sg->ixsz[ix] = sg->ixsz[ix] > 0 ? 2 * sg->ixsz[ix] : 8;
+        sg->ixe[ix]  = realloc(sg->ixe[ix],
+                (unsigned long)sg->ixsz[ix] * sizeof(len_t));
+    }
+    sg->ixe[ix][sg->ixld[ix]++] = sg->ld;
+    sg->ld++;
+}
+
+/* the syzygy f_i * h - h * e_i of the new element h = sg->e[n] and each
+ * input generator f_i, written as module element: its terms are
+ * lm(f_i) * sig(h) with Schreyer monomial lm(f_i) * sc(h) and lm(h) * e_i
+ * with Schreyer monomial lm(h) * lm(f_i), the larger one is its
+ * signature. If both are the same module term they may cancel. */
+static void sg_principal_syzygies(
+        sg_t *sg,
+        const len_t n
+        )
+{
+    len_t i, j;
+    ht_t *ht         = sg->bht;
+    const len_t nw   = sg->nw;
+    const sg_el_t *h = sg->e + n;
+    uint64_t w[nw];
+    /* lm(f_i) * sc(h) against lm(h) * lm(f_i) is sc(h) against lm(h) */
+    const int c0 = sg_cmp_exp(ht->ev[h->sc], ht->ev[h->p[OFFSET]], ht->evl);
+    const deg_t dsm = ht->hd[h->sm].deg;
+
+    for (i = 0; i < sg->ng; ++i) {
+        int c = c0;
+        if (c == 0) {
+            if (h->ix == i) {
+                continue;
+            }
+            c = h->ix > i ? 1 : -1;
+        }
+        if (c > 0) {
+            if (dsm + ht->hd[sg->g[i].p[OFFSET]].deg > SG_LMAX) {
+                sg->wide = 1;
+                return;
+            }
+            const uint64_t * const a = sg->gpl + (unsigned long)i * nw;
+            const uint64_t * const b = SG_PS(sg, n);
+            for (j = 0; j < nw; ++j) {
+                w[j] = a[j] + b[j];
+            }
+            sg_add_syzygy(sg, h->ix, w);
+        } else {
+            sg_add_syzygy(sg, i, SG_PL(sg, n));
+        }
+    }
+}
+
+/* the signature of the S-pair of the elements a and b: returns 0 for a
+ * singular S-pair, otherwise sets the index and the module monomial of
+ * the signature and if the lead terms are coprime. With L the lcm of the
+ * lead terms, the two candidates are L times the sig-lead ratios of a
+ * and b, so the ranks of their classes tell which one is larger, and only
+ * that one is formed. */
+static inline int sg_pair_signature(
+        const sg_t * const sg,
+        const len_t a,
+        const len_t b,
+        len_t *ix,
+        uint64_t *sm,
+        int *coprime
+        )
+{
+    len_t j;
+    const len_t nw = sg->nw;
+    const sg_el_t * const g = sg->e + a;
+    const sg_el_t * const h = sg->e + b;
+    if (g->tau == h->tau) {
+        return 0;
+    }
+    const len_t x = g->tau > h->tau ? a : b;
+    const len_t y = g->tau > h->tau ? b : a;
+    const uint64_t * const lx = SG_PL(sg, x);
+    const uint64_t * const ly = SG_PL(sg, y);
+    const uint64_t * const sx = SG_PS(sg, x);
+    deg_t d   = 0;
+    uint64_t cp = 0;
+    for (j = 0; j < nw; ++j) {
+        /* each lane of sm is sx + max(lx, ly) - lx, the degree of sm
+         * bounds them */
+        sm[j] = sx[j] + sg_max(lx[j], ly[j]) - lx[j];
+        d    += sg_lane_sum(sm[j]);
+        cp   |= sg_nonzero(lx[j]) & sg_nonzero(ly[j]);
+    }
+    if (d > SG_LMAX) {
+        ((sg_t *)sg)->wide = 1;
+        return 0;
+    }
+    *ix      = sg->e[x].ix;
+    *coprime = cp == 0;
+    return 1;
+}
+
+/* the triangle of bits: is the signature of the S-pair of a and b known
+ * to be a syzygy signature? */
+static inline int sg_tri_get(
+        const sg_t * const sg,
+        len_t a,
+        len_t b
+        )
+{
+    if (a < b) {
+        const len_t t = a;
+        a = b;
+        b = t;
+    }
+    return (sg->tri[a][b / 64] >> (b % 64)) & 1;
+}
+
+static inline void sg_tri_set(
+        sg_t *sg,
+        const len_t a,  /* a > b */
+        const len_t b
+        )
+{
+    sg->tri[a][b / 64] |= (uint64_t)1 << (b % 64);
+}
+
+/* forms the S-pairs of the new element n with the elements before it.
+ * The base divisor of n is the element of largest sig-lead ratio whose
+ * signature divides the one of n. If the signature of the S-pair of the
+ * base divisor and h is a syzygy signature dividing the signature of the
+ * S-pair of n and h, the latter one is a syzygy signature, too. */
+static void sg_new_pairs(
+        sg_t *sg,
+        const len_t n
+        )
+{
+    len_t i, j, k;
+    ht_t *ht        = sg->bht;
+    const len_t evl = ht->evl;
+    const len_t nw  = sg->nw;
+    uint64_t sm[nw], bsm[nw];
+    exp_t esm[evl], sc[evl];
+    len_t ix, bix;
+    int coprime, bcp;
+
+    if (n >= sg->trisz) {
+        const len_t osz = sg->trisz;
+        sg->trisz = 2 * n + 16;
+        sg->tri   = realloc(sg->tri, (unsigned long)sg->trisz * sizeof(uint64_t *));
+        memset(sg->tri + osz, 0, (unsigned long)(sg->trisz - osz) * sizeof(uint64_t *));
+    }
+    sg->tri[n] = (uint64_t *)calloc((unsigned long)(n / 64 + 1), sizeof(uint64_t));
+
+    /* base divisor by signature */
+    len_t bd = n;
+    {
+        const sg_el_t * const g = sg->e + n;
+        const exp_t * const smg = ht->ev[g->sm];
+        const sdm_t ns = ~ht->hd[g->sm].sdm;
+        exp_t best[evl], lt[evl];
+        for (k = 0; k < sg->ixld[g->ix]; ++k) {
+            const len_t c = sg->ixe[g->ix][k];
+            if (c >= n) {
+                continue;
+            }
+            const sg_el_t * const e = sg->e + c;
+            if (ht->hd[e->sm].sdm & ns) {
+                continue;
+            }
+            const exp_t * const es = ht->ev[e->sm];
+            if (!sg_divides_exp(es, smg, evl)) {
+                continue;
+            }
+            const exp_t * const el = ht->ev[e->p[OFFSET]];
+            for (j = 0; j < evl; ++j) {
+                lt[j] = smg[j] - es[j] + el[j];
+            }
+            if (bd == n || sg_cmp_exp(lt, best, evl) < 0) {
+                bd = c;
+                memcpy(best, lt, (unsigned long)evl * sizeof(exp_t));
+            }
+        }
+    }
+
+    for (i = 0; i < n; ++i) {
+        sg->cnt_pairs++;
+        if (!sg_pair_signature(sg, n, i, &ix, sm, &coprime)) {
+            sg->cnt_singular++;
+            continue;
+        }
+        if (bd != n && i != bd && sg_tri_get(sg, bd, i)
+                && sg_pair_signature(sg, bd, i, &bix, bsm, &bcp)
+                && bix == ix && sg_divides_packed(bsm, sm, nw)) {
+            sg->cnt_base++;
+            sg_tri_set(sg, n, i);
+            continue;
+        }
+        if (sg_is_syzygy(sg, ix, sm)) {
+            sg->cnt_syz++;
+            sg_tri_set(sg, n, i);
+            continue;
+        }
+        if (coprime) {
+            /* the signature of the Koszul syzygy of g and h */
+            sg->cnt_koszul++;
+            sg_add_syzygy(sg, ix, sm);
+            sg_tri_set(sg, n, i);
+            continue;
+        }
+        sg->cnt_queued++;
+        sg_unpack(sm, esm, evl);
+        const exp_t * const lf = ht->ev[sg->g[ix].p[OFFSET]];
+        if ((uint64_t)esm[0] + lf[0] > EXP_MAX) {
+            exponent_overflow();
+        }
+        for (j = 0; j < evl; ++j) {
+            sc[j] = esm[j] + lf[j];
+        }
+        sg_add_pending(sg, ix, esm, sc);
+    }
+}
+
+static int sg_pending_cmp(
+        const void *a,
+        const void *b,
+        void *htp
+        )
+{
+    const sg_sig_t *sa = (const sg_sig_t *)a;
+    const sg_sig_t *sb = (const sg_sig_t *)b;
+    return sg_cmp_sig(sa->ix, sa->sc, sb->ix, sb->sc, (const ht_t *)htp);
+}
+
+typedef struct sg_ctx_t sg_ctx_t;
+struct sg_ctx_t
+{
+    sg_t *sg;
+    const ht_t *ht;
+};
+
+/* rows by increasing signature, rows of equal signature by increasing
+ * lead term, i.e. decreasing lead column */
+static int sg_row_cmp(
+        const void *a,
+        const void *b,
+        void *ctxp
+        )
+{
+    const sg_row_t *ra = (const sg_row_t *)a;
+    const sg_row_t *rb = (const sg_row_t *)b;
+    const int c = sg_cmp_sig(ra->ix, ra->sc, rb->ix, rb->sc,
+            ((sg_ctx_t *)ctxp)->ht);
+    if (c != 0) {
+        return c;
+    }
+    const hm_t la = ra->r[OFFSET];
+    const hm_t lb = rb->r[OFFSET];
+    return la == lb ? 0 : (la > lb ? -1 : 1);
+}
+
+/* reducer order: increasing sig-lead ratio, then fewer terms, then
+ * older elements first */
+static int sg_reducer_cmp(
+        const void *a,
+        const void *b,
+        void *sgp
+        )
+{
+    sg_t *sg = (sg_t *)sgp;
+    const len_t ia = *((const len_t *)a);
+    const len_t ib = *((const len_t *)b);
+    const sg_el_t *ea = sg->e + ia;
+    const sg_el_t *eb = sg->e + ib;
+    if (ea->tau != eb->tau) {
+        return ea->tau < eb->tau ? -1 : 1;
+    }
+    if (ea->p[LENGTH] != eb->p[LENGTH]) {
+        return ea->p[LENGTH] < eb->p[LENGTH] ? -1 : 1;
+    }
+    return ia < ib ? -1 : (ia > ib ? 1 : 0);
+}
+
+static int sg_col_cmp(
+        const void *a,
+        const void *b,
+        void *htp
+        )
+{
+    const hi_t ma = *((const hi_t *)a);
+    const hi_t mb = *((const hi_t *)b);
+    return monomial_cmp_drl(mb, ma, (const ht_t *)htp);
+}
+
+/* returns the row of the multiple of element el (or of the input
+ * generator el if gen != 0) by the monomial with exponents m */
+static sg_row_t sg_multiple(
+        sg_t *sg,
+        const sg_el_t * const el,
+        const exp_t * const m,
+        const int8_t reducer
+        )
+{
+    len_t j;
+    sg_row_t row;
+    ht_t *bht       = sg->bht;
+    ht_t *sht       = sg->sht;
+    const len_t evl = bht->evl;
+    exp_t em[evl];
+    val_t h = 0;
+    memcpy(em, m, (unsigned long)evl * sizeof(exp_t));
+    for (j = 0; j < evl; ++j) {
+        h += bht->rn[j] * em[j];
+    }
+    row.r       = multiplied_poly_to_matrix_row(sht, bht, h, em, el->p);
+    row.cf      = el->cf;
+    row.ix      = el->ix;
+    row.reducer = reducer;
+    row.gen     = 0;
+    exp_t e[evl];
+    if ((uint64_t)em[0] + bht->ev[el->sc][0] > EXP_MAX) {
+        exponent_overflow();
+    }
+    const exp_t * const sm = bht->ev[el->sm];
+    for (j = 0; j < evl; ++j) {
+        e[j] = em[j] + sm[j];
+    }
+    row.sm = sg_insert(e, bht);
+    const exp_t * const sc = bht->ev[el->sc];
+    for (j = 0; j < evl; ++j) {
+        e[j] = em[j] + sc[j];
+    }
+    row.sc = sg_insert(e, bht);
+    return row;
+}
+
+/* subtracts mul times the pivot row (pr, pf) of length pl but its lead
+ * entry from the dense row dr. For p < 2^16 each product is below 2^32, so
+ * the entries stay below 2^63 for less than 2^31 subtractions, otherwise
+ * they are kept below 2^63 by subtracting big, a multiple of p. */
+static inline void sg_sub_row(
+        uint64_t *dr,
+        const hm_t * const pr,
+        const cf32_t * const pf,
+        const len_t pl,
+        const uint64_t mul,
+        const uint64_t big,
+        const int small
+        )
+{
+    len_t j;
+    if (small) {
+        for (j = 1; j < pl; ++j) {
+            dr[pr[j]] += mul * pf[j];
+        }
+    } else {
+        for (j = 1; j < pl; ++j) {
+            const uint64_t t = dr[pr[j]] + mul * pf[j];
+            dr[pr[j]] = t >= big ? t - big : t;
+        }
+    }
+}
+
+/* the least number s of random combinations with (p-1)^s >= 2^31: if s
+ * random combinations of some rows reduce to zero, all rows do so with
+ * probability at least 1 - 2^-31 */
+static len_t sg_zero_combinations(
+        const uint64_t p
+        )
+{
+    len_t s = 1;
+    long double q = (long double)(p - 1);
+    while (q < 2147483648.0L) {
+        q *= (long double)(p - 1);
+        s++;
+    }
+    return s;
+}
+
+/* do s random combinations of the rows g[0], ..., g[ng-1] reduce to zero by
+ * the pivots? A combination stops at its first entry in a column without
+ * a pivot, which shows it nonzero. The dense row is zero afterwards. */
+static int sg_zero_test(
+        const len_t * const g,
+        const len_t ng,
+        const sg_row_t * const rows,
+        hm_t **pc,
+        cf32_t **pcf,
+        uint64_t *dr,
+        const len_t nc,
+        const uint64_t p,
+        const uint64_t big,
+        const int small,
+        const len_t s,
+        uint64_t *seed,
+        uint64_t *nsubs
+        )
+{
+    len_t i, j, k, t;
+    for (t = 0; t < s; ++t) {
+        len_t from = nc;
+        for (i = 0; i < ng; ++i) {
+            const sg_row_t * const row = rows + g[i];
+            const hm_t * const r = row->r + OFFSET;
+            const len_t len = row->r[LENGTH];
+            /* xorshift */
+            *seed ^= *seed << 13;
+            *seed ^= *seed >> 7;
+            *seed ^= *seed << 17;
+            const uint64_t c = 1 + *seed % (p - 1);
+            for (j = 0; j < len; ++j) {
+                const uint64_t x = dr[r[j]] + c * row->cf[j];
+                dr[r[j]] = x >= big ? x - big : x;
+            }
+            if (r[0] < from) {
+                from = r[0];
+            }
+        }
+        for (k = from; k < nc; ++k) {
+            if (dr[k] == 0) {
+                continue;
+            }
+            const uint64_t v = dr[k] % p;
+            dr[k] = 0;
+            if (v == 0) {
+                continue;
+            }
+            if (pc[k] == NULL) {
+                memset(dr + k + 1, 0, (unsigned long)(nc - k - 1) * sizeof(uint64_t));
+                return 0;
+            }
+            sg_sub_row(dr, pc[k] + OFFSET, pcf[k], pc[k][LENGTH], p - v, big, small);
+            *nsubs += pc[k][LENGTH];
+        }
+    }
+    return 1;
+}
+
+/* one round: returns the number of new elements, -1 if the basis holds a
+ * constant */
+static int64_t sg_round(
+        sg_t *sg,
+        md_t *md
+        )
+{
+    len_t i, j, k;
+    ht_t *bht       = sg->bht;
+    ht_t *sht       = sg->sht;
+    const len_t evl = bht->evl;
+    const uint64_t p = sg->fc;
+
+    const double t0 = realtime();
+    /* select the pending signatures of least degree */
+    deg_t d = sg->ps[0].deg;
+    for (i = 1; i < sg->pld; ++i) {
+        if (sg->ps[i].deg < d) {
+            d = sg->ps[i].deg;
+        }
+    }
+    len_t ns = 0;
+    sg_sig_t *sel = (sg_sig_t *)malloc((unsigned long)sg->pld * sizeof(sg_sig_t));
+    for (i = 0, j = 0; i < sg->pld; ++i) {
+        if (sg->ps[i].deg == d) {
+            sel[ns++] = sg->ps[i];
+        } else {
+            sg->ps[j++] = sg->ps[i];
+        }
+    }
+    sg->pld = j;
+    sort_r(sel, (unsigned long)ns, sizeof(sg_sig_t), sg_pending_cmp, bht);
+
+    /* reducer order of the elements */
+    len_t *ro = (len_t *)malloc((unsigned long)(sg->ld+1) * sizeof(len_t));
+    for (i = 0; i < sg->ld; ++i) {
+        ro[i] = i;
+    }
+    sort_r(ro, (unsigned long)sg->ld, sizeof(len_t), sg_reducer_cmp, sg);
+    sdm_t *rsdm = (sdm_t *)malloc((unsigned long)(sg->ld+1) * sizeof(sdm_t));
+    deg_t *rdeg = (deg_t *)malloc((unsigned long)(sg->ld+1) * sizeof(deg_t));
+    for (i = 0; i < sg->ld; ++i) {
+        const hm_t lm = sg->e[ro[i]].p[OFFSET];
+        rsdm[i] = bht->hd[lm].sdm;
+        rdeg[i] = bht->hd[lm].deg;
+    }
+
+    /* rows of the selected signatures, by rewriting */
+    len_t nr = 0, rsz = 2 * ns + 16;
+    sg_row_t *rows = (sg_row_t *)malloc((unsigned long)rsz * sizeof(sg_row_t));
+    exp_t m[evl];
+    len_t mix   = 0;  /* the largest signature of a row to be reduced */
+    hm_t msc    = 0;
+    for (i = 0; i < ns; ++i) {
+        if (i > 0 && sel[i].ix == sel[i-1].ix && sel[i].sm == sel[i-1].sm) {
+            continue;
+        }
+        const len_t ix = sel[i].ix;
+        memcpy(m, bht->ev[sel[i].sm], (unsigned long)evl * sizeof(exp_t));
+        if (sg_is_syzygy_exp(sg, ix, m)) {
+            continue;
+        }
+        /* rewriter: largest sig-lead ratio, i.e. least lead term of the
+         * multiple, among the elements whose signature divides */
+        const sg_el_t *rw = NULL;
+        exp_t best[evl];
+        const sdm_t nsm = ~bht->hd[sel[i].sm].sdm;
+        for (k = 0; k < sg->ixld[ix]; ++k) {
+            const sg_el_t *e = sg->e + sg->ixe[ix][k];
+            if (bht->hd[e->sm].sdm & nsm) {
+                continue;
+            }
+            const exp_t * const es = bht->ev[e->sm];
+            if (!sg_divides_exp(es, m, evl)) {
+                continue;
+            }
+            const exp_t * const el = bht->ev[e->p[OFFSET]];
+            exp_t lt[evl];
+            for (j = 0; j < evl; ++j) {
+                lt[j] = m[j] - es[j] + el[j];
+            }
+            if (rw == NULL || sg_cmp_exp(lt, best, evl) < 0) {
+                rw = e;
+                memcpy(best, lt, (unsigned long)evl * sizeof(exp_t));
+            }
+        }
+        if (rw == NULL) {
+            if (m[0] != 0) {
+                continue;
+            }
+            rw = sg->g + ix;
+        } else if (rw->sm == sel[i].sm) {
+            /* an element with this signature exists already */
+            continue;
+        }
+        if (rw != sg->g + ix) {
+            /* the row a*rw keeps its lead term L = a*lm(rw) unless an
+             * element of smaller sig-lead ratio than rw divides L: only its
+             * multiple reaching L has a smaller signature. The first such
+             * divisor in the reducer order has the least ratio. */
+            const sdm_t nl = ~generate_short_divmask(best, bht);
+            for (k = 0; k < sg->ld; ++k) {
+                if ((rsdm[k] & nl) || rdeg[k] > best[0]) {
+                    continue;
+                }
+                if (sg_divides_exp(bht->ev[sg->e[ro[k]].p[OFFSET]], best, evl)) {
+                    break;
+                }
+            }
+            if (k == sg->ld || sg->e[ro[k]].tau >= rw->tau) {
+                sg->nearly++;
+                continue;
+            }
+        }
+        exp_t q[evl];
+        const exp_t * const es = bht->ev[rw->sm];
+        for (j = 0; j < evl; ++j) {
+            q[j] = m[j] - es[j];
+        }
+        rows[nr] = sg_multiple(sg, rw, q, 0);
+        rows[nr].gen = rw == sg->g + ix;
+        mix = rows[nr].ix;
+        msc = rows[nr].sc;
+        nr++;
+    }
+    free(sel);
+    if (nr == 0) {
+        free(rows);
+        free(ro);
+        free(rsdm);
+        free(rdeg);
+        return 0;
+    }
+
+    /* symbolic preprocessing: each monomial is visited once, the
+     * reducers add new monomials at the end of the symbolic hash table */
+    for (i = 0; i < nr; ++i) {
+        sht->hd[rows[i].r[OFFSET]].idx = 1;
+    }
+    hl_t mi;
+    for (mi = 1; mi < sht->eld; ++mi) {
+        if (sht->hd[mi].idx == 2) {
+            continue;
+        }
+        sht->hd[mi].idx = 2;
+        const sdm_t nm = ~sht->hd[mi].sdm;
+        const deg_t md_ = sht->hd[mi].deg;
+        for (k = 0; k < sg->ld; ++k) {
+            if ((rsdm[k] & nm) || rdeg[k] > md_) {
+                continue;
+            }
+            const sg_el_t *e = sg->e + ro[k];
+            const exp_t * const el = bht->ev[e->p[OFFSET]];
+            const exp_t * const em = sht->ev[mi];
+            if (!sg_divides_exp(el, em, evl)) {
+                continue;
+            }
+            /* the reducer is only of use if its signature is less than
+             * the largest one of a row to be reduced */
+            exp_t q[evl], s[evl];
+            const exp_t * const esc = bht->ev[e->sc];
+            for (j = 0; j < evl; ++j) {
+                q[j] = em[j] - el[j];
+                s[j] = q[j] + esc[j];
+            }
+            int c = sg_cmp_exp(s, bht->ev[msc], evl);
+            if (c == 0) {
+                c = e->ix == mix ? 0 : (e->ix > mix ? 1 : -1);
+            }
+            if (c >= 0) {
+                break;
+            }
+            if (nr >= rsz) {
+                rsz  = 2 * rsz;
+                rows = realloc(rows, (unsigned long)rsz * sizeof(sg_row_t));
+            }
+            rows[nr++] = sg_multiple(sg, e, q, 1);
+            break;
+        }
+    }
+    free(ro);
+    free(rsdm);
+    free(rdeg);
+
+    /* columns by decreasing monomials */
+    const len_t nc = (len_t)(sht->eld - 1);
+    hi_t *hcm = (hi_t *)malloc((unsigned long)nc * sizeof(hi_t));
+    for (i = 0; i < nc; ++i) {
+        hcm[i] = i+1;
+    }
+    sort_r(hcm, (unsigned long)nc, sizeof(hi_t), sg_col_cmp, sht);
+    for (i = 0; i < nc; ++i) {
+        sht->hd[hcm[i]].idx = i;
+    }
+    for (i = 0; i < nr; ++i) {
+        hm_t *r = rows[i].r;
+        const len_t len = r[LENGTH]+OFFSET;
+        for (j = OFFSET; j < len; ++j) {
+            r[j] = sht->hd[r[j]].idx;
+        }
+    }
+    sg_ctx_t ctx = {sg, bht};
+    sort_r(rows, (unsigned long)nr, sizeof(sg_row_t), sg_row_cmp, &ctx);
+
+    if (md->info_level > 1) {
+        fprintf(VERBSTREAM, "%3u %7u sigs %9u x %-9u", (unsigned)d,
+                (unsigned)ns, (unsigned)nr, (unsigned)nc);
+        fflush(VERBSTREAM);
+    }
+
+    /* reduction in signature order, each row by the pivots before it */
+    hm_t **pc       = (hm_t **)calloc((unsigned long)nc, sizeof(hm_t *));
+    cf32_t **pcf    = (cf32_t **)calloc((unsigned long)nc, sizeof(cf32_t *));
+    uint64_t *dr    = (uint64_t *)calloc((unsigned long)nc, sizeof(uint64_t));
+    const uint64_t big = ((uint64_t)1 << 63) / p * p;
+    hm_t *nrow      = (hm_t *)malloc((unsigned long)(nc+OFFSET) * sizeof(hm_t));
+    cf32_t *ncf     = (cf32_t *)malloc((unsigned long)nc * sizeof(cf32_t));
+    /* A row is reduced by a dense scan over the columns from its lead
+     * column on, or by a marked scan over the columns written, one bit per
+     * column: the marked scan is taken where the columns the dense scans of
+     * the recent rows passed are more than twice the entries written. */
+    const len_t nmw = nc / 64 + 1;
+    uint64_t *mk    = NULL;
+    uint64_t passed = 0, written = 0;
+    len_t counted   = 0;
+    const int small = p < ((uint64_t)1 << 16);
+    /* with probabilistic linear algebra, after two rows of a run reduced to
+     * zero one after another, random combinations test whether the rest of
+     * the run, up to the next reducer row setting a pivot, reduces to zero
+     * as a whole; after a failed test the run is tested in blocks of 8
+     * rows, doubling up to 64 */
+    const int tests = md->laopt >= 40 && p > 3;
+    const len_t zs  = tests ? sg_zero_combinations(p) : 0;
+    len_t streak    = 0, blk = 0;
+    len_t *grp      = tests ? (len_t *)malloc((unsigned long)nr * sizeof(len_t)) : NULL;
+
+    /* new elements of the round */
+    len_t nn = 0, nsz = 16;
+    sg_row_t *nw = (sg_row_t *)malloc((unsigned long)nsz * sizeof(sg_row_t));
+
+    sg->nsubs = 0;
+    sg->nzero = 0;
+    for (i = 0; i < nr; ++i) {
+        sg_row_t *row = rows + i;
+        hm_t *r = row->r;
+        const hm_t lc = r[OFFSET];
+        if (row->reducer && pc[lc] == NULL) {
+            pc[lc]  = r;
+            pcf[lc] = (cf32_t *)row->cf;
+            continue;
+        }
+        if (i > 0 && row->ix == rows[i-1].ix && row->sm == rows[i-1].sm) {
+            /* a row of the same signature comes before */
+            free(r);
+            row->r = NULL;
+            continue;
+        }
+        if (!row->reducer && !row->gen && pc[lc] == NULL) {
+            /* the row a*g at the signature s is not regular top-reducible,
+             * so its reduction keeps the lead term a*lm(g) and the
+             * signature s = a*sig(g): it is singular top-reducible by g
+             * and not needed */
+            free(r);
+            row->r = NULL;
+            continue;
+        }
+        const len_t len = r[LENGTH];
+        const uint64_t subs0 = sg->nsubs;
+        const int marked = counted >= 4 && passed > 2 * written;
+        len_t nl = 0;
+        if (marked) {
+            if (mk == NULL) {
+                mk = (uint64_t *)calloc((unsigned long)nmw, sizeof(uint64_t));
+            }
+            for (j = 0; j < len; ++j) {
+                const hm_t c = r[OFFSET+j];
+                dr[c] = row->cf[j];
+                mk[c / 64] |= (uint64_t)1 << (c % 64);
+            }
+            /* the columns written are larger than the current one, so the
+             * bits are read in increasing order */
+            len_t w = lc / 64;
+            while (1) {
+                while (w < nmw && mk[w] == 0) {
+                    ++w;
+                }
+                if (w == nmw) {
+                    break;
+                }
+                k = w * 64 + (len_t)__builtin_ctzll(mk[w]);
+                mk[w] &= mk[w] - 1;
+                const uint64_t v = dr[k] % p;
+                dr[k] = 0;
+                if (v == 0) {
+                    continue;
+                }
+                if (pc[k] == NULL) {
+                    nrow[OFFSET+nl] = k;
+                    ncf[nl++]       = (cf32_t)v;
+                    continue;
+                }
+                const hm_t * const pr   = pc[k] + OFFSET;
+                const len_t pl          = pc[k][LENGTH];
+                sg_sub_row(dr, pr, pcf[k], pl, p - v, big, small);
+                for (j = 1; j < pl; ++j) {
+                    mk[pr[j] / 64] |= (uint64_t)1 << (pr[j] % 64);
+                }
+                sg->nsubs += pl;
+            }
+        } else {
+            for (j = 0; j < len; ++j) {
+                dr[r[OFFSET+j]] = row->cf[j];
+            }
+            for (k = lc; k < nc; ++k) {
+                if (dr[k] == 0) {
+                    continue;
+                }
+                const uint64_t v = dr[k] % p;
+                dr[k] = 0;
+                if (v == 0) {
+                    continue;
+                }
+                if (pc[k] == NULL) {
+                    nrow[OFFSET+nl] = k;
+                    ncf[nl++]       = (cf32_t)v;
+                    continue;
+                }
+                const len_t pl          = pc[k][LENGTH];
+                sg_sub_row(dr, pc[k] + OFFSET, pcf[k], pl, p - v, big, small);
+                sg->nsubs += pl;
+            }
+        }
+        passed  += nc - lc;
+        written += len + (sg->nsubs - subs0);
+        if (++counted % 64 == 0) {
+            passed  /= 2;
+            written /= 2;
+        }
+        free(r);
+        row->r = NULL;
+        if (nl == 0) {
+            /* reduction to zero: a syzygy signature */
+            sg->nzero++;
+            sg_add_syzygy_exp(sg, row->ix, bht->ev[row->sm]);
+            if (tests && ++streak >= 2) {
+                /* the rest of the run: the rows to be reduced up to the
+                 * next reducer row setting a pivot */
+                len_t ng = 0, l;
+                const len_t lim = blk == 0 ? nr : blk;
+                for (l = i + 1; l < nr && ng < lim; ++l) {
+                    const sg_row_t * const x = rows + l;
+                    const hm_t xc = x->r[OFFSET];
+                    if (x->reducer && pc[xc] == NULL) {
+                        break;
+                    }
+                    if (x->ix == rows[l-1].ix && x->sm == rows[l-1].sm) {
+                        continue;
+                    }
+                    if (!x->reducer && !x->gen && pc[xc] == NULL) {
+                        /* dropped as singular anyway */
+                        continue;
+                    }
+                    grp[ng++] = l;
+                }
+                if (ng >= 2 * zs) {
+                    if (sg_zero_test(grp, ng, rows, pc, pcf, dr, nc, p, big,
+                                small, zs, &sg->seed, &sg->nsubs)) {
+                        /* all of them reduce to zero */
+                        for (l = 0; l < ng; ++l) {
+                            sg_row_t *x = rows + grp[l];
+                            sg->nzero++;
+                            sg_add_syzygy_exp(sg, x->ix, bht->ev[x->sm]);
+                            free(x->r);
+                            x->r = NULL;
+                        }
+                        /* rows of equal signature between them go, too */
+                        for (l = i + 1; l < grp[ng-1]; ++l) {
+                            if (rows[l].r != NULL && !(rows[l].reducer
+                                        && pc[rows[l].r[OFFSET]] == NULL)) {
+                                free(rows[l].r);
+                                rows[l].r = NULL;
+                            }
+                        }
+                        sg->ntested += ng;
+                        i = grp[ng-1];
+                        if (blk > 0) {
+                            blk = 2 * blk > 64 ? 64 : 2 * blk;
+                        }
+                    } else {
+                        blk    = 8;
+                        streak = 0;
+                    }
+                }
+            }
+            continue;
+        }
+        streak = 0;
+        /* a new element, made monic */
+        const uint64_t inv = mod_p_inverse_32((int64_t)ncf[0], (int64_t)p);
+        hm_t *er    = (hm_t *)malloc((unsigned long)(nl+OFFSET) * sizeof(hm_t));
+        cf32_t *ecf = (cf32_t *)malloc((unsigned long)nl * sizeof(cf32_t));
+        for (j = 0; j < nl; ++j) {
+            er[OFFSET+j] = nrow[OFFSET+j];
+            ecf[j]       = (cf32_t)(((uint64_t)ncf[j] * inv) % p);
+        }
+        er[LENGTH]  = nl;
+        er[PRELOOP] = nl % UNROLL;
+        er[COEFFS]  = 0;
+        er[MULT]    = 0;
+        er[BINDEX]  = 0;
+        pc[er[OFFSET]]  = er;
+        pcf[er[OFFSET]] = ecf;
+        if (nn >= nsz) {
+            nsz = 2 * nsz;
+            nw  = realloc(nw, (unsigned long)nsz * sizeof(sg_row_t));
+        }
+        nw[nn]    = *row;
+        nw[nn].r  = er;
+        nw[nn].cf = ecf;
+        nn++;
+    }
+
+    /* the new elements in the basis hash table */
+    const len_t ob = sg->ld;
+    int constant   = 0;
+    sg->ndiv       = 0;
+    for (i = 0; i < nn; ++i) {
+        hm_t *r = nw[i].r;
+        const len_t len = r[LENGTH]+OFFSET;
+        for (j = OFFSET; j < len; ++j) {
+            r[j] = sg_insert(sht->ev[hcm[r[j]]], bht);
+        }
+        r[DEG] = bht->hd[r[OFFSET]].deg;
+        if (r[DEG] == 0) {
+            constant = 1;
+        }
+        const deg_t gap = bht->hd[nw[i].sc].deg - r[DEG];
+        if (gap > (deg_t)sg->maxgap) {
+            sg->maxgap = gap;
+        }
+        const sdm_t nl = ~bht->hd[r[OFFSET]].sdm;
+        for (k = 0; k < ob; ++k) {
+            const hm_t l = sg->e[k].p[OFFSET];
+            if (!(bht->hd[l].sdm & nl)
+                    && sg_divides_exp(bht->ev[l], bht->ev[r[OFFSET]], evl)) {
+                sg->ndiv++;
+                break;
+            }
+        }
+        sg_add_element(sg, r, (cf32_t *)nw[i].cf, nw[i].ix, nw[i].sm, nw[i].sc);
+    }
+
+    for (i = 0; i < nr; ++i) {
+        free(rows[i].r);
+    }
+    free(rows);
+    free(mk);
+    free(grp);
+    free(pc);
+    free(pcf);
+    free(dr);
+    free(nrow);
+    free(ncf);
+    free(nw);
+    free(hcm);
+    clean_hash_table(sht);
+
+    if (md->info_level > 1) {
+        fprintf(VERBSTREAM, " %7u new %7u zero %10.2f sec\n",
+                (unsigned)nn, (unsigned)sg->nzero, realtime()-t0);
+        fflush(VERBSTREAM);
+    }
+    return constant ? -1 : (int64_t)nn;
+}
+
+/* does the run hand over after a round that made nn new elements? */
+static int sg_hand_over(
+        sg_t *sg,
+        const len_t nn,
+        const len_t gap,
+        md_t *md
+        )
+{
+    const char *why = NULL;
+    if (md->sig_f4 == 2) {
+        /* the signature-based F4 is not to hand over */
+        return 0;
+    }
+    if (nn > 0 && sg->early_done == 0 && gap >= SG_EARLY) {
+        sg->early_done = 1;
+        if (nn >= SG_EARLY_ROUND && (4 * sg->nzero < nn || 10 * sg->ndiv > 6 * nn)) {
+            why = "early round";
+        }
+    }
+    if (why == NULL && nn > 0 && sg->gap_done == 0 && gap >= SG_GAP) {
+        sg->gap_done = 1;
+        if (2 * sg->nzero < nn || 10 * sg->ndiv > 6 * nn) {
+            why = "gap round";
+        }
+    }
+    if (why == NULL && nn >= SG_OUTGROWN_MIN && 10 * sg->ndiv >= 8 * nn) {
+        why = "outgrown";
+    }
+    if (why == NULL && nn > 0) {
+        /* the S-pairs the update would form against the work of the round */
+        const uint64_t ob    = sg->ld - nn;
+        const uint64_t pairs = (uint64_t)nn * ob + (uint64_t)nn * (nn-1) / 2;
+        if (pairs >= SG_PAIRS && pairs >= sg->nsubs) {
+            why = "pair work";
+        }
+    }
+    if (why != NULL && md->info_level > 0) {
+        fprintf(VERBSTREAM, "signature-based F4 hands over to F4 (%s)\n", why);
+    }
+    return why != NULL;
+}
+
+static void sg_free(
+        sg_t *sg
+        )
+{
+    len_t i;
+    for (i = 0; i < sg->ld; ++i) {
+        free(sg->e[i].p);
+        free(sg->e[i].cf);
+    }
+    free(sg->e);
+    free(sg->rord);
+    free(sg->pw);
+    free(sg->gpl);
+    for (i = 0; i < sg->trisz && sg->tri != NULL; ++i) {
+        free(sg->tri[i]);
+    }
+    free(sg->tri);
+    for (i = 0; i < sg->ng; ++i) {
+        free(sg->ixe[i]);
+        free(sg->syz[i].m);
+        free(sg->syz[i].w);
+        free(sg->g[i].cf);
+    }
+    free(sg->ixe);
+    free(sg->ixld);
+    free(sg->ixsz);
+    free(sg->syz);
+    free(sg->syzhit);
+    free(sg->g);
+    free(sg->ps);
+    free(sg->e0);
+    free(sg->e1);
+    free(sg->e2);
+    free(sg->e3);
+}
+
+/* is the signature-based F4 applicable for this computation? */
+static int sig_f4_applicable(
+        const bs_t * const bs,
+        const md_t * const md
+        )
+{
+    return md->sig_f4 != 0
+        && md->trace_level == NO_TRACER
+        && md->fc > 2 && md->fc < ((uint64_t)1 << 31)
+        && !is_gf2_ext(md->fc)
+        && md->nev == 0 && bs->ht->mo == 0
+        && !bs->ht->boolean
+        && (md->ff_bits == 8 || md->ff_bits == 16 || md->ff_bits == 32)
+        && md->ngens > 0;
+}
+
+/* Computes a Groebner basis of the input generators bs->hm[0], ...,
+ * bs->hm[ngens-1] by the signature-based F4 algorithm. On success the
+ * basis replaces the generators, bs->ld, bs->lmps and bs->lml are set for
+ * the final reduction, and 1 is returned. If the run hands over, bs is
+ * unchanged and 0 is returned. */
+static int sig_f4(
+        bs_t *bs,
+        md_t *md
+        )
+{
+    len_t i, j;
+    double rt = realtime();
+    ht_t *bht = bs->ht;
+    sg_t sg;
+    memset(&sg, 0, sizeof(sg_t));
+    sg.bht  = bht;
+    sg.sht  = md->ht;
+    sg.fc   = (uint32_t)md->fc;
+    sg.seed = 0x9E3779B97F4A7C15ULL ^ md->fc;
+    const len_t evl = bht->evl;
+    sg.e0 = (exp_t *)calloc((unsigned long)evl, sizeof(exp_t));
+    sg.e1 = (exp_t *)calloc((unsigned long)evl, sizeof(exp_t));
+    sg.e2 = (exp_t *)calloc((unsigned long)evl, sizeof(exp_t));
+    sg.e3 = (exp_t *)calloc((unsigned long)evl, sizeof(exp_t));
+
+    /* the input generators by increasing lead term: e_i < e_j for i < j */
+    const len_t ng = (len_t)md->ngens;
+    len_t *gi = (len_t *)malloc((unsigned long)ng * sizeof(len_t));
+    for (i = 0; i < ng; ++i) {
+        gi[i] = i;
+    }
+    for (i = 1; i < ng; ++i) {
+        const len_t t = gi[i];
+        for (j = i; j > 0 && monomial_cmp_drl(bs->hm[gi[j-1]][OFFSET],
+                    bs->hm[t][OFFSET], bht) > 0; --j) {
+            gi[j] = gi[j-1];
+        }
+        gi[j] = t;
+    }
+    sg.ng   = ng;
+    sg.g    = (sg_el_t *)calloc((unsigned long)ng, sizeof(sg_el_t));
+    sg.ixe  = (len_t **)calloc((unsigned long)ng, sizeof(len_t *));
+    sg.ixld = (len_t *)calloc((unsigned long)ng, sizeof(len_t));
+    sg.ixsz = (len_t *)calloc((unsigned long)ng, sizeof(len_t));
+    sg.syz  = (sg_syz_t *)calloc((unsigned long)ng, sizeof(sg_syz_t));
+    sg.syzhit = (len_t *)calloc((unsigned long)ng, sizeof(len_t));
+    sg.sz   = 64;
+    sg.e    = (sg_el_t *)malloc((unsigned long)sg.sz * sizeof(sg_el_t));
+    sg.rord = (len_t *)malloc((unsigned long)sg.sz * sizeof(len_t));
+    sg.nw   = (bht->nv + SG_LPW - 1) / SG_LPW;
+    sg.pw   = (uint64_t *)malloc((unsigned long)sg.sz * 2 * sg.nw * sizeof(uint64_t));
+    sg.gpl  = (uint64_t *)malloc((unsigned long)ng * sg.nw * sizeof(uint64_t));
+    sg.psz  = 2 * ng + 64;
+    sg.ps   = (sg_sig_t *)malloc((unsigned long)sg.psz * sizeof(sg_sig_t));
+    exp_t one[evl];
+    memset(one, 0, (unsigned long)evl * sizeof(exp_t));
+    const hm_t h1 = sg_insert(one, bht);
+    for (i = 0; i < ng; ++i) {
+        const hm_t *b   = bs->hm[gi[i]];
+        const len_t len = b[LENGTH];
+        cf32_t *cf = (cf32_t *)malloc((unsigned long)len * sizeof(cf32_t));
+        for (j = 0; j < len; ++j) {
+            switch (md->ff_bits) {
+                case 8:
+                    cf[j] = bs->cf_8[b[COEFFS]][j];
+                    break;
+                case 16:
+                    cf[j] = bs->cf_16[b[COEFFS]][j];
+                    break;
+                default:
+                    cf[j] = bs->cf_32[b[COEFFS]][j];
+                    break;
+            }
+        }
+        if (sg_pack(bht->ev[b[OFFSET]], sg.gpl + (unsigned long)i * sg.nw,
+                    evl, sg.nw) > SG_LMAX) {
+            sg.wide = 1;
+        }
+        sg.g[i].p  = (hm_t *)b;
+        sg.g[i].cf = cf;
+        sg.g[i].ix = i;
+        sg.g[i].sm = h1;
+        sg.g[i].sc = b[OFFSET];
+        sg_add_pending(&sg, i, one, bht->ev[b[OFFSET]]);
+    }
+    /* Koszul syzygies of the input generators: lm(f_j) e_i for j < i */
+    for (i = 1; i < ng; ++i) {
+        for (j = 0; j < i; ++j) {
+            memcpy(sg.e0, bht->ev[sg.g[j].p[OFFSET]],
+                    (unsigned long)evl * sizeof(exp_t));
+            sg_add_syzygy_exp(&sg, i, sg.e0);
+        }
+    }
+    free(gi);
+
+    if (md->info_level > 1) {
+        fprintf(VERBSTREAM, "signature-based F4\n");
+    }
+    int ok = sg.wide == 0;
+    while (ok && sg.pld > 0) {
+        const len_t ob    = sg.ld;
+        sg.maxgap         = 0;
+        const int64_t nn  = sg_round(&sg, md);
+        if (nn < 0) {
+            break;
+        }
+        if (sg_hand_over(&sg, (len_t)nn, sg.maxgap, md)) {
+            ok = 0;
+            break;
+        }
+        for (i = ob; i < sg.ld; ++i) {
+            sg_principal_syzygies(&sg, i);
+        }
+        for (i = ob; i < sg.ld; ++i) {
+            sg_new_pairs(&sg, i);
+        }
+        if (sg.wide) {
+            /* a degree passes what the packed monomials can hold */
+            if (md->info_level > 0) {
+                fprintf(VERBSTREAM, "signature-based F4 hands over to F4 (degree)\n");
+            }
+            ok = 0;
+            break;
+        }
+    }
+    if (md->info_level > 1) {
+        len_t ns = 0;
+        for (i = 0; i < ng; ++i) {
+            ns += sg.syz[i].ld;
+        }
+        fprintf(VERBSTREAM, "%u elements, %u syzygy signatures, %lu S-pairs: "
+                "%lu singular, %lu by base divisors, %lu by syzygies, "
+                "%lu Koszul, %lu queued; %lu rows dropped before and %lu "
+                "rows tested zero by random combinations\n",
+                (unsigned)sg.ld, (unsigned)ns, (unsigned long)sg.cnt_pairs,
+                (unsigned long)sg.cnt_singular, (unsigned long)sg.cnt_base,
+                (unsigned long)sg.cnt_syz, (unsigned long)sg.cnt_koszul,
+                (unsigned long)sg.cnt_queued, (unsigned long)sg.nearly,
+                (unsigned long)sg.ntested);
+    }
+    if (ok == 0) {
+        sg_free(&sg);
+        clean_hash_table(md->ht);
+        md->sig_f4_rtime = realtime() - rt;
+        return 0;
+    }
+
+    /* the signature basis replaces the generators */
+    for (i = 0; i < ng; ++i) {
+        const len_t ci = bs->hm[i][COEFFS];
+        switch (md->ff_bits) {
+            case 8:
+                free(bs->cf_8[ci]);
+                bs->cf_8[ci] = NULL;
+                break;
+            case 16:
+                free(bs->cf_16[ci]);
+                bs->cf_16[ci] = NULL;
+                break;
+            default:
+                free(bs->cf_32[ci]);
+                bs->cf_32[ci] = NULL;
+                break;
+        }
+        free(bs->hm[i]);
+        bs->hm[i] = NULL;
+    }
+    bs->ld = 0;
+    check_enlarge_basis(bs, sg.ld, md);
+    deg_t mltdeg = 0;
+    for (i = 0; i < sg.ld; ++i) {
+        hm_t *r = sg.e[i].p;
+        const len_t len = r[LENGTH];
+        switch (md->ff_bits) {
+            case 8:
+                bs->cf_8[i] = (cf8_t *)malloc((unsigned long)len * sizeof(cf8_t));
+                for (j = 0; j < len; ++j) {
+                    bs->cf_8[i][j] = (cf8_t)sg.e[i].cf[j];
+                }
+                free(sg.e[i].cf);
+                break;
+            case 16:
+                bs->cf_16[i] = (cf16_t *)malloc((unsigned long)len * sizeof(cf16_t));
+                for (j = 0; j < len; ++j) {
+                    bs->cf_16[i][j] = (cf16_t)sg.e[i].cf[j];
+                }
+                free(sg.e[i].cf);
+                break;
+            default:
+                bs->cf_32[i] = sg.e[i].cf;
+                break;
+        }
+        sg.e[i].cf  = NULL;
+        sg.e[i].p   = NULL;
+        r[COEFFS]   = i;
+        bs->hm[i]   = r;
+        bs->red[i]  = 0;
+        bs->lmps[i] = i;
+        bs->lm[i]   = bht->hd[r[OFFSET]].sdm;
+        if (r[DEG] == 0) {
+            bs->constant = 1;
+        }
+        if (r[DEG] > mltdeg) {
+            mltdeg = r[DEG];
+        }
+    }
+    bs->ld     = sg.ld;
+    bs->lo     = sg.ld;
+    bs->lml    = sg.ld;
+    bs->mltdeg = mltdeg;
+    sg.ld = 0;
+    /* the input generators are freed above, their coefficients copied */
+    sg_free(&sg);
+    clean_hash_table(md->ht);
+    md->sig_f4_rtime = realtime() - rt;
+    return 1;
+}

@@ -26,6 +26,7 @@ EXTRA_DIST	=		basis.h \
 								data.c \
 								engine.c \
 								f4.c \
+								sigf4.c \
 								f4sat.c \
 								gf2_ext.c \
 								sba.c \

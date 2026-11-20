@@ -246,6 +246,12 @@ static inline void display_help(char *str){
   display_option_help('q', "", "Q", "Uses signature-based algorithms.\n");
   display_option_help_noopt("0 - no (default).\n");
   display_option_help_noopt("1 - yes.\n");
+  display_option_help(0, "signature-f4", "SIG", "Computes Groebner bases over prime fields below\n");
+  display_option_help_noopt("2^31 in DRL by a signature-based F4 first, which\n");
+  display_option_help_noopt("hands over to F4 where it does not pay off.\n");
+  display_option_help_noopt("0 - no (default).\n");
+  display_option_help_noopt("1 - yes.\n");
+  display_option_help_noopt("2 - yes, without handing over (for testing).\n");
   display_option_help(0, "random-seed", "SEED", "Random seed to initialize the pseudo-random\n");
   display_option_help_noopt("generator.\n");
   display_option_help_noopt("-1       - time(0) will be used (default).\n");
@@ -335,6 +341,7 @@ static void getoptions(
     BOOLEAN_ZEROS_OPTION,
     LEX_OPTION,
     ELIM_DRL_OPTION,
+    SIGNATURE_F4_OPTION,
     /* Below is the template for the next long option with
      * no equivalent short option */
     /* NEXT_OPTION */
@@ -359,6 +366,7 @@ static void getoptions(
     {"precision", required_argument, NULL, 'p'},
     {"parametrization", required_argument, NULL, 'P'},
     {"random-seed", required_argument, NULL, RANDOM_SEED_OPTION},
+    {"signature-f4", required_argument, NULL, SIGNATURE_F4_OPTION},
     {"separating-element", required_argument, NULL, SEPARATING_ELEMENT_OPTION},
     {"dense-route", required_argument, NULL, DENSE_ROUTE_OPTION},
     {"split", required_argument, NULL, SPLIT_OPTION},
@@ -562,6 +570,12 @@ static void getoptions(
       break;
     case RANDOM_SEED_OPTION:
       *seed = strtoll(optarg, NULL, 10);
+      break;
+    case SIGNATURE_F4_OPTION:
+      neogb_sig_f4 = strtol(optarg, NULL, 10);
+      if (neogb_sig_f4 < 0 || neogb_sig_f4 > 2) {
+          neogb_sig_f4 = 0;
+      }
       break;
     /* Below is the template for the next long option with
      * no equivalent short option */
