@@ -112,6 +112,36 @@ static inline int64_t coefficient_gf2x(const char *term, int64_t field_char)
     return e == digits ? 1 : (e[-1] - '0') & 1;
 }
 
+/* returns the integer coefficient at the beginning of term modulo the
+ * prime field_char, in [0, field_char): the digits are reduced while they
+ * are read, so integers of any size are taken correctly, and a missing
+ * coefficient stands for 1 resp. -1 */
+static inline int64_t coefficient_mod_p(const char *term, int64_t field_char)
+{
+    const char *s  = term;
+    int neg        = 0;
+    while (*s == ' ' || *s == '+' || *s == '-') {
+        if (*s == '-') {
+            neg ^= 1;
+        }
+        ++s;
+    }
+    const unsigned __int128 p = (unsigned __int128)field_char;
+    unsigned __int128 r       = 0;
+    const char *digits        = s;
+    while (*s >= '0' && *s <= '9') {
+        r = (r * 10 + (unsigned)(*s - '0')) % p;
+        ++s;
+    }
+    if (s == digits) {
+        r = 1 % p;
+    }
+    if (neg && r != 0) {
+        r = p - r;
+    }
+    return (int64_t)r;
+}
+
 static inline int store_exponent(const char *term, data_gens_ff_t *gens, int64_t pos)
 {
     len_t i, j, k;
@@ -940,34 +970,11 @@ static int get_coefficient_ff_and_term_from_line(char *line, int32_t nterms,
         return 1;
       }
     } else {
-    errno = 0;
-    iv_tmp  = (int64_t)strtoll(term, NULL, 10);
-    if (errno == ERANGE) {
-      fprintf(stderr, "Error when parsing term %s (coefficient out of range)\n", term);
-      free(term);
-      return 1;
-    }
-    if (iv_tmp == 0) {
-      switch (term[0]) {
-          case '0':
-            iv_tmp = 0;
-            break;
-          case '-':
-            iv_tmp = -1;
-            break;
-          default:
-            iv_tmp = 1;
-            break;
-      }
-    }
-    iv_tmp %= field_char;
+    iv_tmp  = coefficient_mod_p(term, field_char);
     if (iv_tmp == 0) {
       fprintf(stderr, "Error when parsing term %s (coefficient cannot be 0 modulo %" PRId64 ").\n", term, field_char);
       free(term);
       return 1;
-    }
-    if (iv_tmp < 0) {
-      iv_tmp  +=  field_char; //MS change int -> long int
     }
     }
     if (gens->cfs_64 != NULL) {
@@ -990,29 +997,11 @@ static int get_coefficient_ff_and_term_from_line(char *line, int32_t nterms,
             return 1;
           }
         } else {
-        errno = 0;
-        cf_tmp  = (int64_t)strtoll(term, NULL, 10);
-        if (errno == ERANGE) {
-          fprintf(stderr, "Error when parsing term %s (coefficient out of range)\n", term);
-          free(term);
-          return 1;
-        }
-
-        if (cf_tmp == 0) {
-          if (term[0] == '-') {
-            cf_tmp = -1;
-          } else {
-            cf_tmp = 1;
-          }
-        }
-        cf_tmp %= field_char;
+        cf_tmp  = coefficient_mod_p(term, field_char);
         if (cf_tmp == 0) {
           fprintf(stderr, "Error when parsing term %s (coefficient cannot be 0 modulo %" PRId64 ").\n", term, field_char);
           free(term);
           return 1;
-        }
-        if (cf_tmp < 0) {
-          cf_tmp  += field_char;
         }
         }
         if (gens->cfs_64 != NULL) {
