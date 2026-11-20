@@ -1290,9 +1290,9 @@ static inline void insert_poly_in_hash_table(
  * is only written when it has to be inserted. */
 
 /* checks whether c is the product of a and b, i.e. whether
- * c[j] == a[j] + b[j] (modulo 2^16) for all j < evl. exponent vectors
- * with at least 8 entries are compared in chunks of 8 entries (exp_t
- * has 16 bits), the last chunk overlapping the previous one, so that no
+ * c[j] == a[j] + b[j] (modulo the width of exp_t) for all j < evl.
+ * exponent vectors with at least EXP_LANES entries are compared in chunks
+ * of 128 bits, the last chunk overlapping the previous one, so that no
  * entry beyond evl is read. */
 #if defined __SSE2__
 static inline int is_product_of_8(
@@ -1301,10 +1301,17 @@ static inline int is_product_of_8(
     const exp_t * const c
     )
 {
+#ifdef EXP32
+    const __m128i s = _mm_add_epi32(_mm_loadu_si128((const __m128i *)a),
+            _mm_loadu_si128((const __m128i *)b));
+    return _mm_movemask_epi8(_mm_cmpeq_epi32(s,
+                _mm_loadu_si128((const __m128i *)c))) == 0xFFFF;
+#else
     const __m128i s = _mm_add_epi16(_mm_loadu_si128((const __m128i *)a),
             _mm_loadu_si128((const __m128i *)b));
     return _mm_movemask_epi8(_mm_cmpeq_epi16(s,
                 _mm_loadu_si128((const __m128i *)c))) == 0xFFFF;
+#endif
 }
 #elif defined __aarch64__
 static inline int is_product_of_8(
@@ -1313,8 +1320,13 @@ static inline int is_product_of_8(
     const exp_t * const c
     )
 {
+#ifdef EXP32
+    return vminvq_u32(vceqq_u32(vaddq_u32(vld1q_u32(a), vld1q_u32(b)),
+                vld1q_u32(c))) != 0;
+#else
     return vminvq_u16(vceqq_u16(vaddq_u16(vld1q_u16(a), vld1q_u16(b)),
                 vld1q_u16(c))) != 0;
+#endif
 }
 #endif
 
@@ -1328,9 +1340,9 @@ static inline int is_product_of(
     len_t j;
 
 #if defined __SSE2__ || defined __aarch64__
-    if (evl >= 8) {
-        const len_t t = evl - 8;
-        for (j = 0; j < t; j += 8) {
+    if (evl >= EXP_LANES) {
+        const len_t t = evl - EXP_LANES;
+        for (j = 0; j < t; j += EXP_LANES) {
             if (!is_product_of_8(a + j, b + j, c + j)) {
                 return 0;
             }
@@ -1760,7 +1772,7 @@ static inline void boolean_product(
 
 /* data of the terms of a Boolean row, see boolean_multiplied_row() */
 typedef struct {
-    exp_t *vm;      /* 0xFFFF for the variables, 0 for the degree entries */
+    exp_t *vm;      /* all ones for the variables, 0 for the degree entries */
     val_t *h;       /* hash values of the terms */
     len_t *rep;     /* first appearance of equal terms */
     uint64_t *tab;  /* hash table for finding equal terms, an entry is
@@ -1778,7 +1790,7 @@ typedef struct {
  * monomial b consists of the variables of em and those of b that are not
  * in em, the key of b. Thus two products are equal iff the keys are. The
  * following functions check whether the monomials a and b have the same
- * key, vm being 0xFFFF for the variables and 0 for the degree entries;
+ * key, vm being all ones for the variables and 0 for the degree entries;
  * the chunks are handled as in is_product_of(). */
 #if defined __SSE2__
 static inline int boolean_same_key_8(
@@ -1793,7 +1805,8 @@ static inline int boolean_same_key_8(
                 _mm_andnot_si128(m, _mm_loadu_si128((const __m128i *)a)),
                 _mm_andnot_si128(m, _mm_loadu_si128((const __m128i *)b))),
             _mm_loadu_si128((const __m128i *)vm));
-    return _mm_movemask_epi8(_mm_cmpeq_epi16(d, _mm_setzero_si128())) == 0xFFFF;
+    /* the bits of all lanes are 0 iff all bytes are */
+    return _mm_movemask_epi8(_mm_cmpeq_epi8(d, _mm_setzero_si128())) == 0xFFFF;
 }
 #elif defined __aarch64__
 static inline int boolean_same_key_8(
@@ -1803,9 +1816,15 @@ static inline int boolean_same_key_8(
     const exp_t * const vm
     )
 {
+#ifdef EXP32
+    const uint32x4_t m = vld1q_u32(em);
+    return vmaxvq_u32(vandq_u32(veorq_u32(vbicq_u32(vld1q_u32(a), m),
+                    vbicq_u32(vld1q_u32(b), m)), vld1q_u32(vm))) == 0;
+#else
     const uint16x8_t m = vld1q_u16(em);
     return vmaxvq_u16(vandq_u16(veorq_u16(vbicq_u16(vld1q_u16(a), m),
                     vbicq_u16(vld1q_u16(b), m)), vld1q_u16(vm))) == 0;
+#endif
 }
 #endif
 
@@ -1820,9 +1839,9 @@ static inline int boolean_same_key(
     len_t j;
 
 #if defined __SSE2__ || defined __aarch64__
-    if (evl >= 8) {
-        const len_t t = evl - 8;
-        for (j = 0; j < t; j += 8) {
+    if (evl >= EXP_LANES) {
+        const len_t t = evl - EXP_LANES;
+        for (j = 0; j < t; j += EXP_LANES) {
             if (!boolean_same_key_8(a + j, b + j, em + j, vm + j)) {
                 return 0;
             }
@@ -2132,7 +2151,7 @@ static void boolean_multiplied_polys_to_matrix_rows(
 
     exp_t vm[evl];
     for (l = 0; l < evl; ++l) {
-        vm[l] = (l != 0 && l != ebl) ? (exp_t)0xFFFF : 0;
+        vm[l] = (l != 0 && l != ebl) ? (exp_t)~(exp_t)0 : 0;
     }
 
     len_t mlen  = 0;
