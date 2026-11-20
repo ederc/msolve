@@ -1385,6 +1385,23 @@ static inline void check_product_degree(
     }
 }
 
+/* checks the product of a monomial of degree dm, exponents ea, with the
+ * term t of degree dt, exponents eb: the total degrees, which are at hand
+ * in the loops over the terms, bound the block degrees, these are only
+ * checked where the total degree exceeds EXP_MAX */
+static inline void check_product_total(
+    const deg_t dm,
+    const deg_t dt,
+    const exp_t * const ea,
+    const exp_t * const eb,
+    const ht_t * const ht
+    )
+{
+    if ((uint64_t)dm + (uint64_t)dt > EXP_MAX) {
+        check_product_degree(ea, eb, ht);
+    }
+}
+
 static inline hi_t find_multiplied_in_hash_table(
     const val_t h,
     const exp_t * const ea,
@@ -1394,8 +1411,6 @@ static inline hi_t find_multiplied_in_hash_table(
 {
     hl_t i;
     hi_t k;
-
-    check_product_degree(ea, eb, ht);
 
     const len_t evl = ht->evl;
     const hl_t hsz  = ht->hsz;
@@ -1432,8 +1447,6 @@ static inline hi_t insert_multiplied_in_hash_table(
     hl_t i;
     hi_t k;
     len_t j;
-
-    check_product_degree(ea, eb, ht);
 
     const len_t evl = ht->evl;
     const hl_t hsz  = ht->hsz;
@@ -1530,6 +1543,7 @@ static inline void insert_multiplied_poly_in_hash_table(
     for (; l < len; ++l) {
         const exp_t * const eb = ev1[b[l]];
 
+        check_product_degree(ea, eb, ht1);
         n = ev2[ht2->eld];
         for (j = 0; j < evl; ++j) {
             n[j]  = (exp_t)(ea[j] + eb[j]);
@@ -1542,8 +1556,11 @@ static inline void insert_multiplied_poly_in_hash_table(
     /* the exponent vectors are stored in one block */
     const exp_t * const eb  = ev1[0];
     const len_t evl1        = ht1->evl;
+    const deg_t dm          = ea[0] + (ht1->ebl > 0 ? ea[ht1->ebl] : 0);
     for (; l < len; ++l) {
         prefetch_multiplied_terms(h1, b, l, len, hd1, ht2);
+        check_product_total(dm, hd1[b[l]].deg, ea,
+                eb + (uint64_t)b[l] * evl1, ht1);
         row[l] = insert_multiplied_in_hash_table(h1 + hd1[b[l]].val, ea,
                 eb + (uint64_t)b[l] * evl1, ht2);
     }
@@ -2525,9 +2542,12 @@ static void multiplied_polys_to_matrix_rows(
             const exp_t * const em    = ems + (uint64_t)i * evl;
             const val_t h             = hs[i];
             const len_t len           = poly[LENGTH] + OFFSET;
+            const deg_t dm            = em[0] + (bht->ebl > 0 ? em[bht->ebl] : 0);
             len_t ctr                 = 0;
             for (l = OFFSET; l < len; ++l) {
                 prefetch_multiplied_terms(h, poly, l, len, hdb, sht);
+                check_product_total(dm, hdb[poly[l]].deg, em,
+                        evb + (uint64_t)poly[l] * evl, bht);
                 row[l]  = find_multiplied_in_hash_table(h + hdb[poly[l]].val,
                         em, evb + (uint64_t)poly[l] * evl, sht);
                 ctr += (row[l] == 0);
