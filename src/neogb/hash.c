@@ -70,8 +70,10 @@ ht_t *initialize_basis_hash_table(
     if (ht->bpv == 0) {
         ht->bpv++;
     }
-    ht->ndv = (unsigned long)nv < (CHAR_BIT * sizeof(sdm_t)) ?
-        nv : (len_t)((CHAR_BIT * sizeof(sdm_t)));
+    /* every variable takes part in the divmask: past the number of bits
+     * of the divmask, variable i sets bit i modulo this number, so a bit
+     * stands for several variables */
+    ht->ndv = nv;
     ht->dv  = (len_t *)calloc((unsigned long)ht->ndv, sizeof(len_t));
 
     ht->hsz   = (hl_t)pow(2, st->init_hts);
@@ -485,6 +487,14 @@ static inline sdm_t generate_short_divmask(
   const len_t * const dv  = ht->dv;
   const len_t bpv         = ht->bpv;
 
+  if (ndv > CHAR_BIT * sizeof(sdm_t)) {
+    for (i = 0; i < ndv; ++i) {
+      if ((sdm_t)a[dv[i]] >= ht->dm[i]) {
+        res |= (uint32_t)(1u) << (i % (CHAR_BIT * sizeof(sdm_t)));
+      }
+    }
+    return res;
+  }
   for (i = 0; i < ndv; ++i) {
     for (j = 0; j < bpv; ++j) {
       if ((sdm_t)a[dv[i]] >= ht->dm[ctr]) {
@@ -535,8 +545,13 @@ void calculate_divmask(
     }
   }
 
-  /* calculate average values for generating divmasks */
+  /* calculate average values for generating divmasks, with one bit
+   * per variable the bit tells if the variable appears */
   for (i = 0; i < ht->ndv; ++i) {
+    if (ht->bpv == 1) {
+      ht->dm[ctr++] = 1;
+      continue;
+    }
     steps = (max_exp[i] - min_exp[i]) / ht->bpv;
     if (steps == 0)
       steps++;
