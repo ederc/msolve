@@ -376,6 +376,86 @@ static inline int32_t display_monomial_full(FILE *file, const int nv,
   return b;
 }
 
+/* output through a buffer: the polynomials of a basis are written term by
+ * term, formatting each coefficient and exponent by fprintf took a large
+ * part of the time of small computations */
+typedef struct {
+    FILE *f;
+    char *b;
+    size_t n;
+    size_t sz;
+} obuf_t;
+
+static inline void ob_flush(
+        obuf_t *o
+        )
+{
+    if (o->n > 0) {
+        fwrite(o->b, 1, o->n, o->f);
+        o->n = 0;
+    }
+}
+
+static inline void ob_put(
+        obuf_t *o,
+        const char *s,
+        const size_t len
+        )
+{
+    if (o->n + len > o->sz) {
+        ob_flush(o);
+        if (len > o->sz) {
+            fwrite(s, 1, len, o->f);
+            return;
+        }
+    }
+    memcpy(o->b + o->n, s, len);
+    o->n += len;
+}
+
+static inline void ob_char(
+        obuf_t *o,
+        const char c
+        )
+{
+    if (o->n == o->sz) {
+        ob_flush(o);
+    }
+    o->b[o->n++] = c;
+}
+
+/* the decimal digits of v */
+static inline void ob_u64(
+        obuf_t *o,
+        uint64_t v
+        )
+{
+    char t[20];
+    int i = 20;
+    do {
+        t[--i] = (char)('0' + v % 10);
+        v /= 10;
+    } while (v != 0);
+    ob_put(o, t + i, (size_t)(20 - i));
+}
+
+/* the hexadecimal digits of v after 0x */
+static inline void ob_hex(
+        obuf_t *o,
+        uint64_t v
+        )
+{
+    char t[18];
+    int i = 18;
+    do {
+        t[--i] = "0123456789abcdef"[v & 15];
+        v >>= 4;
+    } while (v != 0);
+    t[--i] = 'x';
+    t[--i] = '0';
+    ob_put(o, t + i, (size_t)(18 - i));
+}
+
 static void print_msolve_polynomials_ff(
         FILE *file,
         const bi_t from,
@@ -499,67 +579,75 @@ static void print_msolve_polynomials_ff(
             }
         }
     } else {
-        fprintf(file, "[");
+        /* the strings "*name^" of the variables */
+        size_t *vl  = (size_t *)malloc((unsigned long)nv * sizeof(size_t));
+        char **vp   = (char **)malloc((unsigned long)nv * sizeof(char *));
+        for (k = 0; k < nv; ++k) {
+            vl[k] = strlen(vnames[k]) + 2;
+            vp[k] = (char *)malloc(vl[k] + 1);
+            vp[k][0] = '*';
+            memcpy(vp[k] + 1, vnames[k], vl[k] - 2);
+            vp[k][vl[k] - 1] = '^';
+            vp[k][vl[k]] = '\0';
+        }
+        fflush(file);
+        obuf_t ob = {file, (char *)malloc(1 << 16), 0, 1 << 16};
+        ob_char(&ob, '[');
         for (i = from; i < to; ++i) {
             idx = bs->lmps[i];
             if (bs->hm[idx] == NULL) {
-                fprintf(file, "0");
+                ob_char(&ob, '0');
             } else {
                 hm  = bs->hm[idx]+OFFSET;
                 len = bs->hm[idx][LENGTH];
-                switch (st->ff_bits) {
-                case 0 :
-                  fprintf(file, "%u", bs->cf_32[bs->hm[idx][COEFFS]][0]);
-                  break;
-                case 8:
-                  fprintf(file, hex ? "0x%x" : "%u", bs->cf_8[bs->hm[idx][COEFFS]][0]);
-                  break;
-                case 16:
-                  fprintf(file, "%u", bs->cf_16[bs->hm[idx][COEFFS]][0]);
-                  break;
-                case 32:
-                  fprintf(file, "%u", bs->cf_32[bs->hm[idx][COEFFS]][0]);
-                  break;
-                case 64:
-                  fprintf(file, "%" PRIu64, bs->cf_64[bs->hm[idx][COEFFS]][0]);
-                  break;
-                }
-                for (k = 0; k < nv; ++k) {
-                    if (ht->ev[hm[0]][evi[k]] > 0) {
-                        fprintf(file, "*%s^%u",vnames[k], ht->ev[hm[0]][evi[k]]);
+                const len_t ci = bs->hm[idx][COEFFS];
+                for (j = 0; j < len; ++j) {
+                    if (j > 0) {
+                        ob_char(&ob, '+');
+                    }
+                    switch (st->ff_bits) {
+                    case 0:
+                        ob_u64(&ob, bs->cf_32[ci][j]);
+                        break;
+                    case 8:
+                        if (hex) {
+                            ob_hex(&ob, bs->cf_8[ci][j]);
+                        } else {
+                            ob_u64(&ob, bs->cf_8[ci][j]);
+                        }
+                        break;
+                    case 16:
+                        ob_u64(&ob, bs->cf_16[ci][j]);
+                        break;
+                    case 32:
+                        ob_u64(&ob, bs->cf_32[ci][j]);
+                        break;
+                    case 64:
+                        ob_u64(&ob, bs->cf_64[ci][j]);
+                        break;
+                    }
+                    const exp_t * const e = ht->ev[hm[j]];
+                    for (k = 0; k < nv; ++k) {
+                        if (e[evi[k]] > 0) {
+                            ob_put(&ob, vp[k], vl[k]);
+                            ob_u64(&ob, e[evi[k]]);
+                        }
                     }
                 }
-                for (j = 1; j < len; ++j) {
-		  switch (st->ff_bits) {
-		  case 0:
-		    fprintf(file, "+%u", bs->cf_32[bs->hm[idx][COEFFS]][j]);
-		    break;
-		  case 8:
-		    fprintf(file, hex ? "+0x%x" : "+%u", bs->cf_8[bs->hm[idx][COEFFS]][j]);
-		    break;
-		  case 16:
-		    fprintf(file, "+%u", bs->cf_16[bs->hm[idx][COEFFS]][j]);
-		    break;
-		  case 32:
-		    fprintf(file, "+%u", bs->cf_32[bs->hm[idx][COEFFS]][j]);
-		    break;
-		  case 64:
-		    fprintf(file, "+%" PRIu64, bs->cf_64[bs->hm[idx][COEFFS]][j]);
-		    break;
-		  }
-		  for (k = 0; k < nv; ++k) {
-		    if (ht->ev[hm[j]][evi[k]] > 0) {
-		      fprintf(file, "*%s^%u",vnames[k], ht->ev[hm[j]][evi[k]]);
-		    }
-		  }
-                }
-	    }
-	    if (i < to-1) {
-	      fprintf(file, ",\n");
-	    } else {
-	      fprintf(file, "]:\n");
-	    }
+            }
+            if (i < to-1) {
+                ob_put(&ob, ",\n", 2);
+            } else {
+                ob_put(&ob, "]:\n", 3);
+            }
         }
+        ob_flush(&ob);
+        free(ob.b);
+        for (k = 0; k < nv; ++k) {
+            free(vp[k]);
+        }
+        free(vp);
+        free(vl);
     }
     free(evi);
 }
