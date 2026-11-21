@@ -511,6 +511,85 @@ static int32_t echelonize_input_generators(
     return bad;
 }
 
+/* copies resp. restores the input generators bs->hm[0], ..., bs->hm[n-1]
+ * with their coefficients */
+static void copy_generators(
+        hm_t ***hp,
+        void ***cp,
+        const bs_t * const bs,
+        const len_t n,
+        const md_t * const md
+        )
+{
+    len_t i;
+    hm_t **h = (hm_t **)malloc((unsigned long)(n + 1) * sizeof(hm_t *));
+    void **c = (void **)malloc((unsigned long)(n + 1) * sizeof(void *));
+    for (i = 0; i < n; ++i) {
+        const hm_t *b    = bs->hm[i];
+        const len_t len  = b[LENGTH];
+        const len_t ci   = b[COEFFS];
+        h[i] = (hm_t *)malloc((unsigned long)(len + OFFSET) * sizeof(hm_t));
+        memcpy(h[i], b, (unsigned long)(len + OFFSET) * sizeof(hm_t));
+        const void *src  = md->ff_bits == 8 ? (const void *)bs->cf_8[ci]
+            : md->ff_bits == 16 ? (const void *)bs->cf_16[ci]
+            : (const void *)bs->cf_32[ci];
+        const size_t sz  = md->ff_bits == 8 ? 1 : (md->ff_bits == 16 ? 2 : 4);
+        c[i] = malloc((unsigned long)len * sz);
+        memcpy(c[i], src, (unsigned long)len * sz);
+    }
+    *hp = h;
+    *cp = c;
+}
+
+static void restore_generators(
+        hm_t **h,
+        void **c,
+        bs_t *bs,
+        const len_t n,
+        md_t *md
+        )
+{
+    len_t i;
+    /* the current generators go */
+    for (i = 0; i < (len_t)md->ngens; ++i) {
+        const len_t ci = bs->hm[i][COEFFS];
+        switch (md->ff_bits) {
+            case 8:
+                free(bs->cf_8[ci]);
+                bs->cf_8[ci] = NULL;
+                break;
+            case 16:
+                free(bs->cf_16[ci]);
+                bs->cf_16[ci] = NULL;
+                break;
+            default:
+                free(bs->cf_32[ci]);
+                bs->cf_32[ci] = NULL;
+                break;
+        }
+        free(bs->hm[i]);
+        bs->hm[i] = NULL;
+    }
+    for (i = 0; i < n; ++i) {
+        h[i][COEFFS] = i;
+        bs->hm[i]    = h[i];
+        switch (md->ff_bits) {
+            case 8:
+                bs->cf_8[i] = (cf8_t *)c[i];
+                break;
+            case 16:
+                bs->cf_16[i] = (cf16_t *)c[i];
+                break;
+            default:
+                bs->cf_32[i] = (cf32_t *)c[i];
+                break;
+        }
+    }
+    free(h);
+    free(c);
+    md->ngens = n;
+}
+
 static int32_t initialize_f4(
         bs_t **lbsp,
         md_t **lmdp,
@@ -600,6 +679,12 @@ static int32_t initialize_f4(
         }
     } else if (sig_f4_applicable(bs, md)) {
         bs->ld = 0;
+        /* F4 starts from the input generators as read where the signature
+         * based F4 hands over */
+        const len_t ng0 = (len_t)md->ngens;
+        hm_t **gh0 = NULL;
+        void **gc0 = NULL;
+        copy_generators(&gh0, &gc0, bs, ng0, md);
         echelonize_input_generators(mat, bs, md);
         sg_rec_t *rec = NULL;
         if (md->trace_level == LEARN_TRACER) {
@@ -609,9 +694,23 @@ static int32_t initialize_f4(
             if (rec != NULL) {
                 md->tr->sgr = rec;
             }
+            for (len_t i = 0; i < ng0; ++i) {
+                free(gh0[i]);
+                free(gc0[i]);
+            }
+            free(gh0);
+            free(gc0);
             return 1;
         }
         sg_rec_free(rec);
+        restore_generators(gh0, gc0, bs, ng0, md);
+        if (md->trace_level == LEARN_TRACER) {
+            md->tr->ech = 0;
+            free(md->tr->glm);
+            md->tr->glm  = NULL;
+            md->tr->gnlm = 0;
+        }
+        bs->ld = 0;
     }
 
     /* move input generators to basis and generate first spairs.
