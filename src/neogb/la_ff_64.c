@@ -1215,7 +1215,13 @@ static void reduce_dense_rows_by_known_pivots_ff_64(
     const len_t ncols   = mat->nc;
     const ff64_t f      = ff64_init(fc);
     cf64_t * const * const mcf = mat->cf_64;
+    /* the vector kernels of the narrow primes cannot be used for wide
+     * ones: doubles hold the entries only up to |x| < 2^53 resp. the
+     * IFMA lanes up to 2^52, both need p < 2^52.  For p >= 2^52 the
+     * scalar Montgomery branch with R = 2^64 runs, which is exact for
+     * all p < 2^62 */
 #if defined FF64_DOUBLE_ROWS
+    if (!f.wide) {
     const ff64_vc_t c   = ff64_vc_init(&f);
     const ff64_dc_t dc  = ff64_dc_init(&f);
     const ff64_d zero   = ff64_d_set1(0.0);
@@ -1274,7 +1280,9 @@ static void reduce_dense_rows_by_known_pivots_ff_64(
             ff64_v_store(d+r, ff64_d_to_int(ff64_d_load(d+r), &c));
         }
     }
-#else
+    } else
+#endif
+    {
 #ifdef FF64_VL
     const ff64_vc_t c   = ff64_vc_init(&f);
 #endif
@@ -1305,6 +1313,7 @@ static void reduce_dense_rows_by_known_pivots_ff_64(
         const len_t len         = piv[LENGTH];
         const hm_t * const ds   = piv + OFFSET;
 #ifdef FF64_VL
+        if (!f.wide) {
         ff64_m mv[LA_NR/FF64_VL];
         for (r = 0; r < LA_NR/FF64_VL; ++r) {
             mv[r] = ff64_m_from(ff64_v_load(d+FF64_VL*r), &c);
@@ -1317,7 +1326,9 @@ static void reduce_dense_rows_by_known_pivots_ff_64(
                             ff64_v_load(t+FF64_VL*r), cfv, mv[r], &c));
             }
         }
-#else
+        } else
+#endif
+        {
         uint64_t mm[LA_NR];
         for (r = 0; r < LA_NR; ++r) {
             mm[r] = ff64_mont((uint64_t)d[r], &f);
@@ -1328,12 +1339,12 @@ static void reduce_dense_rows_by_known_pivots_ff_64(
                 t[r] = ff64_submul(t[r], cfs[j], mm[r], &f);
             }
         }
-#endif
+        }
         for (r = 0; r < LA_NR; ++r) {
             d[r] = 0;
         }
     }
-#endif
+    }
     if (drs == NULL) {
         return;
     }
