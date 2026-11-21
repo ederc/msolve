@@ -398,7 +398,8 @@ static void insert_and_update_spairs(
              * that are not removed by an lcm of lower degree, the short
              * divisor mask of the lcm is the one of the lead monomials */
             const exp_t * const ea  = bht->ev[bs->hm[i][OFFSET]];
-            const deg_t gdeg  = gcd_degree(ea, eb, bht);
+            /* lead terms with disjoint variable masks are coprime */
+            const deg_t gdeg  = (vm[i] & vm[n]) == 0 ? 0 : gcd_degree(ea, eb, bht);
             const deg_t ldeg  = total_degree(ea, bht) + bdeg - gdeg;
             hd[i].sdm = bht->hd[bs->hm[i][OFFSET]].sdm | bsdm;
             kt[i]     = ldeg;
