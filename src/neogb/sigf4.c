@@ -1701,6 +1701,12 @@ static int sg_hand_over(
     if (why == NULL && nn >= SG_OUTGROWN_MIN && 10 * sg->ndiv >= 8 * nn) {
         why = "outgrown";
     }
+    if (why == NULL && md->laopt < 40 && nn >= SG_EARLY_ROUND
+            && sg->nzero > 3 * nn) {
+        /* without random combinations testing the rows reducing to zero,
+         * their reductions dominate the signature-based run */
+        why = "zero reductions";
+    }
     if (why == NULL && nn > 0) {
         /* the S-pairs the update would form against the work of the round */
         const uint64_t ob    = sg->ld - nn;
