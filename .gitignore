@@ -58,3 +58,6 @@ neogb_gf2
 msolve-*.tar.gz
 msolve-*/
 src/msolve/msolve-version.h
+
+# benchmark snapshots (binaries)
+bench/snap-*/
