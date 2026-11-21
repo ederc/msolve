@@ -58,6 +58,8 @@ typedef struct {
     uint64_t r128;  /* 2^128 mod p */
     uint64_t r104;  /* 2^104 mod p */
     double pinv;    /* 1/p */
+    int wide;       /* p >= 2^52: vector kernels (2^52 lanes) unusable,
+                     * dispatch to the scalar R = 2^64 path */
 } ff64_t;
 
 static inline ff64_t ff64_init(
@@ -78,6 +80,7 @@ static inline ff64_t ff64_init(
     const uint64_t r52  = ((uint64_t)1 << 52) % p;
     f.r104  = mul_mod_64(r52, r52, p);
     f.pinv  = 1.0 / (double)p;
+    f.wide  = p >= ((uint64_t)1 << 52);
     return f;
 }
 
@@ -896,11 +899,13 @@ static inline void ff64_submul_dense(
 {
     len_t j = 0;
 #ifdef FF64_VL
-    const ff64_vc_t c   = ff64_vc_init(f);
-    const ff64_m mv     = ff64_m_set1(m, f);
-    for (; j + FF64_VL <= n; j += FF64_VL) {
-        ff64_v_store(d+j, ff64_v_submul(ff64_v_load(d+j),
-                    ff64_v_load(a+j), mv, &c));
+    if (!f->wide) {
+        const ff64_vc_t c   = ff64_vc_init(f);
+        const ff64_m mv     = ff64_m_set1(m, f);
+        for (; j + FF64_VL <= n; j += FF64_VL) {
+            ff64_v_store(d+j, ff64_v_submul(ff64_v_load(d+j),
+                        ff64_v_load(a+j), mv, &c));
+        }
     }
 #endif
     if (j < n) {
@@ -923,11 +928,13 @@ static inline void ff64_submul_sparse(
 {
     len_t j = 0;
 #ifdef FF64_VL
-    const ff64_vc_t c   = ff64_vc_init(f);
-    const ff64_m mv     = ff64_m_set1(m, f);
-    for (; j + FF64_VL <= n; j += FF64_VL) {
-        ff64_v_scatter(dr, ds+j, ff64_v_submul(ff64_v_gather(dr, ds+j),
-                    ff64_v_load(a+j), mv, &c));
+    if (!f->wide) {
+        const ff64_vc_t c   = ff64_vc_init(f);
+        const ff64_m mv     = ff64_m_set1(m, f);
+        for (; j + FF64_VL <= n; j += FF64_VL) {
+            ff64_v_scatter(dr, ds+j, ff64_v_submul(ff64_v_gather(dr, ds+j),
+                        ff64_v_load(a+j), mv, &c));
+        }
     }
 #endif
     if (j < n) {
