@@ -1136,7 +1136,7 @@ static int sg_zero_test(
     return 1;
 }
 
-#define SG_BAND 4
+#define SG_BAND 8
 #define SG_NONE ((len_t)-1)
 
 /* Reduces the nb <= SG_BAND rows rows[g[0]], ..., rows[g[nb-1]] together, as
@@ -1186,7 +1186,11 @@ static void sg_band_reduce(
     }
     for (k = from; k < nc; ++k) {
         uint64_t * const x = bd + (unsigned long)k * SG_BAND;
-        if ((x[0] | x[1] | x[2] | x[3]) == 0) {
+        uint64_t any = 0;
+        for (b = 0; b < SG_BAND; ++b) {
+            any |= x[b];
+        }
+        if (any == 0) {
             continue;
         }
         if (pc[k] != NULL) {
@@ -1450,9 +1454,35 @@ static int64_t sg_round(
     sg_ctx_t ctx = {sg, bht};
     sort_r(rows, (unsigned long)nr, sizeof(sg_row_t), sg_row_cmp, &ctx);
 
+    /* without random combinations ruling out the rows reducing to zero, a
+     * dense matrix with many rows to be reduced is reduced faster by F4,
+     * whose reduction takes several rows at once with SIMD instructions */
+    if (md->laopt < 40 && sg->rec == NULL && md->sig_f4 != 2) {
+        uint64_t ne = 0;
+        len_t nred = 0;
+        for (i = 0; i < nr; ++i) {
+            ne   += rows[i].r[LENGTH];
+            nred += rows[i].reducer == 0;
+        }
+        if (nred >= 1000 && 10 * ne >= (uint64_t)nr * nc) {
+            for (i = 0; i < nr; ++i) {
+                free(rows[i].r);
+            }
+            free(rows);
+            free(hcm);
+            clean_hash_table(sht);
+            return -2;
+        }
+    }
+
     if (md->info_level > 1) {
-        fprintf(VERBSTREAM, "%3u %7u sigs %9u x %-9u", (unsigned)d,
-                (unsigned)ns, (unsigned)nr, (unsigned)nc);
+        uint64_t ne = 0;
+        for (i = 0; i < nr; ++i) {
+            ne += rows[i].r[LENGTH];
+        }
+        fprintf(VERBSTREAM, "%3u %7u sigs %9u x %-9u %6.2f%%", (unsigned)d,
+                (unsigned)ns, (unsigned)nr, (unsigned)nc,
+                100.0 * (double)ne / ((double)nr * (double)nc));
         fflush(VERBSTREAM);
     }
 
@@ -1894,12 +1924,7 @@ static int sg_hand_over(
     if (why == NULL && nn >= SG_OUTGROWN_MIN && 10 * sg->ndiv >= 8 * nn) {
         why = "outgrown";
     }
-    if (why == NULL && md->laopt < 40 && nn >= SG_EARLY_ROUND
-            && sg->nzero > 3 * nn) {
-        /* without random combinations testing the rows reducing to zero,
-         * their reductions dominate the signature-based run */
-        why = "zero reductions";
-    }
+
     if (why == NULL && nn > 0) {
         /* the S-pairs the update would form against the work of the round */
         const uint64_t ob    = sg->ld - nn;
@@ -2165,6 +2190,13 @@ static int sig_f4(
         const len_t ob    = sg.ld;
         sg.maxgap         = 0;
         const int64_t nn  = sg_round(&sg, md);
+        if (nn == -2) {
+            if (md->info_level > 0) {
+                fprintf(VERBSTREAM, "signature-based F4 hands over to F4 (dense matrix)\n");
+            }
+            ok = 0;
+            break;
+        }
         if (nn < 0) {
             break;
         }
