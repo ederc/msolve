@@ -117,6 +117,8 @@ void free_trace(
         free(tr->lm);
         free(tr->lmh);
         free(tr->lmps);
+        free(tr->glm);
+        sg_rec_free(tr->sgr);
         free(tr->ts);
         free(tr->td);
         free(tr->rd);

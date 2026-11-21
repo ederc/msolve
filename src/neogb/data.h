@@ -393,6 +393,11 @@ struct trace_t
     uint64_t nmadd;
     uint64_t nterms;
     uint64_t nmadd_new;
+    int8_t ech;   /* 1 if the input generators are put in reduced row
+                   * echelon form first */
+    hm_t *glm;    /* their lead terms then, in the basis hash table */
+    len_t gnlm;   /* their number */
+    void *sgr;    /* the record of a signature-based run, see sigf4.c */
 };
 
 

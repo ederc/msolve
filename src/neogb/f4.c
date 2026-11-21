@@ -359,7 +359,7 @@ start:
  * vanish. The signature-based F4 reduces a row only by rows of smaller
  * signature, so without this step the tails of the generators may keep
  * lead terms of other generators, which blows up the first matrices. */
-static void echelonize_input_generators(
+static int32_t echelonize_input_generators(
         mat_t *mat,
         bs_t *bs,
         md_t *md
@@ -372,7 +372,7 @@ static void echelonize_input_generators(
     const len_t ng = (len_t)md->ngens;
 
     if (ng < 2 || bht->boolean || md->ff_bits == 0) {
-        return;
+        return 0;
     }
 
     exp_t etmp[bht->evl];
@@ -408,7 +408,12 @@ static void echelonize_input_generators(
     convert_hashes_to_columns(mat, md, sht);
     mat->nc = mat->ncl + mat->ncr;
 
+    /* the echelon form is not part of the trace, each prime computes it,
+     * the lead terms are compared below */
+    const tl_t tl   = md->trace_level;
+    md->trace_level = NO_TRACER;
     linear_algebra(mat, bs, bs, md);
+    md->trace_level = tl;
     if (md->info_level > 1) {
         fprintf(VERBSTREAM, "\n");
     }
@@ -486,7 +491,24 @@ static void echelonize_input_generators(
     clean_hash_table(sht);
     clear_matrix(mat);
 
+    /* when learning a trace the lead terms are recorded, when applying it
+     * they must agree, otherwise the prime is bad */
+    int32_t bad = 0;
+    if (md->trace_level == LEARN_TRACER) {
+        md->tr->ech  = 1;
+        md->tr->gnlm = np;
+        md->tr->glm  = (hm_t *)malloc((unsigned long)(np + 1) * sizeof(hm_t));
+        for (k = 0; k < np; ++k) {
+            md->tr->glm[k] = bs->hm[k][OFFSET];
+        }
+    } else if (md->trace_level == APPLY_TRACER) {
+        bad = np != md->tr->gnlm;
+        for (k = 0; k < np && bad == 0; ++k) {
+            bad = bs->hm[k][OFFSET] != md->tr->glm[k];
+        }
+    }
     md->ngens = np;
+    return bad;
 }
 
 static int32_t initialize_f4(
@@ -495,7 +517,8 @@ static int32_t initialize_f4(
         mat_t **matp,
         md_t *gmd,
         bs_t *gbs,
-        uint64_t fc
+        uint64_t fc,
+        int32_t *errp
         )
 {
     bs_t *bs     = *lbsp;
@@ -553,15 +576,42 @@ static int32_t initialize_f4(
     /* the signature-based F4 computes the basis or hands over to F4,
      * which then starts from the input generators in echelon form */
     md->sig_f4 = neogb_sig_f4;
-    if (sig_f4_applicable(bs, md)) {
-        bs->ld = 0;
-        echelonize_input_generators(mat, bs, md);
-        if (sig_f4(bs, md)) {
-            *lbsp  = bs;
-            *matp  = mat;
-            *lmdp  = md;
+    *lbsp  = bs;
+    *matp  = mat;
+    *lmdp  = md;
+    if (md->trace_level == APPLY_TRACER) {
+        /* as when the trace was learned */
+        if (md->tr->ech) {
+            bs->ld = 0;
+            if (echelonize_input_generators(mat, bs, md)) {
+                *errp = 1;
+                return 1;
+            }
+            bs->ld = md->ngens;
+        }
+        if (md->tr->sgr != NULL) {
+            if (!sig_f4_replay(bs, md, (sg_rec_t *)md->tr->sgr)) {
+                if (md->info_level > 0) {
+                    fprintf(ERRSTREAM, "Signature-based trace does not apply, bad prime.");
+                }
+                *errp = 1;
+            }
             return 1;
         }
+    } else if (sig_f4_applicable(bs, md)) {
+        bs->ld = 0;
+        echelonize_input_generators(mat, bs, md);
+        sg_rec_t *rec = NULL;
+        if (md->trace_level == LEARN_TRACER) {
+            rec = (sg_rec_t *)calloc(1, sizeof(sg_rec_t));
+        }
+        if (sig_f4(bs, md, rec)) {
+            if (rec != NULL) {
+                md->tr->sgr = rec;
+            }
+            return 1;
+        }
+        sg_rec_free(rec);
     }
 
     /* move input generators to basis and generate first spairs.
@@ -936,15 +986,15 @@ static bs_t *run_f4(
     /* timings for one round */
     double rrt, crt;
 
-    done = initialize_f4(&bs, &md, &mat, gmd, gbs, fc);
+    /* reset error */
+    *errp = 0;
+    done = initialize_f4(&bs, &md, &mat, gmd, gbs, fc, errp);
 
 
     /* let's start the f4 rounds, we are done when no more spairs
        are left in the pairset or if we found a constant in the basis. */
     print_round_information_header(VERBSTREAM, md);
 
-    /* reset error */
-    *errp = 0;
     while (!done) {
         rrt = realtime();
         crt = cputime();
