@@ -2005,12 +2005,13 @@ static int sig_f4_applicable(
 }
 
 /* the n elements (p[i], cf[i]) replace the ng input generators in bs, the
- * coefficient arrays are taken over or freed */
+ * coefficient arrays are taken over or freed; cf holds arrays of the
+ * coefficient type selected by md->ff_bits */
 static void sg_load_basis(
         bs_t *bs,
         md_t *md,
         hm_t **p,
-        cf32_t **cf,
+        void **cf,
         const len_t n,
         const len_t ng
         )
@@ -2027,6 +2028,14 @@ static void sg_load_basis(
             case 16:
                 free(bs->cf_16[ci]);
                 bs->cf_16[ci] = NULL;
+                break;
+            case 32:
+                free(bs->cf_32[ci]);
+                bs->cf_32[ci] = NULL;
+                break;
+            case 64:
+                free(bs->cf_64[ci]);
+                bs->cf_64[ci] = NULL;
                 break;
             default:
                 free(bs->cf_32[ci]);
@@ -2046,19 +2055,22 @@ static void sg_load_basis(
             case 8:
                 bs->cf_8[i] = (cf8_t *)malloc((unsigned long)len * sizeof(cf8_t));
                 for (j = 0; j < len; ++j) {
-                    bs->cf_8[i][j] = (cf8_t)cf[i][j];
+                    bs->cf_8[i][j] = ((cf8_t *)cf[i])[j];
                 }
                 free(cf[i]);
                 break;
             case 16:
                 bs->cf_16[i] = (cf16_t *)malloc((unsigned long)len * sizeof(cf16_t));
                 for (j = 0; j < len; ++j) {
-                    bs->cf_16[i][j] = (cf16_t)cf[i][j];
+                    bs->cf_16[i][j] = ((cf16_t *)cf[i])[j];
                 }
                 free(cf[i]);
                 break;
+            case 64:
+                bs->cf_64[i] = (cf64_t *)cf[i];
+                break;
             default:
-                bs->cf_32[i] = cf[i];
+                bs->cf_32[i] = (cf32_t *)cf[i];
                 break;
         }
         r[COEFFS]   = i;
@@ -2264,7 +2276,7 @@ static int sig_f4(
             sg.e[i].p   = NULL;
             sg.e[i].cf  = NULL;
         }
-        sg_load_basis(bs, md, ep, ecf, sg.ld, ng);
+        sg_load_basis(bs, md, ep, (void **)ecf, sg.ld, ng);
         free(ep);
         free(ecf);
     }
@@ -2284,26 +2296,23 @@ static int sig_f4(
  * lead term, otherwise the prime is bad and 0 is returned. On success the
  * elements replace the input generators as after sig_f4() and 1 is
  * returned. The input generators are the same as in the recorded run,
- * here in echelon form, too. */
-static int sig_f4_replay(
-        bs_t *bs,
-        md_t *md,
-        const sg_rec_t * const rec
+ * here in echelon form, too.
+ *
+ * The core is instantiated for both supported coefficient widths: the
+ * classic lazy representation for p < 2^32 and the redundant [0, 2p)
+ * representation with Shoup-precomputed pivot factors for wide primes
+ * p < 2^62. */
+
+/* the input generators in the order of their signatures, coefficients
+ * read from the arrays of the current field width */
+static cf32_t **sg_input_coeffs_32(
+        const bs_t * const bs,
+        const len_t * const gi,
+        const len_t ng,
+        const md_t * const md
         )
 {
-    len_t i, j, k, r;
-    double rt = realtime();
-    ht_t *bht       = bs->ht;
-    ht_t *sht       = md->ht;
-    const len_t evl = bht->evl;
-    const uint64_t p = md->fc;
-    const uint64_t big = ((uint64_t)1 << 63) / p * p;
-    const int small = p < ((uint64_t)1 << 16);
-    const len_t ng  = (len_t)md->ngens;
-    int ok = 1;
-
-    /* the input generators in the order of their signatures */
-    len_t *gi    = sg_generator_order(bs, ng);
+    len_t i, j;
     cf32_t **gcf = (cf32_t **)malloc((unsigned long)(ng + 1) * sizeof(cf32_t *));
     for (i = 0; i < ng; ++i) {
         const hm_t *b   = bs->hm[gi[i]];
@@ -2323,282 +2332,425 @@ static int sig_f4_replay(
             }
         }
     }
+    return gcf;
+}
 
-    len_t nel = 0, esz = 64;
-    hm_t **ep    = (hm_t **)malloc((unsigned long)esz * sizeof(hm_t *));
-    cf32_t **ecf = (cf32_t **)malloc((unsigned long)esz * sizeof(cf32_t *));
-
-    /* elements with the supports of the recorded run: their rows take the
-     * recorded columns, no monomial is hashed */
-    int8_t *gcl = (int8_t *)calloc((unsigned long)(ng + 1), sizeof(int8_t));
-    int8_t *ecl = (int8_t *)calloc((unsigned long)esz, sizeof(int8_t));
-    for (i = 0; i < ng && rec->gs != NULL; ++i) {
-        const hm_t *b = bs->hm[gi[i]];
-        gcl[i] = b[LENGTH] == rec->gs[i][0] && memcmp(b + OFFSET, rec->gs[i] + 1,
-                (unsigned long)b[LENGTH] * sizeof(hm_t)) == 0;
-    }
-
-    for (r = 0; r < rec->nrd && ok; ++r) {
-        const sg_rrd_t * const rd = rec->rd + r;
-        const len_t nr = rd->n;
-        if (nr == 0) {
-            continue;
-        }
-        int cached = rd->rc != NULL;
-        for (i = 0; i < nr && cached; ++i) {
-            const len_t src = rd->src[i];
-            cached = (src & SG_GEN) ? gcl[src & ~SG_GEN] : ecl[src];
-        }
-    redo: ;
-        /* the rows */
-        hm_t **rows           = (hm_t **)malloc((unsigned long)nr * sizeof(hm_t *));
-        const cf32_t **rcf    = (const cf32_t **)malloc((unsigned long)nr * sizeof(cf32_t *));
-        len_t nc;
-        hi_t *hcm = NULL;
-        for (i = 0; i < nr; ++i) {
-            const len_t src   = rd->src[i];
-            const hm_t *poly  = (src & SG_GEN) ? bs->hm[gi[src & ~SG_GEN]] : ep[src];
-            rcf[i]            = (src & SG_GEN) ? gcf[src & ~SG_GEN] : ecf[src];
-            if (cached) {
-                const len_t len = rd->rc[i][0];
-                rows[i] = (hm_t *)malloc((unsigned long)(len + OFFSET) * sizeof(hm_t));
-                rows[i][LENGTH]  = len;
-                rows[i][PRELOOP] = len % UNROLL;
-                memcpy(rows[i] + OFFSET, rd->rc[i] + 1, (unsigned long)len * sizeof(hm_t));
-                continue;
-            }
-            exp_t em[evl];
-            memcpy(em, bht->ev[rd->mul[i]], (unsigned long)evl * sizeof(exp_t));
-            val_t h = 0;
-            for (j = 0; j < evl; ++j) {
-                h += bht->rn[j] * em[j];
-            }
-            rows[i] = multiplied_poly_to_matrix_row(sht, bht, h, em, poly);
-        }
-        if (cached) {
-            nc = rd->nc;
-        } else {
-            /* the columns by decreasing monomials */
-            nc  = (len_t)(sht->eld - 1);
-            hcm = (hi_t *)malloc((unsigned long)(nc + 1) * sizeof(hi_t));
-            for (i = 0; i < nc; ++i) {
-                hcm[i] = i + 1;
-            }
-            sort_r(hcm, (unsigned long)nc, sizeof(hi_t), sg_col_cmp, sht);
-            for (i = 0; i < nc; ++i) {
-                sht->hd[hcm[i]].idx = i;
-            }
-            for (i = 0; i < nr; ++i) {
-                hm_t *row = rows[i];
-                const len_t len = row[LENGTH] + OFFSET;
-                for (j = OFFSET; j < len; ++j) {
-                    row[j] = sht->hd[row[j]].idx;
-                }
-            }
-        }
-        /* the reduction in the recorded order */
-        hm_t **pc       = (hm_t **)calloc((unsigned long)nc + 1, sizeof(hm_t *));
-        cf32_t **pcf    = (cf32_t **)calloc((unsigned long)nc + 1, sizeof(cf32_t *));
-        uint64_t *dr    = (uint64_t *)calloc((unsigned long)nc + 1, sizeof(uint64_t));
-        hm_t *nrow      = (hm_t *)malloc((unsigned long)(nc + 1) * sizeof(hm_t));
-        cf32_t *ncf     = (cf32_t *)malloc((unsigned long)(nc + 1) * sizeof(cf32_t));
-        hm_t **nw       = (hm_t **)malloc((unsigned long)(rd->nn + 1) * sizeof(hm_t *));
-        cf32_t **nwc    = (cf32_t **)malloc((unsigned long)(rd->nn + 1) * sizeof(cf32_t *));
-        len_t nn = 0;
-        const len_t nmw = nc / 64 + 1;
-        uint64_t *mk    = NULL;
-        uint64_t passed = 0, written = 0;
-        len_t counted   = 0;
-        for (i = 0; i < nr && ok; ++i) {
-            hm_t *row     = rows[i];
-            const hm_t lc = row[OFFSET];
-            if (rd->kind[i] == 0) {
-                if (pc[lc] != NULL) {
-                    ok = 0;
-                    break;
-                }
-                pc[lc]  = row;
-                pcf[lc] = (cf32_t *)rcf[i];
-                continue;
-            }
-            const len_t len = row[LENGTH];
-            len_t nl = 0;
-            uint64_t wr = len;
-            if (counted >= 4 && passed > 2 * written) {
-                /* the marked scan, see sg_round() */
-                if (mk == NULL) {
-                    mk = (uint64_t *)calloc((unsigned long)nmw, sizeof(uint64_t));
-                }
-                for (j = 0; j < len; ++j) {
-                    const hm_t c = row[OFFSET+j];
-                    dr[c] = rcf[i][j];
-                    mk[c / 64] |= (uint64_t)1 << (c % 64);
-                }
-                len_t w = lc / 64;
-                while (1) {
-                    while (w < nmw && mk[w] == 0) {
-                        ++w;
-                    }
-                    if (w == nmw) {
-                        break;
-                    }
-                    k = w * 64 + (len_t)__builtin_ctzll(mk[w]);
-                    mk[w] &= mk[w] - 1;
-                    const uint64_t v = dr[k] % p;
-                    dr[k] = 0;
-                    if (v == 0) {
-                        continue;
-                    }
-                    if (pc[k] == NULL) {
-                        nrow[nl]  = k;
-                        ncf[nl++] = (cf32_t)v;
-                        continue;
-                    }
-                    const hm_t * const pr = pc[k] + OFFSET;
-                    const len_t pl        = pc[k][LENGTH];
-                    sg_sub_row(dr, pr, pcf[k], pl, p - v, big, small);
-                    for (j = 1; j < pl; ++j) {
-                        mk[pr[j] / 64] |= (uint64_t)1 << (pr[j] % 64);
-                    }
-                    wr += pl;
-                }
-            } else {
-                for (j = 0; j < len; ++j) {
-                    dr[row[OFFSET+j]] = rcf[i][j];
-                }
-                for (k = lc; k < nc; ++k) {
-                    if (dr[k] == 0) {
-                        continue;
-                    }
-                    const uint64_t v = dr[k] % p;
-                    dr[k] = 0;
-                    if (v == 0) {
-                        continue;
-                    }
-                    if (pc[k] == NULL) {
-                        nrow[nl]  = k;
-                        ncf[nl++] = (cf32_t)v;
-                        continue;
-                    }
-                    sg_sub_row(dr, pc[k] + OFFSET, pcf[k], pc[k][LENGTH], p - v, big, small);
-                    wr += pc[k][LENGTH];
-                }
-            }
-            passed  += nc - lc;
-            written += wr;
-            if (++counted % 64 == 0) {
-                passed  /= 2;
-                written /= 2;
-            }
-            /* the remainder must be nonzero with the recorded lead term */
-            if (nl == 0 || nn >= rd->nn || (cached
-                        ? (rd->ec[nn][0] != nl || memcmp(rd->ec[nn] + 1, nrow,
-                                (unsigned long)nl * sizeof(hm_t)) != 0)
-                        : memcmp(sht->ev[hcm[nrow[0]]], bht->ev[rd->lm[nn]],
-                            (unsigned long)evl * sizeof(exp_t)) != 0)) {
-                ok = 0;
-                break;
-            }
-            const uint64_t inv = mod_p_inverse_32((int64_t)ncf[0], (int64_t)p);
-            hm_t *er    = (hm_t *)malloc((unsigned long)(nl + OFFSET) * sizeof(hm_t));
-            cf32_t *ec  = (cf32_t *)malloc((unsigned long)nl * sizeof(cf32_t));
-            for (j = 0; j < nl; ++j) {
-                er[OFFSET+j] = nrow[j];
-                ec[j]        = (cf32_t)(((uint64_t)ncf[j] * inv) % p);
-            }
-            er[LENGTH]  = nl;
-            er[PRELOOP] = nl % UNROLL;
-            er[COEFFS]  = 0;
-            er[MULT]    = 0;
-            er[BINDEX]  = 0;
-            pc[er[OFFSET]]  = er;
-            pcf[er[OFFSET]] = ec;
-            nw[nn]  = er;
-            nwc[nn] = ec;
-            nn++;
-        }
-        if (ok && nn != rd->nn) {
-            ok = 0;
-        }
-        /* in the cached matrix any difference is due to supports, the
-         * round is done again with hashed monomials */
-        const int again = cached && !ok;
-        if (again) {
-            ok = 1;
-        }
-        /* the new elements in the basis hash table */
-        for (i = 0; i < nn; ++i) {
-            hm_t *er = nw[i];
-            if (ok && !again) {
-                const len_t len = er[LENGTH] + OFFSET;
-                int clean;
-                if (cached) {
-                    memcpy(er + OFFSET, rd->eb[i] + 1,
-                            (unsigned long)er[LENGTH] * sizeof(hm_t));
-                    clean = 1;
-                } else {
-                    for (j = OFFSET; j < len; ++j) {
-                        er[j] = sg_insert(sht->ev[hcm[er[j]]], bht);
-                    }
-                    clean = rd->eb != NULL && rd->eb[i][0] == er[LENGTH]
-                        && memcmp(rd->eb[i] + 1, er + OFFSET,
-                                (unsigned long)er[LENGTH] * sizeof(hm_t)) == 0;
-                }
-                er[DEG] = bht->hd[er[OFFSET]].deg;
-                if (nel >= esz) {
-                    esz = 2 * esz;
-                    ep  = realloc(ep, (unsigned long)esz * sizeof(hm_t *));
-                    ecf = realloc(ecf, (unsigned long)esz * sizeof(cf32_t *));
-                    ecl = realloc(ecl, (unsigned long)esz * sizeof(int8_t));
-                }
-                ep[nel]  = er;
-                ecf[nel] = nwc[i];
-                ecl[nel] = (int8_t)clean;
-                nel++;
-            } else {
-                free(er);
-                free(nwc[i]);
-            }
-        }
-        for (i = 0; i < nr; ++i) {
-            free(rows[i]);
-        }
-        free(rows);
-        free(rcf);
-        free(hcm);
-        free(pc);
-        free(pcf);
-        free(dr);
-        free(nrow);
-        free(ncf);
-        free(nw);
-        free(nwc);
-        free(mk);
-        if (!cached) {
-            clean_hash_table(sht);
-        }
-        if (again) {
-            cached = 0;
-            goto redo;
-        }
-    }
-    free(gcl);
-    free(ecl);
+static cf64_t **sg_input_coeffs_64(
+        const bs_t * const bs,
+        const len_t * const gi,
+        const len_t ng
+        )
+{
+    len_t i, j;
+    cf64_t **gcf = (cf64_t **)malloc((unsigned long)(ng + 1) * sizeof(cf64_t *));
     for (i = 0; i < ng; ++i) {
-        free(gcf[i]);
-    }
-    free(gcf);
-    free(gi);
-    if (ok) {
-        sg_load_basis(bs, md, ep, ecf, nel, ng);
-    } else {
-        for (i = 0; i < nel; ++i) {
-            free(ep[i]);
-            free(ecf[i]);
+        const hm_t *b   = bs->hm[gi[i]];
+        const len_t len = b[LENGTH];
+        gcf[i] = (cf64_t *)malloc((unsigned long)len * sizeof(cf64_t));
+        for (j = 0; j < len; ++j) {
+            gcf[i][j] = bs->cf_64[b[COEFFS]][j];
         }
     }
-    free(ep);
-    free(ecf);
-    md->sig_f4_rtime = realtime() - rt;
-    return ok;
+    return gcf;
+}
+
+/* coefficient-width variants of the replay operations */
+
+#define SG_INPUT_COEFFS_32(bs, gi, ng, md) \
+    sg_input_coeffs_32((bs), (gi), (ng), (md))
+#define SG_INPUT_COEFFS_64(bs, gi, ng, md) \
+    sg_input_coeffs_64((bs), (gi), (ng))
+
+/* a dense entry is reduced to its canonical representative and the
+ * entry is cleared: the 32-bit rows hold lazy entries below 2^63, the
+ * 64-bit rows hold redundant entries in [0, 2p) */
+#define SG_TAKE_32(v, dr, k, p)             \
+    do {                                    \
+        (v)     = (dr)[k] % (p);            \
+        (dr)[k] = 0;                        \
+    } while (0)
+#define SG_TAKE_64(v, dr, k, p)                             \
+    do {                                                    \
+        (v)     = (dr)[k] >= (p) ? (dr)[k] - (p) : (dr)[k]; \
+        (dr)[k] = 0;                                        \
+    } while (0)
+
+/* subtracting the pivot row (pr, pf) from the dense row: the 32-bit
+ * instantiation uses the lazy big/small constants, the 64-bit
+ * instantiation the Shoup factors pq of the pivot row */
+#define SG_SUBROW_32(dr, pr, pf, pq, pl, v, p, big, small) \
+    sg_sub_row((dr), (pr), (pf), (pl), (p) - (v), (big), (small))
+#define SG_SUBROW_64(dr, pr, pf, pq, pl, v, p, big, small) \
+    sg_sub_row_64((dr), (pr), (pq), (pf), (pl), (v), (p))
+
+/* inverting the lead coefficient and scaling by the inverse for
+ * monicization */
+#define SG_INV_32(x, p) mod_p_inverse_32((int64_t)(x), (int64_t)(p))
+#define SG_INV_64(x, p) mod_p_inverse_64((int64_t)(x), (int64_t)(p))
+#define SG_MUL_INV_32(x, inv, p) (cf32_t)(((uint64_t)(x) * (inv)) % (p))
+#define SG_MUL_INV_64(x, inv, p) (cf64_t)mul_mod_64((x), (inv), (p))
+
+/* precomputing the Shoup factors of the coefficients of an installed
+ * pivot row; only the wide instantiation does anything */
+#define SG_SHOUP_INSTALL_32(pcq, k, cf, len, p)  \
+    do {                                         \
+        (void)(cf);                              \
+        (void)(len);                             \
+    } while (0)
+#define SG_SHOUP_INSTALL_64(pcq, k, cf, len, p)                          \
+    do {                                                                 \
+        len_t _sj;                                                       \
+        (pcq)[k] = (uint64_t *)malloc(                                   \
+                (unsigned long)(len) * sizeof(uint64_t));                \
+        for (_sj = 0; _sj < (len); ++_sj) {                              \
+            (pcq)[k][_sj] = shoup_mu((p), (cf)[_sj]);                    \
+        }                                                                \
+    } while (0)
+
+/* local constants of the lazy representation, only declared by the
+ * 32-bit instantiation */
+#define SG_BIG_SMALL_DECL_32(p) \
+    const uint64_t big = ((uint64_t)1 << 63) / (p) * (p); \
+    const int small = (p) < ((uint64_t)1 << 16)
+#define SG_BIG_SMALL_DECL_64(p) (void)(p)
+
+/* the replay core shared by both coefficient widths: cf_t is the
+ * coefficient type, the variant macros adapt input coefficient
+ * extraction, dense-row invariant, pivot subtraction, monicization and
+ * Shoup factor installation */
+#define SG_REPLAY(name, cf_t, INPUT_COEFFS, TAKE, SUBROW, INV, MUL_INV, \
+        SHOUP_INSTALL, BIG_SMALL_DECL)                                  \
+static int name(                                                        \
+        bs_t *bs,                                                       \
+        md_t *md,                                                       \
+        const sg_rec_t * const rec                                      \
+        )                                                               \
+{                                                                       \
+    len_t i, j, k, r;                                                   \
+    double rt = realtime();                                             \
+    ht_t *bht       = bs->ht;                                           \
+    ht_t *sht       = md->ht;                                           \
+    const len_t evl = bht->evl;                                         \
+    const uint64_t p = md->fc;                                          \
+    BIG_SMALL_DECL(p);                                                  \
+    const len_t ng  = (len_t)md->ngens;                                 \
+    int ok = 1;                                                         \
+                                                                        \
+    /* the input generators in the order of their signatures */         \
+    len_t *gi  = sg_generator_order(bs, ng);                            \
+    cf_t **gcf = INPUT_COEFFS(bs, gi, ng, md);                          \
+                                                                        \
+    len_t nel = 0, esz = 64;                                            \
+    hm_t **ep  = (hm_t **)malloc((unsigned long)esz * sizeof(hm_t *));  \
+    cf_t **ecf = (cf_t **)malloc((unsigned long)esz * sizeof(cf_t *));  \
+                                                                        \
+    /* elements with the supports of the recorded run: their rows take the \
+     * recorded columns, no monomial is hashed */                       \
+    int8_t *gcl = (int8_t *)calloc((unsigned long)(ng + 1), sizeof(int8_t)); \
+    int8_t *ecl = (int8_t *)calloc((unsigned long)esz, sizeof(int8_t)); \
+    for (i = 0; i < ng && rec->gs != NULL; ++i) {                       \
+        const hm_t *b = bs->hm[gi[i]];                                  \
+        gcl[i] = b[LENGTH] == rec->gs[i][0] && memcmp(b + OFFSET, rec->gs[i] + 1, \
+                (unsigned long)b[LENGTH] * sizeof(hm_t)) == 0;          \
+    }                                                                   \
+                                                                        \
+    for (r = 0; r < rec->nrd && ok; ++r) {                              \
+        const sg_rrd_t * const rd = rec->rd + r;                        \
+        const len_t nr = rd->n;                                         \
+        if (nr == 0) {                                                  \
+            continue;                                                   \
+        }                                                               \
+        int cached = rd->rc != NULL;                                    \
+        for (i = 0; i < nr && cached; ++i) {                            \
+            const len_t src = rd->src[i];                               \
+            cached = (src & SG_GEN) ? gcl[src & ~SG_GEN] : ecl[src];    \
+        }                                                               \
+    redo: ;                                                             \
+        /* the rows */                                                  \
+        hm_t **rows           = (hm_t **)malloc((unsigned long)nr * sizeof(hm_t *)); \
+        const cf_t **rcf      = (const cf_t **)malloc((unsigned long)nr * sizeof(cf_t *)); \
+        len_t nc;                                                       \
+        hi_t *hcm = NULL;                                               \
+        for (i = 0; i < nr; ++i) {                                      \
+            const len_t src   = rd->src[i];                             \
+            const hm_t *poly  = (src & SG_GEN) ? bs->hm[gi[src & ~SG_GEN]] : ep[src]; \
+            rcf[i]            = (src & SG_GEN) ? gcf[src & ~SG_GEN] : ecf[src]; \
+            if (cached) {                                               \
+                const len_t len = rd->rc[i][0];                         \
+                rows[i] = (hm_t *)malloc((unsigned long)(len + OFFSET) * sizeof(hm_t)); \
+                rows[i][LENGTH]  = len;                                 \
+                rows[i][PRELOOP] = len % UNROLL;                        \
+                memcpy(rows[i] + OFFSET, rd->rc[i] + 1, (unsigned long)len * sizeof(hm_t)); \
+                continue;                                               \
+            }                                                           \
+            exp_t em[evl];                                              \
+            memcpy(em, bht->ev[rd->mul[i]], (unsigned long)evl * sizeof(exp_t)); \
+            val_t h = 0;                                                \
+            for (j = 0; j < evl; ++j) {                                 \
+                h += bht->rn[j] * em[j];                                \
+            }                                                           \
+            rows[i] = multiplied_poly_to_matrix_row(sht, bht, h, em, poly); \
+        }                                                               \
+        if (cached) {                                                   \
+            nc = rd->nc;                                                \
+        } else {                                                        \
+            /* the columns by decreasing monomials */                   \
+            nc  = (len_t)(sht->eld - 1);                                \
+            hcm = (hi_t *)malloc((unsigned long)(nc + 1) * sizeof(hi_t)); \
+            for (i = 0; i < nc; ++i) {                                  \
+                hcm[i] = i + 1;                                         \
+            }                                                           \
+            sort_r(hcm, (unsigned long)nc, sizeof(hi_t), sg_col_cmp, sht); \
+            for (i = 0; i < nc; ++i) {                                  \
+                sht->hd[hcm[i]].idx = i;                                \
+            }                                                           \
+            for (i = 0; i < nr; ++i) {                                  \
+                hm_t *row = rows[i];                                    \
+                const len_t len = row[LENGTH] + OFFSET;                 \
+                for (j = OFFSET; j < len; ++j) {                        \
+                    row[j] = sht->hd[row[j]].idx;                       \
+                }                                                       \
+            }                                                           \
+        }                                                               \
+        /* the reduction in the recorded order */                       \
+        hm_t **pc       = (hm_t **)calloc((unsigned long)nc + 1, sizeof(hm_t *)); \
+        cf_t **pcf      = (cf_t **)calloc((unsigned long)nc + 1, sizeof(cf_t *)); \
+        uint64_t **pcq  = (uint64_t **)calloc((unsigned long)nc + 1, sizeof(uint64_t *)); \
+        uint64_t *dr    = (uint64_t *)calloc((unsigned long)nc + 1, sizeof(uint64_t)); \
+        hm_t *nrow      = (hm_t *)malloc((unsigned long)(nc + 1) * sizeof(hm_t)); \
+        cf_t *ncf       = (cf_t *)malloc((unsigned long)(nc + 1) * sizeof(cf_t)); \
+        hm_t **nw       = (hm_t **)malloc((unsigned long)(rd->nn + 1) * sizeof(hm_t *)); \
+        cf_t **nwc      = (cf_t **)malloc((unsigned long)(rd->nn + 1) * sizeof(cf_t *)); \
+        len_t nn = 0;                                                   \
+        const len_t nmw = nc / 64 + 1;                                  \
+        uint64_t *mk    = NULL;                                         \
+        uint64_t passed = 0, written = 0;                               \
+        len_t counted   = 0;                                            \
+        for (i = 0; i < nr && ok; ++i) {                                \
+            hm_t *row     = rows[i];                                    \
+            const hm_t lc = row[OFFSET];                                \
+            if (rd->kind[i] == 0) {                                     \
+                if (pc[lc] != NULL) {                                   \
+                    ok = 0;                                             \
+                    break;                                              \
+                }                                                       \
+                pc[lc]  = row;                                          \
+                pcf[lc] = (cf_t *)rcf[i];                               \
+                SHOUP_INSTALL(pcq, lc, pcf[lc], row[LENGTH], p);        \
+                continue;                                               \
+            }                                                           \
+            const len_t len = row[LENGTH];                              \
+            len_t nl = 0;                                               \
+            uint64_t wr = len;                                          \
+            if (counted >= 4 && passed > 2 * written) {                 \
+                /* the marked scan, see sg_round() */                   \
+                if (mk == NULL) {                                       \
+                    mk = (uint64_t *)calloc((unsigned long)nmw, sizeof(uint64_t)); \
+                }                                                       \
+                for (j = 0; j < len; ++j) {                             \
+                    const hm_t c = row[OFFSET+j];                       \
+                    dr[c] = rcf[i][j];                                  \
+                    mk[c / 64] |= (uint64_t)1 << (c % 64);              \
+                }                                                       \
+                len_t w = lc / 64;                                      \
+                while (1) {                                             \
+                    while (w < nmw && mk[w] == 0) {                     \
+                        ++w;                                            \
+                    }                                                   \
+                    if (w == nmw) {                                     \
+                        break;                                          \
+                    }                                                   \
+                    k = w * 64 + (len_t)__builtin_ctzll(mk[w]);         \
+                    mk[w] &= mk[w] - 1;                                 \
+                    uint64_t v;                                         \
+                    TAKE(v, dr, k, p);                                  \
+                    if (v == 0) {                                       \
+                        continue;                                       \
+                    }                                                   \
+                    if (pc[k] == NULL) {                                \
+                        nrow[nl]  = k;                                  \
+                        ncf[nl++] = (cf_t)v;                            \
+                        continue;                                       \
+                    }                                                   \
+                    const hm_t * const pr = pc[k] + OFFSET;             \
+                    const len_t pl        = pc[k][LENGTH];              \
+                    SUBROW(dr, pr, pcf[k], pcq[k], pl, v, p, big, small); \
+                    for (j = 1; j < pl; ++j) {                          \
+                        mk[pr[j] / 64] |= (uint64_t)1 << (pr[j] % 64);  \
+                    }                                                   \
+                    wr += pl;                                           \
+                }                                                       \
+            } else {                                                    \
+                for (j = 0; j < len; ++j) {                             \
+                    dr[row[OFFSET+j]] = rcf[i][j];                      \
+                }                                                       \
+                for (k = lc; k < nc; ++k) {                             \
+                    if (dr[k] == 0) {                                   \
+                        continue;                                       \
+                    }                                                   \
+                    uint64_t v;                                         \
+                    TAKE(v, dr, k, p);                                  \
+                    if (v == 0) {                                       \
+                        continue;                                       \
+                    }                                                   \
+                    if (pc[k] == NULL) {                                \
+                        nrow[nl]  = k;                                  \
+                        ncf[nl++] = (cf_t)v;                            \
+                        continue;                                       \
+                    }                                                   \
+                    SUBROW(dr, pc[k] + OFFSET, pcf[k], pcq[k], pc[k][LENGTH], v, p, big, small); \
+                    wr += pc[k][LENGTH];                                \
+                }                                                       \
+            }                                                           \
+            passed  += nc - lc;                                         \
+            written += wr;                                              \
+            if (++counted % 64 == 0) {                                  \
+                passed  /= 2;                                           \
+                written /= 2;                                           \
+            }                                                           \
+            /* the remainder must be nonzero with the recorded lead term */ \
+            if (nl == 0 || nn >= rd->nn || (cached                      \
+                        ? (rd->ec[nn][0] != nl || memcmp(rd->ec[nn] + 1, nrow, \
+                                (unsigned long)nl * sizeof(hm_t)) != 0) \
+                        : memcmp(sht->ev[hcm[nrow[0]]], bht->ev[rd->lm[nn]], \
+                            (unsigned long)evl * sizeof(exp_t)) != 0)) { \
+                ok = 0;                                                 \
+                break;                                                  \
+            }                                                           \
+            const uint64_t inv = INV(ncf[0], p);                        \
+            hm_t *er    = (hm_t *)malloc((unsigned long)(nl + OFFSET) * sizeof(hm_t)); \
+            cf_t *ec    = (cf_t *)malloc((unsigned long)nl * sizeof(cf_t)); \
+            for (j = 0; j < nl; ++j) {                                  \
+                er[OFFSET+j] = nrow[j];                                 \
+                ec[j]        = MUL_INV(ncf[j], inv, p);                 \
+            }                                                           \
+            er[LENGTH]  = nl;                                           \
+            er[PRELOOP] = nl % UNROLL;                                  \
+            er[COEFFS]  = 0;                                            \
+            er[MULT]    = 0;                                            \
+            er[BINDEX]  = 0;                                            \
+            pc[er[OFFSET]]  = er;                                       \
+            pcf[er[OFFSET]] = ec;                                       \
+            SHOUP_INSTALL(pcq, er[OFFSET], ec, nl, p);                  \
+            nw[nn]  = er;                                               \
+            nwc[nn] = ec;                                               \
+            nn++;                                                       \
+        }                                                               \
+        if (ok && nn != rd->nn) {                                       \
+            ok = 0;                                                     \
+        }                                                               \
+        /* in the cached matrix any difference is due to supports, the \
+         * round is done again with hashed monomials */                 \
+        const int again = cached && !ok;                                \
+        if (again) {                                                    \
+            ok = 1;                                                     \
+        }                                                               \
+        /* the new elements in the basis hash table */                  \
+        for (i = 0; i < nn; ++i) {                                      \
+            hm_t *er = nw[i];                                           \
+            if (ok && !again) {                                         \
+                const len_t len = er[LENGTH] + OFFSET;                  \
+                int clean;                                              \
+                if (cached) {                                           \
+                    memcpy(er + OFFSET, rd->eb[i] + 1,                  \
+                            (unsigned long)er[LENGTH] * sizeof(hm_t));  \
+                    clean = 1;                                          \
+                } else {                                                \
+                    for (j = OFFSET; j < len; ++j) {                    \
+                        er[j] = sg_insert(sht->ev[hcm[er[j]]], bht);    \
+                    }                                                   \
+                    clean = rd->eb != NULL && rd->eb[i][0] == er[LENGTH] \
+                        && memcmp(rd->eb[i] + 1, er + OFFSET,           \
+                                (unsigned long)er[LENGTH] * sizeof(hm_t)) == 0; \
+                }                                                       \
+                er[DEG] = bht->hd[er[OFFSET]].deg;                      \
+                if (nel >= esz) {                                       \
+                    esz = 2 * esz;                                      \
+                    ep  = realloc(ep, (unsigned long)esz * sizeof(hm_t *)); \
+                    ecf = realloc(ecf, (unsigned long)esz * sizeof(cf_t *)); \
+                    ecl = realloc(ecl, (unsigned long)esz * sizeof(int8_t)); \
+                }                                                       \
+                ep[nel]  = er;                                          \
+                ecf[nel] = nwc[i];                                      \
+                ecl[nel] = (int8_t)clean;                               \
+                nel++;                                                  \
+            } else {                                                    \
+                free(er);                                               \
+                free(nwc[i]);                                           \
+            }                                                           \
+        }                                                               \
+        for (i = 0; i < nr; ++i) {                                      \
+            free(rows[i]);                                              \
+        }                                                               \
+        free(rows);                                                     \
+        free(rcf);                                                      \
+        free(hcm);                                                      \
+        free(pc);                                                       \
+        free(pcf);                                                      \
+        for (k = 0; k < nc + 1; ++k) {                                  \
+            free(pcq[k]);                                               \
+        }                                                               \
+        free(pcq);                                                      \
+        free(dr);                                                       \
+        free(nrow);                                                     \
+        free(ncf);                                                      \
+        free(nw);                                                       \
+        free(nwc);                                                      \
+        free(mk);                                                       \
+        if (!cached) {                                                  \
+            clean_hash_table(sht);                                      \
+        }                                                               \
+        if (again) {                                                    \
+            cached = 0;                                                 \
+            goto redo;                                                  \
+        }                                                               \
+    }                                                                   \
+    free(gcl);                                                          \
+    free(ecl);                                                          \
+    for (i = 0; i < ng; ++i) {                                          \
+        free(gcf[i]);                                                   \
+    }                                                                   \
+    free(gcf);                                                          \
+    free(gi);                                                           \
+    if (ok) {                                                           \
+        sg_load_basis(bs, md, ep, (void **)ecf, nel, ng);               \
+    } else {                                                            \
+        for (i = 0; i < nel; ++i) {                                     \
+            free(ep[i]);                                                \
+            free(ecf[i]);                                               \
+        }                                                               \
+    }                                                                   \
+    free(ep);                                                           \
+    free(ecf);                                                          \
+    md->sig_f4_rtime = realtime() - rt;                                 \
+    return ok;                                                          \
+}
+
+/* the classic replay for p < 2^32: byte-identical to the behavior
+ * before the core was parameterized by the coefficient width */
+SG_REPLAY(sig_f4_replay_32, cf32_t,
+        SG_INPUT_COEFFS_32, SG_TAKE_32, SG_SUBROW_32,
+        SG_INV_32, SG_MUL_INV_32, SG_SHOUP_INSTALL_32,
+        SG_BIG_SMALL_DECL_32)
+
+/* the wide replay for primes in [2^32, 2^62): coefficients in cf_64
+ * arrays, dense rows in the redundant [0, 2p) representation, Shoup
+ * factors precomputed per installed pivot row, monicization with
+ * 128-bit products */
+SG_REPLAY(sig_f4_replay_64, cf64_t,
+        SG_INPUT_COEFFS_64, SG_TAKE_64, SG_SUBROW_64,
+        SG_INV_64, SG_MUL_INV_64, SG_SHOUP_INSTALL_64,
+        SG_BIG_SMALL_DECL_64)
+
+/* dispatches on the field width of the run */
+static int sig_f4_replay(
+        bs_t *bs,
+        md_t *md,
+        const sg_rec_t * const rec
+        )
+{
+    if (md->ff_bits == 64) {
+        return sig_f4_replay_64(bs, md, rec);
+    }
+    return sig_f4_replay_32(bs, md, rec);
 }

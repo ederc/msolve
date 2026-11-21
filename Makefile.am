@@ -10,6 +10,7 @@ msolve_SOURCES 	= src/msolve/main.c
 check_PROGRAMS  = \
 			  neogb_io \
 			  neogb_f4_52_bit \
+			  neogb_shoup_64 \
 			  neogb_gf2_ext \
 			  neogb_gf2 \
 			  fglm_build_matrixn_radical-shape-31 \
@@ -111,6 +112,7 @@ checkdiff       = \
 # dist_check_DATA         = test/input_files
 neogb_io_SOURCES 	= test/neogb/io/validate_input_data.c
 neogb_f4_52_bit_SOURCES = test/neogb/f4/f4_52_bit.c
+neogb_shoup_64_SOURCES = test/neogb/f4/shoup_64.c
 neogb_gf2_ext_SOURCES 	= test/neogb/la/gf2_ext.c
 neogb_gf2_SOURCES 	= test/neogb/la/gf2.c
 fglm_build_matrixn_radical_shape_31_SOURCES = test/fglm/build_matrixn_radical-shape-31.c

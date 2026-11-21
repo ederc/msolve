@@ -181,4 +181,51 @@ static inline uint64_t mul_mod_64(
 {
     return (uint64_t)(((unsigned __int128)a * b) % p);
 }
+
+/* Shoup's pre-inverse mu = floor(x * 2^64 / p) of a fixed multiplicand
+ * x < p; mu < 2^64 since x < p. */
+static inline uint64_t shoup_mu(
+        const uint64_t p,
+        const uint64_t x
+        )
+{
+    return (uint64_t)(((unsigned __int128)x << 64) / p);
+}
+
+/* Shoup's quotient q = floor(mu * y / 2^64) for mu = shoup_mu(p, x)
+ * and any y < 2^64: with wrapping 64-bit arithmetic x * y - q * p lies
+ * in [0, 2p) for x < p < 2^63 and is x*y mod p or that value plus p. */
+static inline uint64_t shoup_mul(
+        const uint64_t mu,
+        const uint64_t y
+        )
+{
+    return (uint64_t)(((unsigned __int128)mu * y) >> 64);
+}
+
+/* subtracts v times the pivot row (pr, pf, pfq) of length pl, but its
+ * lead entry, from the dense row dr; pf holds the pivot coefficients,
+ * pfq their Shoup factors. Dense row entries are kept in [0, 2p) as
+ * redundant representatives: the difference of two entries in [0, 2p)
+ * is corrected by 2p on borrow, which is exact and overflow-safe for
+ * all p < 2^62. */
+static inline void sg_sub_row_64(
+        uint64_t *dr,
+        const hm_t * const pr,
+        const uint64_t * const pfq,
+        const cf64_t * const pf,
+        const len_t pl,
+        const uint64_t v,
+        const uint64_t p
+        )
+{
+    len_t j;
+    const uint64_t twice = 2 * p;
+    for (j = 1; j < pl; ++j) {
+        const uint64_t q = shoup_mul(pfq[j], v);
+        const uint64_t d = v * pf[j] - q * p; /* in [0, 2p) */
+        const uint64_t e = dr[pr[j]];
+        dr[pr[j]] = e >= d ? e - d : e - d + twice;
+    }
+}
 #endif
