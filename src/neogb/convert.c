@@ -299,6 +299,90 @@ static void sba_convert_hashes_to_columns(
 /* sorts the columns hcm[0],...,hcm[n-1] w.r.t. hcm_cmp: blocks of hcm
  * are sorted in parallel and then merged. hcm_cmp is a total order on
  * the columns, so the result is the same as for a serial sort. */
+/* DRL: sorts the columns by integer keys built once per column, in the
+ * order of hcm_cmp: the known pivots first, then by decreasing degree, then
+ * by increasing exponents from the last variable on. Each field takes the
+ * bits the largest value in the columns needs; the keys are sorted by a
+ * radix sort on 16 bits at a time. Columns whose keys agree because not all
+ * variables fit into 96 bits are sorted by hcm_cmp. */
+static void sort_columns_by_keys(
+        hi_t *hcm,
+        const len_t n,
+        ht_t *sht
+        )
+{
+    len_t i, j;
+    const len_t evl = sht->evl;
+    exp_t mx[evl];
+    unsigned w[evl];
+    memset(w, 0, (unsigned long)evl * sizeof(unsigned));
+    memset(mx, 0, (unsigned long)evl * sizeof(exp_t));
+    for (i = 0; i < n; ++i) {
+        const exp_t * const e = sht->ev[hcm[i]];
+        for (j = 0; j < evl; ++j) {
+            mx[j] = e[j] > mx[j] ? e[j] : mx[j];
+        }
+    }
+    for (j = 0; j < evl; ++j) {
+        w[j] = mx[j] == 0 ? 0 : 64 - (unsigned)__builtin_clzll((uint64_t)mx[j]);
+    }
+    unsigned bits = 1 + w[0];
+    len_t last    = 0;
+    for (j = evl - 1; j > 0; --j) {
+        if (bits + w[j] > 96) {
+            last = j;
+            break;
+        }
+        bits += w[j];
+    }
+    unsigned __int128 *k = (unsigned __int128 *)malloc(
+            (unsigned long)n * sizeof(unsigned __int128));
+    unsigned __int128 *t = (unsigned __int128 *)malloc(
+            (unsigned long)n * sizeof(unsigned __int128));
+    for (i = 0; i < n; ++i) {
+        const exp_t * const e = sht->ev[hcm[i]];
+        unsigned __int128 x = sht->hd[hcm[i]].idx == 2 ? 0 : 1;
+        x = (x << w[0]) | (unsigned __int128)(mx[0] - e[0]);
+        for (j = evl - 1; j > last; --j) {
+            x = (x << w[j]) | (unsigned __int128)e[j];
+        }
+        k[i] = (x << 32) | hcm[i];
+    }
+    /* LSD radix sort on the key bits 32, ..., 32+bits-1 */
+    len_t *cnt = (len_t *)malloc(65537 * sizeof(len_t));
+    unsigned sh;
+    for (sh = 32; sh < 32 + bits; sh += 16) {
+        memset(cnt, 0, 65537 * sizeof(len_t));
+        for (i = 0; i < n; ++i) {
+            cnt[((uint64_t)(k[i] >> sh) & 0xFFFF) + 1]++;
+        }
+        for (j = 0; j < 65536; ++j) {
+            cnt[j+1] += cnt[j];
+        }
+        for (i = 0; i < n; ++i) {
+            t[cnt[(uint64_t)(k[i] >> sh) & 0xFFFF]++] = k[i];
+        }
+        unsigned __int128 *x = k;
+        k = t;
+        t = x;
+    }
+    free(cnt);
+    for (i = 0; i < n; ++i) {
+        hcm[i] = (hi_t)k[i];
+    }
+    if (last > 0) {
+        for (i = 0; i < n; i = j) {
+            for (j = i + 1; j < n && (k[j] >> 32) == (k[i] >> 32); ++j) {
+            }
+            if (j - i > 1) {
+                sort_r(hcm + i, (uint64_t)(j - i), sizeof(hi_t), hcm_cmp, sht);
+            }
+        }
+    }
+    free(k);
+    free(t);
+}
+
 static void sort_columns(
         hi_t *hcm,
         const len_t n,
@@ -308,6 +392,11 @@ static void sort_columns(
 {
     len_t i;
 
+    if (sht->ebl == 0 && sht->mo == 0 && !sht->boolean && n >= 4096
+            && (nthrds == 1 || n < 8192)) {
+        sort_columns_by_keys(hcm, n, sht);
+        return;
+    }
     if (nthrds == 1 || n < 8192) {
         sort_r(hcm, (uint64_t)n, sizeof(hi_t), hcm_cmp, sht);
         return;
