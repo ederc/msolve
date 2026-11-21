@@ -2005,8 +2005,9 @@ static int sig_f4_applicable(
 }
 
 /* the n elements (p[i], cf[i]) replace the ng input generators in bs, the
- * coefficient arrays are taken over or freed; cf holds arrays of the
- * coefficient type selected by md->ff_bits */
+ * coefficient arrays are taken over or freed; cf holds cf32_t arrays,
+ * except for ff_bits == 64 where it holds cf64_t arrays (which are taken
+ * over without truncation) */
 static void sg_load_basis(
         bs_t *bs,
         md_t *md,
@@ -2055,14 +2056,14 @@ static void sg_load_basis(
             case 8:
                 bs->cf_8[i] = (cf8_t *)malloc((unsigned long)len * sizeof(cf8_t));
                 for (j = 0; j < len; ++j) {
-                    bs->cf_8[i][j] = ((cf8_t *)cf[i])[j];
+                    bs->cf_8[i][j] = (cf8_t)((cf32_t *)cf[i])[j];
                 }
                 free(cf[i]);
                 break;
             case 16:
                 bs->cf_16[i] = (cf16_t *)malloc((unsigned long)len * sizeof(cf16_t));
                 for (j = 0; j < len; ++j) {
-                    bs->cf_16[i][j] = ((cf16_t *)cf[i])[j];
+                    bs->cf_16[i][j] = (cf16_t)((cf32_t *)cf[i])[j];
                 }
                 free(cf[i]);
                 break;
