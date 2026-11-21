@@ -8,13 +8,21 @@
 #    plain -g 2 run), and
 # 2. the diagnostics contain the wide-application marker line
 #    "application phase at 61-bit primes".
+#
+# The record is only learned for --signature-f4 > 0: with the default
+# signature-based F4 handover policy (-1) no record is ever attached to
+# the tracer during QQ learning, so the wide walk can never start.  We
+# use kat7-qq with --signature-f4 1: kat7's record replays cleanly at
+# 61-bit primes (cyclic5's does not yet, see the Task 4 ruling in
+# .superpowers/sdd/2026-11-21-61bit-sigf4-replay/progress.md).
 
-file=cyclic5-qq
+file=kat7-qq
 
 source test/diff/diff_source.sh
 
 $(pwd)/msolve -f input_files/$file.ms -o test/diff/$file.wide.res \
       --random-seed $seed \
+      --signature-f4 1 \
       -g 2 -v 2 -t 1 > test/diff/$file.wide.log 2>&1
 if [ $? -gt 0 ]; then
     rm -f test/diff/$file.wide.res test/diff/$file.wide.log
