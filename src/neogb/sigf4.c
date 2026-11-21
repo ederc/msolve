@@ -237,6 +237,13 @@ struct sg_rrd_t
                      * 1: reduced by the pivots before it, a new element */
     len_t nn;       /* new elements */
     hm_t *lm;       /* their lead terms in the basis hash table */
+    /* the matrix of the run, applied where the elements have the supports
+     * of the run: the columns of each row, the columns and terms of each
+     * new element, each array led by its length */
+    len_t nc;       /* columns */
+    hm_t **rc;
+    hm_t **ec;
+    hm_t **eb;
 };
 
 typedef struct sg_rec_t sg_rec_t;
@@ -245,6 +252,8 @@ struct sg_rec_t
     len_t nrd;
     len_t szrd;
     sg_rrd_t *rd;
+    len_t ng;       /* the supports of the input generators, led by their */
+    hm_t **gs;      /* lengths, in the order of their signatures */
 };
 
 static void sg_rec_free(
@@ -257,24 +266,53 @@ static void sg_rec_free(
         return;
     }
     for (i = 0; i < rec->nrd; ++i) {
+        len_t j;
+        for (j = 0; j < rec->rd[i].n; ++j) {
+            free(rec->rd[i].rc[j]);
+        }
+        for (j = 0; j < rec->rd[i].nn; ++j) {
+            free(rec->rd[i].ec[j]);
+            free(rec->rd[i].eb[j]);
+        }
+        free(rec->rd[i].rc);
+        free(rec->rd[i].ec);
+        free(rec->rd[i].eb);
         free(rec->rd[i].src);
         free(rec->rd[i].mul);
         free(rec->rd[i].kind);
         free(rec->rd[i].lm);
     }
     free(rec->rd);
+    for (i = 0; i < rec->ng; ++i) {
+        free(rec->gs[i]);
+    }
+    free(rec->gs);
     free(rec);
+}
+
+/* a copy of the n entries h[0], ..., h[n-1] led by n */
+static hm_t *sg_copy_terms(
+        const hm_t * const h,
+        const len_t n
+        )
+{
+    hm_t *c = (hm_t *)malloc((unsigned long)(n + 1) * sizeof(hm_t));
+    c[0] = n;
+    memcpy(c + 1, h, (unsigned long)n * sizeof(hm_t));
+    return c;
 }
 
 static void sg_rec_add(
         sg_rrd_t *rd,
         const len_t src,
         const hm_t mul,
-        const uint8_t kind
+        const uint8_t kind,
+        const hm_t * const row
         )
 {
     if (rd->n >= rd->sz) {
         rd->sz   = rd->sz > 0 ? 2 * rd->sz : 64;
+        rd->rc   = realloc(rd->rc, (unsigned long)rd->sz * sizeof(hm_t *));
         rd->src  = realloc(rd->src, (unsigned long)rd->sz * sizeof(len_t));
         rd->mul  = realloc(rd->mul, (unsigned long)rd->sz * sizeof(hm_t));
         rd->kind = realloc(rd->kind, (unsigned long)rd->sz * sizeof(uint8_t));
@@ -282,6 +320,7 @@ static void sg_rec_add(
     rd->src[rd->n]  = src;
     rd->mul[rd->n]  = mul;
     rd->kind[rd->n] = kind;
+    rd->rc[rd->n]   = sg_copy_terms(row + OFFSET, row[LENGTH]);
     rd->n++;
 }
 
@@ -1362,7 +1401,7 @@ static int64_t sg_round(
             pc[lc]  = r;
             pcf[lc] = (cf32_t *)row->cf;
             if (rd != NULL) {
-                sg_rec_add(rd, row->src, row->mul, 0);
+                sg_rec_add(rd, row->src, row->mul, 0, r);
                 kcol[rd->n-1] = lc;
             }
             continue;
@@ -1460,9 +1499,9 @@ static int64_t sg_round(
             passed  /= 2;
             written /= 2;
         }
-        free(r);
-        row->r = NULL;
         if (nl == 0) {
+            free(r);
+            row->r = NULL;
             /* reduction to zero: a syzygy signature */
             sg->nzero++;
             sg_add_syzygy_exp(sg, row->ix, bht->ev[row->sm]);
@@ -1543,9 +1582,11 @@ static int64_t sg_round(
         nw[nn].cf = ecf;
         nn++;
         if (rd != NULL) {
-            sg_rec_add(rd, row->src, row->mul, 1);
+            sg_rec_add(rd, row->src, row->mul, 1, r);
             kcol[rd->n-1] = nc;
         }
+        free(r);
+        row->r = NULL;
     }
 
     if (rd != NULL) {
@@ -1556,11 +1597,17 @@ static int64_t sg_round(
                 rd->src[m]  = rd->src[i];
                 rd->mul[m]  = rd->mul[i];
                 rd->kind[m] = rd->kind[i];
+                rd->rc[m]   = rd->rc[i];
                 m++;
+            } else {
+                free(rd->rc[i]);
             }
         }
         rd->n  = m;
+        rd->nc = nc;
         rd->lm = (hm_t *)malloc((unsigned long)(nn + 1) * sizeof(hm_t));
+        rd->ec = (hm_t **)malloc((unsigned long)(nn + 1) * sizeof(hm_t *));
+        rd->eb = (hm_t **)malloc((unsigned long)(nn + 1) * sizeof(hm_t *));
     }
     free(used);
     free(kcol);
@@ -1571,8 +1618,14 @@ static int64_t sg_round(
     for (i = 0; i < nn; ++i) {
         hm_t *r = nw[i].r;
         const len_t len = r[LENGTH]+OFFSET;
+        if (rd != NULL) {
+            rd->ec[i] = sg_copy_terms(r + OFFSET, r[LENGTH]);
+        }
         for (j = OFFSET; j < len; ++j) {
             r[j] = sg_insert(sht->ev[hcm[r[j]]], bht);
+        }
+        if (rd != NULL) {
+            rd->eb[i] = sg_copy_terms(r + OFFSET, r[LENGTH]);
         }
         r[DEG] = bht->hd[r[OFFSET]].deg;
         if (r[DEG] == 0) {
@@ -1896,6 +1949,13 @@ static int sig_f4(
             sg_add_syzygy_exp(&sg, i, sg.e0);
         }
     }
+    if (rec != NULL) {
+        rec->ng = ng;
+        rec->gs = (hm_t **)malloc((unsigned long)(ng + 1) * sizeof(hm_t *));
+        for (i = 0; i < ng; ++i) {
+            rec->gs[i] = sg_copy_terms(bs->hm[gi[i]] + OFFSET, bs->hm[gi[i]][LENGTH]);
+        }
+    }
     free(gi);
 
     if (md->info_level > 1) {
@@ -2024,19 +2084,45 @@ static int sig_f4_replay(
     hm_t **ep    = (hm_t **)malloc((unsigned long)esz * sizeof(hm_t *));
     cf32_t **ecf = (cf32_t **)malloc((unsigned long)esz * sizeof(cf32_t *));
 
+    /* elements with the supports of the recorded run: their rows take the
+     * recorded columns, no monomial is hashed */
+    int8_t *gcl = (int8_t *)calloc((unsigned long)(ng + 1), sizeof(int8_t));
+    int8_t *ecl = (int8_t *)calloc((unsigned long)esz, sizeof(int8_t));
+    for (i = 0; i < ng && rec->gs != NULL; ++i) {
+        const hm_t *b = bs->hm[gi[i]];
+        gcl[i] = b[LENGTH] == rec->gs[i][0] && memcmp(b + OFFSET, rec->gs[i] + 1,
+                (unsigned long)b[LENGTH] * sizeof(hm_t)) == 0;
+    }
+
     for (r = 0; r < rec->nrd && ok; ++r) {
         const sg_rrd_t * const rd = rec->rd + r;
         const len_t nr = rd->n;
         if (nr == 0) {
             continue;
         }
+        int cached = rd->rc != NULL;
+        for (i = 0; i < nr && cached; ++i) {
+            const len_t src = rd->src[i];
+            cached = (src & SG_GEN) ? gcl[src & ~SG_GEN] : ecl[src];
+        }
+    redo: ;
         /* the rows */
         hm_t **rows           = (hm_t **)malloc((unsigned long)nr * sizeof(hm_t *));
         const cf32_t **rcf    = (const cf32_t **)malloc((unsigned long)nr * sizeof(cf32_t *));
+        len_t nc;
+        hi_t *hcm = NULL;
         for (i = 0; i < nr; ++i) {
             const len_t src   = rd->src[i];
             const hm_t *poly  = (src & SG_GEN) ? bs->hm[gi[src & ~SG_GEN]] : ep[src];
             rcf[i]            = (src & SG_GEN) ? gcf[src & ~SG_GEN] : ecf[src];
+            if (cached) {
+                const len_t len = rd->rc[i][0];
+                rows[i] = (hm_t *)malloc((unsigned long)(len + OFFSET) * sizeof(hm_t));
+                rows[i][LENGTH]  = len;
+                rows[i][PRELOOP] = len % UNROLL;
+                memcpy(rows[i] + OFFSET, rd->rc[i] + 1, (unsigned long)len * sizeof(hm_t));
+                continue;
+            }
             exp_t em[evl];
             memcpy(em, bht->ev[rd->mul[i]], (unsigned long)evl * sizeof(exp_t));
             val_t h = 0;
@@ -2045,21 +2131,25 @@ static int sig_f4_replay(
             }
             rows[i] = multiplied_poly_to_matrix_row(sht, bht, h, em, poly);
         }
-        /* the columns by decreasing monomials */
-        const len_t nc = (len_t)(sht->eld - 1);
-        hi_t *hcm = (hi_t *)malloc((unsigned long)(nc + 1) * sizeof(hi_t));
-        for (i = 0; i < nc; ++i) {
-            hcm[i] = i + 1;
-        }
-        sort_r(hcm, (unsigned long)nc, sizeof(hi_t), sg_col_cmp, sht);
-        for (i = 0; i < nc; ++i) {
-            sht->hd[hcm[i]].idx = i;
-        }
-        for (i = 0; i < nr; ++i) {
-            hm_t *row = rows[i];
-            const len_t len = row[LENGTH] + OFFSET;
-            for (j = OFFSET; j < len; ++j) {
-                row[j] = sht->hd[row[j]].idx;
+        if (cached) {
+            nc = rd->nc;
+        } else {
+            /* the columns by decreasing monomials */
+            nc  = (len_t)(sht->eld - 1);
+            hcm = (hi_t *)malloc((unsigned long)(nc + 1) * sizeof(hi_t));
+            for (i = 0; i < nc; ++i) {
+                hcm[i] = i + 1;
+            }
+            sort_r(hcm, (unsigned long)nc, sizeof(hi_t), sg_col_cmp, sht);
+            for (i = 0; i < nc; ++i) {
+                sht->hd[hcm[i]].idx = i;
+            }
+            for (i = 0; i < nr; ++i) {
+                hm_t *row = rows[i];
+                const len_t len = row[LENGTH] + OFFSET;
+                for (j = OFFSET; j < len; ++j) {
+                    row[j] = sht->hd[row[j]].idx;
+                }
             }
         }
         /* the reduction in the recorded order */
@@ -2157,8 +2247,11 @@ static int sig_f4_replay(
                 written /= 2;
             }
             /* the remainder must be nonzero with the recorded lead term */
-            if (nl == 0 || nn >= rd->nn || memcmp(sht->ev[hcm[nrow[0]]],
-                        bht->ev[rd->lm[nn]], (unsigned long)evl * sizeof(exp_t)) != 0) {
+            if (nl == 0 || nn >= rd->nn || (cached
+                        ? (rd->ec[nn][0] != nl || memcmp(rd->ec[nn] + 1, nrow,
+                                (unsigned long)nl * sizeof(hm_t)) != 0)
+                        : memcmp(sht->ev[hcm[nrow[0]]], bht->ev[rd->lm[nn]],
+                            (unsigned long)evl * sizeof(exp_t)) != 0)) {
                 ok = 0;
                 break;
             }
@@ -2183,22 +2276,40 @@ static int sig_f4_replay(
         if (ok && nn != rd->nn) {
             ok = 0;
         }
+        /* in the cached matrix any difference is due to supports, the
+         * round is done again with hashed monomials */
+        const int again = cached && !ok;
+        if (again) {
+            ok = 1;
+        }
         /* the new elements in the basis hash table */
         for (i = 0; i < nn; ++i) {
             hm_t *er = nw[i];
-            if (ok) {
+            if (ok && !again) {
                 const len_t len = er[LENGTH] + OFFSET;
-                for (j = OFFSET; j < len; ++j) {
-                    er[j] = sg_insert(sht->ev[hcm[er[j]]], bht);
+                int clean;
+                if (cached) {
+                    memcpy(er + OFFSET, rd->eb[i] + 1,
+                            (unsigned long)er[LENGTH] * sizeof(hm_t));
+                    clean = 1;
+                } else {
+                    for (j = OFFSET; j < len; ++j) {
+                        er[j] = sg_insert(sht->ev[hcm[er[j]]], bht);
+                    }
+                    clean = rd->eb != NULL && rd->eb[i][0] == er[LENGTH]
+                        && memcmp(rd->eb[i] + 1, er + OFFSET,
+                                (unsigned long)er[LENGTH] * sizeof(hm_t)) == 0;
                 }
                 er[DEG] = bht->hd[er[OFFSET]].deg;
                 if (nel >= esz) {
                     esz = 2 * esz;
                     ep  = realloc(ep, (unsigned long)esz * sizeof(hm_t *));
                     ecf = realloc(ecf, (unsigned long)esz * sizeof(cf32_t *));
+                    ecl = realloc(ecl, (unsigned long)esz * sizeof(int8_t));
                 }
                 ep[nel]  = er;
                 ecf[nel] = nwc[i];
+                ecl[nel] = (int8_t)clean;
                 nel++;
             } else {
                 free(er);
@@ -2219,8 +2330,16 @@ static int sig_f4_replay(
         free(nw);
         free(nwc);
         free(mk);
-        clean_hash_table(sht);
+        if (!cached) {
+            clean_hash_table(sht);
+        }
+        if (again) {
+            cached = 0;
+            goto redo;
+        }
     }
+    free(gcl);
+    free(ecl);
     for (i = 0; i < ng; ++i) {
         free(gcf[i]);
     }
