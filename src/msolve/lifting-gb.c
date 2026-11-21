@@ -44,6 +44,10 @@ typedef struct{
    * Warning: this is free-ed dynamically (and set to NULL) as soon as the
    * polynomial has been lifted and checked. */
   uint32_t *cf_32;
+  /* 64-bit residues, same layout as cf_32; only used when the lifting walks
+   * 61-bit application primes (modgbs->wide). When it is allocated the
+   * former cf_32 images have been migrated into it (and cf_32 freed). */
+  uint64_t *cf_64;
   /* len integer numerators of the lifted coefficients; they all share the
    * common denominator lm (hence the polynomial is lm * LM + sum cf_qq[j]*m_j
    * up to the order of the terms). */
@@ -55,6 +59,8 @@ typedef modpolys_struct modpolys_t[1];
 
 /* coefficient of index j of polynomial p modulo the k-th prime */
 #define MODCF(p, j, k) ((p)->cf_32[(size_t)(k) * (p)->len + (j)])
+/* same coefficient when the images are stored wide (64-bit primes) */
+#define MODCF64(p, j, k) ((p)->cf_64[(size_t)(k) * (p)->len + (j)])
 
 typedef struct {
   uint32_t alloc; /* alloc -> max number of primes */
@@ -64,6 +70,9 @@ typedef struct {
   mp_limb_t *cf_64; /* array of length equal to number of primes which will be used
                     to copy coefficients (hence ensuring compatibility with
                     flint) */
+  /* whether modular images are stored wide (64-bit primes): the per-poly
+   * residues then live in modpolys[i]->cf_64 instead of cf_32 */
+  int wide;
   uint32_t ld; /* number of polynomials */
   int nv; /* number of variables */
   int32_t *ldm; /* lead monomials */
@@ -232,6 +241,7 @@ static inline void gb_modpoly_init(gb_modpoly_t modgbs,
                                    md_t *st){
   modgbs->alloc = alloc;
   modgbs->nprimes = 0;
+  modgbs->wide = 0;
   modgbs->primes = (mp_limb_t *)calloc(alloc, sizeof(mp_limb_t));
   modgbs->cf_64 = (mp_limb_t *)calloc(alloc, sizeof(mp_limb_t));
   modgbs->ld = ld;
@@ -264,10 +274,12 @@ static inline void gb_modpoly_init(gb_modpoly_t modgbs,
     if(lens[i] > 0){
       modgbs->modpolys[i]->cf_32 = (uint32_t *)calloc((size_t)lens[i] * alloc,
                                                       sizeof(uint32_t));
+      modgbs->modpolys[i]->cf_64 = NULL;
       modgbs->modpolys[i]->cf_qq = (mpz_t *)malloc(sizeof(mpz_t)*lens[i]);
     }
     else{
       modgbs->modpolys[i]->cf_32 = NULL;
+      modgbs->modpolys[i]->cf_64 = NULL;
       modgbs->modpolys[i]->cf_qq = NULL;
     }
     for(uint32_t j = 0; j < lens[i]; j++){
@@ -311,19 +323,37 @@ static inline void gb_modpoly_realloc(gb_modpoly_t modgbs,
   }
   for(uint32_t i = 0; i < modgbs->ld; i++){
     const size_t len = modgbs->modpolys[i]->len;
-    if(modgbs->modpolys[i]->cf_32 == NULL || len == 0){
-      continue;
+    if(modgbs->wide){
+      /* images of already lifted polys are gone (cf_64 == NULL) */
+      if(modgbs->modpolys[i]->cf_64 == NULL || len == 0){
+        continue;
+      }
+      uint64_t *newcfs_pol = (uint64_t *)realloc(modgbs->modpolys[i]->cf_64,
+                                                 len * modgbs->alloc * sizeof(uint64_t));
+      if(newcfs_pol == NULL){
+        fprintf(ERRSTREAM, "Problem when reallocating modgbs (cfs_pol)\n");
+        exit(1);
+      }
+      /* prime-major storage: the new primes are appended at the end */
+      memset(newcfs_pol + len * oldalloc, 0,
+             len * (modgbs->alloc - oldalloc) * sizeof(uint64_t));
+      modgbs->modpolys[i]->cf_64 = newcfs_pol;
     }
-    uint32_t *newcfs_pol = (uint32_t *)realloc(modgbs->modpolys[i]->cf_32,
-                                               len * modgbs->alloc * sizeof(uint32_t));
-    if(newcfs_pol == NULL){
-      fprintf(ERRSTREAM, "Problem when reallocating modgbs (cfs_pol)\n");
-      exit(1);
+    else{
+      if(modgbs->modpolys[i]->cf_32 == NULL || len == 0){
+        continue;
+      }
+      uint32_t *newcfs_pol = (uint32_t *)realloc(modgbs->modpolys[i]->cf_32,
+                                                 len * modgbs->alloc * sizeof(uint32_t));
+      if(newcfs_pol == NULL){
+        fprintf(ERRSTREAM, "Problem when reallocating modgbs (cfs_pol)\n");
+        exit(1);
+      }
+      /* prime-major storage: the new primes are appended at the end */
+      memset(newcfs_pol + len * oldalloc, 0,
+             len * (modgbs->alloc - oldalloc) * sizeof(uint32_t));
+      modgbs->modpolys[i]->cf_32 = newcfs_pol;
     }
-    /* prime-major storage: the new primes are appended at the end */
-    memset(newcfs_pol + len * oldalloc, 0,
-           len * (modgbs->alloc - oldalloc) * sizeof(uint32_t));
-    modgbs->modpolys[i]->cf_32 = newcfs_pol;
   }
 }
 
@@ -342,20 +372,28 @@ static inline void display_gbmodpoly_cf_32(FILE *file,
   for(uint32_t i = 0; i < modgbs->ld; i++){
     uint32_t len = modgbs->modpolys[i]->len;
     fprintf(file, "[%d, ", len);
-    if(modgbs->modpolys[i]->cf_32 == NULL){
+    if((modgbs->wide ?
+        (const void *)modgbs->modpolys[i]->cf_64 :
+        (const void *)modgbs->modpolys[i]->cf_32) == NULL){
       fprintf(file, "(lifted)],\n");
       continue;
     }
     for(uint32_t j = 0; j < len; j++){
       fprintf(file, "[");
       for(uint32_t k = 0; k < modgbs->alloc-1; k++){
-        fprintf(file, "%d, ", MODCF(modgbs->modpolys[i], j, k));
+        fprintf(file, "%lu, ", (unsigned long)(modgbs->wide ?
+                    MODCF64(modgbs->modpolys[i], j, k) :
+                    (uint64_t)MODCF(modgbs->modpolys[i], j, k)));
       }
       if(j < len - 1){
-        fprintf(file, "%d], ", MODCF(modgbs->modpolys[i], j, modgbs->alloc-1));
+        fprintf(file, "%lu], ", (unsigned long)(modgbs->wide ?
+                    MODCF64(modgbs->modpolys[i], j, modgbs->alloc-1) :
+                    (uint64_t)MODCF(modgbs->modpolys[i], j, modgbs->alloc-1)));
       }
       else{
-        fprintf(file, "%d]\n", MODCF(modgbs->modpolys[i], j, modgbs->alloc-1));
+        fprintf(file, "%lu]\n", (unsigned long)(modgbs->wide ?
+                    MODCF64(modgbs->modpolys[i], j, modgbs->alloc-1) :
+                    (uint64_t)MODCF(modgbs->modpolys[i], j, modgbs->alloc-1)));
       }
     }
     fprintf(file, "],\n");
@@ -532,6 +570,10 @@ static inline void gb_modpoly_without_hash_table_clear(gb_modpoly_t modgbs){
     /* cf_32 is NULL if already free-ed after lifting */
     free(modgbs->modpolys[i]->cf_32);
     modgbs->modpolys[i]->cf_32 = NULL;
+    /* same for the wide images (only allocated when wide, cf_32 is
+     * already free-ed then) */
+    free(modgbs->modpolys[i]->cf_64);
+    modgbs->modpolys[i]->cf_64 = NULL;
     for(uint32_t j = 0; j < modgbs->modpolys[i]->len; j++){
       mpz_clear(modgbs->modpolys[i]->cf_qq[j]);
     }
@@ -654,13 +696,42 @@ static inline int32_t *array_of_lengths(int32_t *bexp_lm, len_t len,
 /* returns 0 in case of failure else returns 1 */
 static inline int modpgbs_set(gb_modpoly_t modgbs,
                               const bs_t *bs, const ht_t * const ht,
-                              const int32_t fc,
+                              const uint64_t fc,
                               int32_t start, const long elim){
   if(modgbs->nprimes >= modgbs->alloc-1){
     fprintf(ERRSTREAM, "Not enough space in modgbs\n");
     exit(1);
   }
   modgbs->primes[modgbs->nprimes] = fc;
+
+  if(fc > UINT32_MAX && !modgbs->wide){
+    /* first image at a 61-bit prime: the residues read so far (the image
+     * modulo the learning prime) are widened once, cf_32 is freed and all
+     * further images are stored (and read) wide */
+    modgbs->wide = 1;
+    for(uint32_t i = 0; i < modgbs->ld; i++){
+      if(modgbs->modpolys[i]->cf_32 == NULL){
+        /* already lifted, or no terms: nothing to migrate */
+        continue;
+      }
+      const size_t len = modgbs->modpolys[i]->len;
+      uint64_t *cfs64 = (uint64_t *)malloc(len * modgbs->alloc
+                                           * sizeof(uint64_t));
+      if(cfs64 == NULL){
+        fprintf(ERRSTREAM, "Problem when allocating modgbs (wide cfs)\n");
+        exit(1);
+      }
+      for(uint32_t j = 0; j < modgbs->alloc; j++){
+        for(size_t k = 0; k < len; k++){
+          cfs64[(size_t)j * len + k] =
+            (uint64_t)modgbs->modpolys[i]->cf_32[(size_t)j * len + k];
+        }
+      }
+      free(modgbs->modpolys[i]->cf_32);
+      modgbs->modpolys[i]->cf_32 = NULL;
+      modgbs->modpolys[i]->cf_64 = cfs64;
+    }
+  }
 
   len_t i, j, idx;
 
@@ -681,15 +752,29 @@ static inline int modpgbs_set(gb_modpoly_t modgbs,
       /* hm  = bs->hm[idx]+OFFSET; */
       len = bs->hm[idx][LENGTH];
     }
-    if(modgbs->modpolys[i]->cf_32 == NULL){
-      /* already lifted, modular data are no longer needed */
-      continue;
+    if(modgbs->wide){
+      if(modgbs->modpolys[i]->cf_64 == NULL){
+        /* already lifted, modular data are no longer needed */
+        continue;
+      }
+      int32_t bc = modgbs->modpolys[i]->len - 1;
+      const cf64_t * const cfs = bs->cf_64[bs->hm[idx][COEFFS]];
+      for (j = 1; j < len; ++j) {
+        MODCF64(modgbs->modpolys[i], bc, modgbs->nprimes) = cfs[j];
+        bc--;
+      }
     }
-    int32_t bc = modgbs->modpolys[i]->len - 1;
-    const uint32_t * const cfs = bs->cf_32[bs->hm[idx][COEFFS]];
-    for (j = 1; j < len; ++j) {
-      MODCF(modgbs->modpolys[i], bc, modgbs->nprimes) = cfs[j];
-      bc--;
+    else{
+      if(modgbs->modpolys[i]->cf_32 == NULL){
+        /* already lifted, modular data are no longer needed */
+        continue;
+      }
+      int32_t bc = modgbs->modpolys[i]->len - 1;
+      const uint32_t * const cfs = bs->cf_32[bs->hm[idx][COEFFS]];
+      for (j = 1; j < len; ++j) {
+        MODCF(modgbs->modpolys[i], bc, modgbs->nprimes) = cfs[j];
+        bc--;
+      }
    }
   }
 
@@ -861,7 +946,7 @@ static void gb_modular_trace_application(gb_modpoly_t modgbs,
                                          bs_t *bs_qq,
                                          md_t *st,
                                          int info_level,
-                                         primes_t *lp,
+                                         uint64_t fc,
                                          int32_t start,
                                          double *stf4,
                                          int *bad_primes)
@@ -881,7 +966,7 @@ static void gb_modular_trace_application(gb_modpoly_t modgbs,
   /* hl_t eld = bs_qq->ht->eld; */
   bs_t *bs = NULL;
   int32_t error = 0;
-  bs = core_gba(bs_qq, st, &error, lp->p[0]);
+  bs = core_gba(bs_qq, st, &error, fc);
   *stf4 = realtime()-rt;
   /* core_gba returns NULL (and has already free-ed its data) when the
    * prime has been detected as bad while applying the tracer */
@@ -939,7 +1024,7 @@ static void gb_modular_trace_application(gb_modpoly_t modgbs,
 
   if(!bad_primes[0] && bs != NULL){
     /* copy of data for multi-mod computation */
-    modpgbs_set(modgbs, bs, bht[0], lp->p[0], start, st->nev);
+    modpgbs_set(modgbs, bs, bht[0], fc, start, st->nev);
   }
 
   if (bs != NULL) {
@@ -957,7 +1042,9 @@ static inline void choose_coef_to_lift(gb_modpoly_t modgbs, data_lift_t dlift){
     len_t len = modgbs->modpolys[i]->len;
     len_t d = len - 1;
     while(d > 0 && len > 0){
-      if(MODCF(modgbs->modpolys[i], d, 0)){
+      if(modgbs->wide ?
+         MODCF64(modgbs->modpolys[i], d, 0) :
+         MODCF(modgbs->modpolys[i], d, 0)){
         dlift->coef[i] = d;
         break;
       }
@@ -966,12 +1053,16 @@ static inline void choose_coef_to_lift(gb_modpoly_t modgbs, data_lift_t dlift){
       }
     }
     len_t d2 = 2 * len / 3;
-    while(d2 > 0 && !MODCF(modgbs->modpolys[i], d2, 0)){
+    while(d2 > 0 && !(modgbs->wide ?
+                      MODCF64(modgbs->modpolys[i], d2, 0) :
+                      MODCF(modgbs->modpolys[i], d2, 0))){
       d2--;
     }
     dlift->coef2[i] = d2;
     len_t d3 = len / 2;
-    while(d3 > 0 && !MODCF(modgbs->modpolys[i], d3, 0)){
+    while(d3 > 0 && !(modgbs->wide ?
+                      MODCF64(modgbs->modpolys[i], d3, 0) :
+                      MODCF(modgbs->modpolys[i], d3, 0))){
       d3--;
     }
     dlift->coef3[i] = d3;
@@ -989,7 +1080,9 @@ static inline void incremental_dlift_crt(gb_modpoly_t modgbs, data_lift_t dlift,
   mpz_mul_ui(prod_p[0], mod_p[0], modgbs->primes[modgbs->nprimes - 1 ]);
   for(int32_t k = dlift->lstart; k <= dlift->lend; k++){
       if(modgbs->modpolys[k]->len){
-        uint32_t c = MODCF(modgbs->modpolys[k], coef[k], modgbs->nprimes  - 1);
+        uint64_t c = modgbs->wide ?
+          MODCF64(modgbs->modpolys[k], coef[k], modgbs->nprimes  - 1) :
+          MODCF(modgbs->modpolys[k], coef[k], modgbs->nprimes  - 1);
         mpz_CRT_ui(dlift->crt[k], dlift->crt[k], mod_p[0],
                    c, modgbs->primes[modgbs->nprimes - 1 ],
                    prod_p[0], dlift->tmp, 1);
@@ -1007,16 +1100,22 @@ static inline void incremental_dlift_crt_full(gb_modpoly_t modgbs, data_lift_t d
 
   mp_limb_t newprime = modgbs->primes[modgbs->nprimes - 1 ];
   /* all primes are assumed to be good primes */
-  mpz_mul_ui(prod_p, mod_p, (uint32_t)newprime);
+  mpz_mul_ui(prod_p, mod_p, newprime);
   for(int32_t k = dl->S; k < dl->end; k++){
       if(modgbs->modpolys[k]->len){
-        uint64_t c = MODCF(modgbs->modpolys[k], coef[k], modgbs->nprimes  - 1);
+        uint64_t c = modgbs->wide ?
+          MODCF64(modgbs->modpolys[k], coef[k], modgbs->nprimes  - 1) :
+          MODCF(modgbs->modpolys[k], coef[k], modgbs->nprimes  - 1);
         mpz_CRT_ui(dl->crt[k], dl->crt[k], mod_p,
                    c, newprime, prod_p, dl->tmp, 1);
-        c = MODCF(modgbs->modpolys[k], dl->coef2[k], modgbs->nprimes  - 1);
+        c = modgbs->wide ?
+          MODCF64(modgbs->modpolys[k], dl->coef2[k], modgbs->nprimes  - 1) :
+          MODCF(modgbs->modpolys[k], dl->coef2[k], modgbs->nprimes  - 1);
         mpz_CRT_ui(dl->crt2[k], dl->crt2[k], mod_p,
                    c, newprime, prod_p, dl->tmp, 1);
-        c = MODCF(modgbs->modpolys[k], dl->coef3[k], modgbs->nprimes  - 1);
+        c = modgbs->wide ?
+          MODCF64(modgbs->modpolys[k], dl->coef3[k], modgbs->nprimes  - 1) :
+          MODCF(modgbs->modpolys[k], dl->coef3[k], modgbs->nprimes  - 1);
         mpz_CRT_ui(dl->crt3[k], dl->crt3[k], mod_p,
                    c, newprime, prod_p, dl->tmp, 1);
       }
@@ -1115,7 +1214,9 @@ static inline int crt_ratrecon_lift_modgbs(gb_modpoly_t modgbs, data_lift_t dl,
       for(int32_t l = 0; l < polys[k]->len; l++){
         rt = realtime();
         for(uint32_t i = 0; i < modgbs->nprimes-1; i++){
-          modgbs->cf_64[i] = MODCF(polys[k], l, i);
+          modgbs->cf_64[i] = modgbs->wide ?
+            (mp_limb_t)MODCF64(polys[k], l, i) :
+            (mp_limb_t)MODCF(polys[k], l, i);
         }
         fmpz_multi_CRT_ui(y, modgbs->cf_64,
                           comb, comb_temp, 1);
@@ -1182,13 +1283,12 @@ static inline int crt_ratrecon_lift_modgbs(gb_modpoly_t modgbs, data_lift_t dl,
 
 
 /* returns (coef == num / den mod prime) */
-static inline int verif_coef(mpz_t num, mpz_t den, uint32_t prime, uint32_t coef){
-  uint32_t lc = mpz_fdiv_ui(den, prime);
-  lc = mod_p_inverse_32(lc, prime);
+static inline int verif_coef(mpz_t num, mpz_t den, uint64_t prime, uint64_t coef){
+  uint64_t lc = mpz_fdiv_ui(den, prime);
+  lc = mod_p_inverse_64((int64_t)lc, (int64_t)prime);
 
   uint64_t c = mpz_fdiv_ui(num, prime);
-  c *= lc;
-  c = c % prime;
+  c = mul_mod_64(c, lc, prime);
 
   return (c==coef);
 }
@@ -1208,11 +1308,13 @@ static inline int verif_lifted_basis(gb_modpoly_t modgbs, data_lift_t dl,
           const mp_limb_t prime = modgbs->primes[np];
           /* all coefficients share the denominator lm */
           uint64_t ilc = mpz_fdiv_ui(pol[0]->lm, prime);
-          ilc = mod_p_inverse_32(ilc, prime);
+          ilc = mod_p_inverse_64((int64_t)ilc, (int64_t)prime);
           for(int32_t c = 0; c < pol[0]->len; c++){
             uint64_t v = mpz_fdiv_ui(pol[0]->cf_qq[c], prime);
-            v = (v * ilc) % prime;
-            if(v != MODCF(pol[0], c, np)){
+            v = mul_mod_64(v, ilc, prime);
+            if(v != (modgbs->wide ?
+                     MODCF64(pol[0], c, np) :
+                     (uint64_t)MODCF(pol[0], c, np))){
               dl->check2[k] = 0;
               return 0;
             }
@@ -1222,8 +1324,14 @@ static inline int verif_lifted_basis(gb_modpoly_t modgbs, data_lift_t dl,
             dl->S = k+1;
             dl->lstart = dl->S;
             /* modular images are no longer needed */
-            free(pol[0]->cf_32);
-            pol[0]->cf_32 = NULL;
+            if(modgbs->wide){
+              free(pol[0]->cf_64);
+              pol[0]->cf_64 = NULL;
+            }
+            else{
+              free(pol[0]->cf_32);
+              pol[0]->cf_32 = NULL;
+            }
             break;
           }
         }
@@ -1248,14 +1356,20 @@ static inline int verif_lifted_rational_wcoef(gb_modpoly_t modgbs, data_lift_t d
       for(int i = 0; i < thrds; i++){
 
         mp_limb_t prime = modgbs->primes[modgbs->nprimes - (thrds - i) ];
-        uint32_t coef = MODCF(modgbs->modpolys[k], dl->coef[k], modgbs->nprimes  - (thrds - i));
+        uint64_t coef = modgbs->wide ?
+          MODCF64(modgbs->modpolys[k], dl->coef[k], modgbs->nprimes  - (thrds - i)) :
+          MODCF(modgbs->modpolys[k], dl->coef[k], modgbs->nprimes  - (thrds - i));
         int boo = verif_coef(dl->num[k], dl->den[k], prime, coef);
         if(boo){
-          coef = MODCF(modgbs->modpolys[k], dl->coef2[k], modgbs->nprimes  - (thrds - i));
+          coef = modgbs->wide ?
+            MODCF64(modgbs->modpolys[k], dl->coef2[k], modgbs->nprimes  - (thrds - i)) :
+            MODCF(modgbs->modpolys[k], dl->coef2[k], modgbs->nprimes  - (thrds - i));
           boo = verif_coef(dl->num2[k], dl->den2[k], prime, coef);
         }
         if(boo){
-          coef = MODCF(modgbs->modpolys[k], dl->coef3[k], modgbs->nprimes  - (thrds - i));
+          coef = modgbs->wide ?
+            MODCF64(modgbs->modpolys[k], dl->coef3[k], modgbs->nprimes  - (thrds - i)) :
+            MODCF(modgbs->modpolys[k], dl->coef3[k], modgbs->nprimes  - (thrds - i));
           boo = verif_coef(dl->num3[k], dl->den3[k], prime, coef);
         }
 
@@ -1492,6 +1606,27 @@ static void reset_learning_data(mstrace_t msd, md_t *st){
   free_elim_drl_data(st);
 }
 
+/* smallest prime greater than n; n is expected to be far below 2^63 so
+ * that the result fits in an unsigned long */
+static uint64_t next_prime_64(uint64_t n){
+  mpz_t p;
+  mpz_init_set_ui(p, n);
+  mpz_nextprime(p, p);
+  const uint64_t ret = mpz_get_ui(p);
+  mpz_clear(p);
+  return ret;
+}
+
+/* returns 1 if some coefficient of some input generator vanishes modulo
+ * fc; same as is_lucky_prime_ui, but for 64-bit primes */
+static int is_lucky_prime_u64(uint64_t fc, const bs_t *bs){
+  mpz_t p;
+  mpz_init_set_ui(p, fc);
+  const int ret = is_lucky_prime(p, bs);
+  mpz_clear(p);
+  return ret;
+}
+
 gb_modpoly_t *core_groebner_qq(
         gb_modpoly_t *modgbsp,
         bs_t *bs,
@@ -1524,6 +1659,9 @@ restart:
   uint32_t prime = 0;
   uint32_t primeinit = 0;
   uint32_t lprime = 1303905299;
+  /* application prime when the signature record is replayed at 61-bit
+   * primes (only used then) */
+  uint64_t prime64 = 0;
 
   prime = next_prime(rand() % (1303905301 - (1<<30) + 1) + (1<<30));
   while(fc == 0 && is_lucky_prime_ui(prime, bs)){
@@ -1643,41 +1781,78 @@ restart:
 
 
     learn = 0;
-    prime = next_prime(rand() % (1303905301 - (1<<30) + 1) + (1<<30));
+    /* the application phase replays the learned signature record at
+     * 61-bit primes when such a record exists, and walks ~31-bit primes
+     * with the classic trace otherwise (unchanged) */
+    const int wide_walk = (st->tr != NULL && st->tr->sgr != NULL);
+    if(wide_walk){
+      /* seed a random prime in [2^61, 2^62) from two rand() calls */
+      uint64_t r = ((uint64_t)rand() << 31) | (uint64_t)rand();
+      prime64 = ((uint64_t)1 << 61) + r % ((uint64_t)1 << 61);
+      prime64 = next_prime_64(prime64);
+    }
+    else{
+      prime = next_prime(rand() % (1303905301 - (1<<30) + 1) + (1<<30));
+    }
     if(info_level){
-        fprintf(VERBSTREAM, "New prime = %d\n", prime);
+        if(wide_walk){
+          printf("application phase at 61-bit primes\n");
+          fflush(stdout);
+          fprintf(VERBSTREAM, "New prime = %lu\n", (unsigned long)prime64);
+        }
+        else{
+          fprintf(VERBSTREAM, "New prime = %d\n", prime);
+        }
     }
     while(apply){
 
-      prime = next_prime(prime);
-      if(prime >= lprime){
-        prime = next_prime(1<<30);
-      }
-      /* generate lucky prime numbers */
-      msd->lp->p[0] = prime;
-      while(is_lucky_prime_ui(prime, bs) || prime==primeinit){
-        prime = next_prime(prime);
-        if(prime >= lprime){
-          prime = next_prime(1<<30);
-        }
-        msd->lp->p[0] = prime;
-      }
       int nthrds = 1; /* mono-threaded mult-mid comp */
-      for(len_t i = 1; i < nthrds/* st->nthrds */; i++){
+
+      if(wide_walk){
+        /* walk the primes in [2^61, 2^62), wrapping around at 2^62 */
+        prime64 = next_prime_64(prime64);
+        if(prime64 >= (uint64_t)1 << 62){
+          prime64 = next_prime_64((uint64_t)1 << 61);
+        }
+        /* generate lucky prime numbers; the learning prime is < 2^31 so
+         * no primeinit duplicate check is needed here */
+        while(is_lucky_prime_u64(prime64, bs)){
+          prime64 = next_prime_64(prime64);
+          if(prime64 >= (uint64_t)1 << 62){
+            prime64 = next_prime_64((uint64_t)1 << 61);
+          }
+        }
+      }
+      else{
         prime = next_prime(prime);
         if(prime >= lprime){
           prime = next_prime(1<<30);
         }
-        msd->lp->p[i] = prime;
+        /* generate lucky prime numbers */
+        msd->lp->p[0] = prime;
         while(is_lucky_prime_ui(prime, bs) || prime==primeinit){
           prime = next_prime(prime);
           if(prime >= lprime){
             prime = next_prime(1<<30);
           }
-          msd->lp->p[i] = prime;
+          msd->lp->p[0] = prime;
         }
+        for(len_t i = 1; i < nthrds/* st->nthrds */; i++){
+          prime = next_prime(prime);
+          if(prime >= lprime){
+            prime = next_prime(1<<30);
+          }
+          msd->lp->p[i] = prime;
+          while(is_lucky_prime_ui(prime, bs) || prime==primeinit){
+            prime = next_prime(prime);
+            if(prime >= lprime){
+              prime = next_prime(1<<30);
+            }
+            msd->lp->p[i] = prime;
+          }
+        }
+        prime = msd->lp->p[nthrds /* st->nthrds */ - 1];
       }
-      prime = msd->lp->p[nthrds /* st->nthrds */ - 1];
 
       if((*modgbsp)->alloc <= nprimes + 2){
         /* Room for the images modulo the next primes. The multi-modular
@@ -1697,7 +1872,7 @@ restart:
                                    msd->btrace,
                                    bs,  st,
                                    0, /* info_level, */
-                                   msd->lp,
+                                   wide_walk ? prime64 : (uint64_t)prime,
                                    dlift->S, &stf4, msd->bad_primes);
 
       /* nprimes += st->nthrds; */
