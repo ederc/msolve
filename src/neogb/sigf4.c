@@ -1194,22 +1194,35 @@ static void sg_band_reduce(
             continue;
         }
         if (pc[k] != NULL) {
-            uint64_t m[SG_BAND];
+            /* the multipliers and coefficients are below 2^31, their
+             * products are 32 x 32 -> 64 bit products */
+            uint32_t m[SG_BAND];
             for (b = 0; b < SG_BAND; ++b) {
                 const uint64_t v = x[b] % p;
-                m[b] = v == 0 ? 0 : p - v;
+                m[b] = (uint32_t)(v == 0 ? 0 : p - v);
                 x[b] = 0;
             }
             const hm_t * const pr   = pc[k] + OFFSET;
             const cf32_t * const pf = pcf[k];
             const len_t pl          = pc[k][LENGTH];
-            for (j = 1; j < pl; ++j) {
-                uint64_t * const y = bd + (unsigned long)pr[j] * SG_BAND;
-                const uint64_t f   = pf[j];
+            if (small) {
+                for (j = 1; j < pl; ++j) {
+                    uint64_t * const y = bd + (unsigned long)pr[j] * SG_BAND;
+                    const uint32_t f   = pf[j];
 #pragma omp simd
-                for (b = 0; b < SG_BAND; ++b) {
-                    const uint64_t t = y[b] + m[b] * f;
-                    y[b] = small ? t : (t >= big ? t - big : t);
+                    for (b = 0; b < SG_BAND; ++b) {
+                        y[b] += (uint64_t)m[b] * f;
+                    }
+                }
+            } else {
+                for (j = 1; j < pl; ++j) {
+                    uint64_t * const y = bd + (unsigned long)pr[j] * SG_BAND;
+                    const uint32_t f   = pf[j];
+#pragma omp simd
+                    for (b = 0; b < SG_BAND; ++b) {
+                        const uint64_t t = y[b] + (uint64_t)m[b] * f;
+                        y[b] = t - (t >= big ? big : 0);
+                    }
                 }
             }
             if (used != NULL) {
