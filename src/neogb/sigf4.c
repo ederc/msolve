@@ -1136,6 +1136,115 @@ static int sg_zero_test(
     return 1;
 }
 
+#define SG_BAND 4
+#define SG_NONE ((len_t)-1)
+
+/* Reduces the nb <= SG_BAND rows rows[g[0]], ..., rows[g[nb-1]] together, as
+ * one after the other would be reduced: each by the pivots and by the rows
+ * of the band before it. The dense rows are interleaved, bd holds the
+ * entries of a column of all of them side by side, so a pivot row is read
+ * once for the band. A pivot is subtracted from each dense row with its
+ * entry in the pivot's column; where a row of the band takes a column
+ * without pivot as its lead term, the later rows record their multiples of
+ * it, which are applied whenever their entries are read at later columns
+ * without pivot. The remainder of row b is written to (nc_[b], nv[b]). */
+static void sg_band_reduce(
+        const len_t * const g,
+        const len_t nb,
+        const sg_row_t * const rows,
+        hm_t **pc,
+        cf32_t **pcf,
+        uint64_t *bd,
+        const len_t nc,
+        const uint64_t p,
+        const uint64_t big,
+        const int small,
+        uint8_t *used,
+        hm_t **ncol,
+        cf32_t **nval,
+        len_t *nnl,
+        uint64_t *nsubs
+        )
+{
+    len_t b, a, j, k;
+    hm_t from = nc;
+    len_t lead[SG_BAND];
+    uint64_t inv[SG_BAND], rel[SG_BAND][SG_BAND], e[SG_BAND];
+    memset(rel, 0, sizeof(rel));
+    for (b = 0; b < nb; ++b) {
+        const sg_row_t * const row = rows + g[b];
+        const hm_t * const r = row->r + OFFSET;
+        const len_t len = row->r[LENGTH];
+        for (j = 0; j < len; ++j) {
+            bd[(unsigned long)r[j] * SG_BAND + b] = row->cf[j];
+        }
+        if (r[0] < from) {
+            from = r[0];
+        }
+        lead[b] = nc;
+        nnl[b]  = 0;
+    }
+    for (k = from; k < nc; ++k) {
+        uint64_t * const x = bd + (unsigned long)k * SG_BAND;
+        if ((x[0] | x[1] | x[2] | x[3]) == 0) {
+            continue;
+        }
+        if (pc[k] != NULL) {
+            uint64_t m[SG_BAND];
+            for (b = 0; b < SG_BAND; ++b) {
+                const uint64_t v = x[b] % p;
+                m[b] = v == 0 ? 0 : p - v;
+                x[b] = 0;
+            }
+            const hm_t * const pr   = pc[k] + OFFSET;
+            const cf32_t * const pf = pcf[k];
+            const len_t pl          = pc[k][LENGTH];
+            for (j = 1; j < pl; ++j) {
+                uint64_t * const y = bd + (unsigned long)pr[j] * SG_BAND;
+                const uint64_t f   = pf[j];
+#pragma omp simd
+                for (b = 0; b < SG_BAND; ++b) {
+                    const uint64_t t = y[b] + m[b] * f;
+                    y[b] = small ? t : (t >= big ? t - big : t);
+                }
+            }
+            if (used != NULL) {
+                used[k] = 1;
+            }
+            *nsubs += (uint64_t)pl * nb;
+            continue;
+        }
+        /* a column without pivot: the entries of the rows in turn */
+        len_t owner = nb;
+        for (b = 0; b < nb; ++b) {
+            uint64_t v = x[b] % p;
+            x[b] = 0;
+            for (a = 0; a < b; ++a) {
+                if (rel[b][a] != 0 && e[a] != 0) {
+                    v = (v + p - (rel[b][a] * e[a]) % p) % p;
+                }
+            }
+            if (v != 0 && owner < b) {
+                /* the row is reduced by the band row taking this column */
+                rel[b][owner] = (v * inv[owner]) % p;
+                v = 0;
+            } else if (v != 0 && lead[b] == nc) {
+                lead[b]  = k;
+                owner    = b;
+                inv[b]   = mod_p_inverse_32((int64_t)v, (int64_t)p);
+            }
+            e[b] = v;
+            if (v != 0) {
+                ncol[b][nnl[b]]   = k;
+                nval[b][nnl[b]++] = (cf32_t)v;
+            }
+        }
+        for (; b < SG_BAND; ++b) {
+            x[b] = 0;
+        }
+    }
+}
+
 /* one round: returns the number of new elements, -1 if the basis holds a
  * constant */
 static int64_t sg_round(
@@ -1363,6 +1472,16 @@ static int64_t sg_round(
     uint64_t passed = 0, written = 0;
     len_t counted   = 0;
     const int small = p < ((uint64_t)1 << 16);
+    /* rows of 64 entries and more in the mean are reduced in bands */
+    uint64_t ents = 0;
+    for (i = 0; i < nr; ++i) {
+        ents += rows[i].r[LENGTH];
+    }
+    const int band_rows = ents >= 64 * (uint64_t)nr;
+    len_t *bres_n   = NULL;
+    hm_t **bres_c   = NULL;
+    cf32_t **bres_v = NULL;
+    uint64_t *bd    = NULL;
     /* with probabilistic linear algebra, after two rows of a run reduced to
      * zero one after another, random combinations test whether the rest of
      * the run, up to the next reducer row setting a pivot, reduces to zero
@@ -1425,7 +1544,71 @@ static int64_t sg_round(
         const uint64_t subs0 = sg->nsubs;
         const int marked = counted >= 4 && passed > 2 * written;
         len_t nl = 0;
-        if (marked) {
+        int banded = 0;
+        if (bres_n != NULL && bres_n[i] != SG_NONE) {
+            /* reduced in the band of an earlier row */
+            nl = bres_n[i];
+            memcpy(nrow + OFFSET, bres_c[i], (unsigned long)nl * sizeof(hm_t));
+            memcpy(ncf, bres_v[i], (unsigned long)nl * sizeof(cf32_t));
+            free(bres_c[i]);
+            free(bres_v[i]);
+            bres_c[i] = NULL;
+            bres_v[i] = NULL;
+            bres_n[i] = SG_NONE;
+            banded = 1;
+        } else if (band_rows) {
+            /* the band: this row and the next ones to be reduced, up to a
+             * row setting a pivot or a row which may be dropped */
+            len_t g[SG_BAND], nb = 1, l;
+            g[0] = i;
+            for (l = i + 1; l < nr && nb < SG_BAND; ++l) {
+                const sg_row_t * const x = rows + l;
+                if (x->r == NULL) {
+                    continue;
+                }
+                const hm_t xc = x->r[OFFSET];
+                if (pc[xc] == NULL && (x->reducer || !x->gen)) {
+                    break;
+                }
+                if (x->ix == rows[l-1].ix && x->sm == rows[l-1].sm) {
+                    continue;
+                }
+                g[nb++] = l;
+            }
+            if (nb > 1) {
+                if (bres_n == NULL) {
+                    bres_n = (len_t *)malloc((unsigned long)nr * sizeof(len_t));
+                    bres_c = (hm_t **)calloc((unsigned long)nr, sizeof(hm_t *));
+                    bres_v = (cf32_t **)calloc((unsigned long)nr, sizeof(cf32_t *));
+                    for (l = 0; l < nr; ++l) {
+                        bres_n[l] = SG_NONE;
+                    }
+                    bd = (uint64_t *)calloc((unsigned long)(nc + 1) * SG_BAND, sizeof(uint64_t));
+                }
+                hm_t *bc[SG_BAND];
+                cf32_t *bv[SG_BAND];
+                len_t bn[SG_BAND];
+                for (l = 0; l < nb; ++l) {
+                    bc[l] = (hm_t *)malloc((unsigned long)(nc + 1) * sizeof(hm_t));
+                    bv[l] = (cf32_t *)malloc((unsigned long)(nc + 1) * sizeof(cf32_t));
+                }
+                sg_band_reduce(g, nb, rows, pc, pcf, bd, nc, p, big, small,
+                        used, bc, bv, bn, &sg->nsubs);
+                nl = bn[0];
+                memcpy(nrow + OFFSET, bc[0], (unsigned long)nl * sizeof(hm_t));
+                memcpy(ncf, bv[0], (unsigned long)nl * sizeof(cf32_t));
+                free(bc[0]);
+                free(bv[0]);
+                for (l = 1; l < nb; ++l) {
+                    bres_n[g[l]] = bn[l];
+                    bres_c[g[l]] = bc[l];
+                    bres_v[g[l]] = bv[l];
+                }
+                banded = 1;
+            }
+        }
+        if (banded) {
+        } else if (marked) {
             if (mk == NULL) {
                 mk = (uint64_t *)calloc((unsigned long)nmw, sizeof(uint64_t));
             }
@@ -1656,6 +1839,16 @@ static int64_t sg_round(
     free(rows);
     free(mk);
     free(grp);
+    if (bres_n != NULL) {
+        for (i = 0; i < nr; ++i) {
+            free(bres_c[i]);
+            free(bres_v[i]);
+        }
+        free(bres_n);
+        free(bres_c);
+        free(bres_v);
+        free(bd);
+    }
     free(pc);
     free(pcf);
     free(dr);
