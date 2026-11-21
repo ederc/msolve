@@ -435,8 +435,11 @@ static void insert_and_update_spairs(
             cnt   = realloc(cnt, (uint64_t)ccap * sizeof(len_t));
         }
         memset(cnt, 0, (uint64_t)(dmax + 2) * sizeof(len_t));
+        /* pairs with coprime lead terms are removed by the product
+         * criterion, their lcms divide no other lcm of the new pairs of
+         * non-redundant elements, so they are not bucketed */
         for (i = 0; i < n; ++i) {
-            if (p[i].deg != -1) {
+            if (p[i].deg >= 0) {
                 cnt[kt[i]+1]++;
             }
         }
@@ -444,7 +447,7 @@ static void insert_and_update_spairs(
             cnt[d+1] += cnt[d];
         }
         for (i = 0; i < n; ++i) {
-            if (p[i].deg != -1) {
+            if (p[i].deg >= 0) {
                 srt[cnt[kt[i]]++] = i;
             }
         }
