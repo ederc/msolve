@@ -1956,7 +1956,7 @@ static int sig_f4_applicable(
         const md_t * const md
         )
 {
-    return md->sig_f4 != 0
+    return (md->sig_f4 > 0 || (md->sig_f4 < 0 && md->trace_level == NO_TRACER))
         && md->trace_level != APPLY_TRACER
         && md->fc > 2 && md->fc < ((uint64_t)1 << 31)
         && !is_gf2_ext(md->fc)

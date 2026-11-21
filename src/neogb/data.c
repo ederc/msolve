@@ -21,7 +21,10 @@
 
 #include "data.h"
 
-int32_t neogb_sig_f4 = 0;
+/* -1: the signature-based F4 is used for Groebner bases over prime fields
+ * computed without a trace, 0: not used, 1: also for learning traces,
+ * 2: as 1 without handing over to F4 (for testing) */
+int32_t neogb_sig_f4 = -1;
 
 /* functions */
 /* bs_t *initialize_basis(

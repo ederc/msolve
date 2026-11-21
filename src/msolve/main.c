@@ -246,12 +246,13 @@ static inline void display_help(char *str){
   display_option_help('q', "", "Q", "Uses signature-based algorithms.\n");
   display_option_help_noopt("0 - no (default).\n");
   display_option_help_noopt("1 - yes.\n");
-  display_option_help(0, "signature-f4", "SIG", "Computes Groebner bases over prime fields below\n");
-  display_option_help_noopt("2^31 in DRL by a signature-based F4 first, which\n");
+  display_option_help(0, "signature-f4", "SIG", "Computes Groebner bases in DRL over prime fields\n");
+  display_option_help_noopt("below 2^31 by a signature-based F4 first, which\n");
   display_option_help_noopt("hands over to F4 where it does not pay off.\n");
-  display_option_help_noopt("0 - no (default).\n");
-  display_option_help_noopt("1 - yes.\n");
-  display_option_help_noopt("2 - yes, without handing over (for testing).\n");
+  display_option_help_noopt("-1 - where no trace is learned (default).\n");
+  display_option_help_noopt("0  - no.\n");
+  display_option_help_noopt("1  - yes, also learning traces over the rationals.\n");
+  display_option_help_noopt("2  - as 1, without handing over (for testing).\n");
   display_option_help(0, "random-seed", "SEED", "Random seed to initialize the pseudo-random\n");
   display_option_help_noopt("generator.\n");
   display_option_help_noopt("-1       - time(0) will be used (default).\n");
@@ -573,8 +574,8 @@ static void getoptions(
       break;
     case SIGNATURE_F4_OPTION:
       neogb_sig_f4 = strtol(optarg, NULL, 10);
-      if (neogb_sig_f4 < 0 || neogb_sig_f4 > 2) {
-          neogb_sig_f4 = 0;
+      if (neogb_sig_f4 < -1 || neogb_sig_f4 > 2) {
+          neogb_sig_f4 = -1;
       }
       break;
     /* Below is the template for the next long option with
