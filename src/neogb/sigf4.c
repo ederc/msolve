@@ -213,7 +213,9 @@ struct sg_row_t
     hm_t sm;
     hm_t sc;
     int8_t reducer;     /* 1 for rows from symbolic preprocessing */
-    int8_t gen;         /* 1 for the input generator at its signature e_i */
+    int8_t gen;         /* 1 for a given row, a reductant of the round */
+    len_t id;           /* build order: the given rows first, then the
+                         * rows of the symbolic preprocessing */
     len_t src;          /* the element multiplied, SG_GEN | i for the input
                          * generator i */
     hm_t mul;           /* the multiplier in the basis hash table where the
@@ -609,7 +611,10 @@ static void sg_add_pending(
     }
     sg_sig_t *s = sg->ps + sg->pld;
     s->ix  = ix;
-    s->deg = sc[0];
+    /* the degree of the signature itself: the rounds take the pending
+     * signatures of least degree (eder-2013a §3 -- no polynomial degree
+     * preselection, the sugar degree of the signature) */
+    s->deg = sm[0];
     /* sm and sc may point into the hash table, the insertions may
      * move it */
     memcpy(sg->e2, sm, (unsigned long)sg->bht->evl * sizeof(exp_t));
@@ -836,10 +841,10 @@ static void sg_new_pairs(
     ht_t *ht        = sg->bht;
     const len_t evl = ht->evl;
     const len_t nw  = sg->nw;
-    uint64_t sm[nw], bsm[nw];
+    uint64_t sm[nw];
     exp_t esm[evl], sc[evl];
-    len_t ix, bix;
-    int coprime, bcp;
+    len_t ix;
+    int coprime;
 
     if (n >= sg->trisz) {
         const len_t osz = sg->trisz;
@@ -849,13 +854,14 @@ static void sg_new_pairs(
     }
     sg->tri[n] = (uint64_t *)calloc((unsigned long)(n / 64 + 1), sizeof(uint64_t));
 
-    /* base divisor by signature */
+    /* base divisor by signature: of largest tau among the earlier
+     * elements of the same index whose signature divides the one of n
+     * (roune-2012 §3.5) */
     len_t bd = n;
     {
         const sg_el_t * const g = sg->e + n;
         const exp_t * const smg = ht->ev[g->sm];
         const sdm_t ns = ~ht->hd[g->sm].sdm;
-        exp_t best[evl], lt[evl];
         for (k = 0; k < sg->ixld[g->ix]; ++k) {
             const len_t c = sg->ixe[g->ix][k];
             if (c >= n) {
@@ -865,32 +871,75 @@ static void sg_new_pairs(
             if (ht->hd[e->sm].sdm & ns) {
                 continue;
             }
-            const exp_t * const es = ht->ev[e->sm];
-            if (!sg_divides_exp(es, smg, evl)) {
+            if (!sg_divides_exp(ht->ev[e->sm], smg, evl)) {
                 continue;
             }
-            const exp_t * const el = ht->ev[e->p[OFFSET]];
-            for (j = 0; j < evl; ++j) {
-                lt[j] = smg[j] - es[j] + el[j];
-            }
-            if (bd == n || sg_cmp_exp(lt, best, evl) < 0) {
+            if (bd == n || e->tau > sg->e[bd].tau) {
                 bd = c;
-                memcpy(best, lt, (unsigned long)evl * sizeof(exp_t));
             }
+        }
+    }
+    /* base divisor by leading monomial: of largest tau among the earlier
+     * elements, of any index, whose leading monomial divides the one of
+     * n (roune-2012 §3.5, Theorem 7) */
+    len_t high = n;
+    {
+        const exp_t * const eln = ht->ev[sg->e[n].p[OFFSET]];
+        const sdm_t nl = ~ht->hd[sg->e[n].p[OFFSET]].sdm;
+        for (k = 0; k < n; ++k) {
+            const sg_el_t * const e = sg->e + k;
+            if (ht->hd[e->p[OFFSET]].sdm & nl) {
+                continue;
+            }
+            if (!sg_divides_exp(ht->ev[e->p[OFFSET]], eln, evl)) {
+                continue;
+            }
+            if (high == n || e->tau > sg->e[high].tau) {
+                high = k;
+            }
+        }
+    }
+    /* x^v of roune-2012 Theorem 8: lm(bd)*sig(n)/sig(bd), infinite where
+     * the lead of n does not exceed it */
+    exp_t v[evl];
+    if (bd != n) {
+        const exp_t * const elb = ht->ev[sg->e[bd].p[OFFSET]];
+        const exp_t * const esb = ht->ev[sg->e[bd].sm];
+        const exp_t * const eln = ht->ev[sg->e[n].p[OFFSET]];
+        const exp_t * const esn = ht->ev[sg->e[n].sm];
+        for (j = 0; j < evl; ++j) {
+            const exp_t pj = elb[j] + esn[j] - esb[j];
+            v[j] = eln[j] <= pj ? EXP_MAX : pj;
         }
     }
 
     for (i = 0; i < n; ++i) {
         sg->cnt_pairs++;
-        if (!sg_pair_signature(sg, n, i, &ix, sm, &coprime)) {
-            sg->cnt_singular++;
-            continue;
-        }
-        if (bd != n && i != bd && sg_tri_get(sg, bd, i)
-                && sg_pair_signature(sg, bd, i, &bix, bsm, &bcp)
-                && bix == ix && sg_divides_packed(bsm, sm, nw)) {
+        /* the base divisors: the S-pair of the base divisor and i is
+         * known to have a syzygy signature dividing the one of the S-pair
+         * of n and i (roune-2012 §3.5, Theorems 7 and 8) */
+        if (high != n && i != high && sg->e[i].tau > sg->e[high].tau
+                && sg->e[i].tau > sg->e[n].tau && sg_tri_get(sg, high, i)) {
             sg->cnt_base++;
             sg_tri_set(sg, n, i);
+            continue;
+        }
+        if (bd != n && i != bd && sg->e[i].tau < sg->e[bd].tau
+                && sg->e[i].tau < sg->e[n].tau && sg_tri_get(sg, bd, i)) {
+            const exp_t * const elg = ht->ev[sg->e[i].p[OFFSET]];
+            for (j = 0; j < evl; ++j) {
+                if (elg[j] > v[j]) {
+                    break;
+                }
+            }
+            if (j == evl) {
+                sg->cnt_base++;
+                sg_tri_set(sg, n, i);
+                continue;
+            }
+        }
+        if (!sg_pair_signature(sg, n, i, &ix, sm, &coprime)) {
+            sg->cnt_singular++;
             continue;
         }
         if (sg_is_syzygy(sg, ix, sm)) {
@@ -926,7 +975,7 @@ static int sg_pending_cmp(
 {
     const sg_sig_t *sa = (const sg_sig_t *)a;
     const sg_sig_t *sb = (const sg_sig_t *)b;
-    return sg_cmp_sig(sa->ix, sa->sc, sb->ix, sb->sc, (const ht_t *)htp);
+    return sg_cmp_sig(sa->ix, sa->sm, sb->ix, sb->sm, (const ht_t *)htp);
 }
 
 typedef struct sg_ctx_t sg_ctx_t;
@@ -946,14 +995,18 @@ static int sg_row_cmp(
 {
     const sg_row_t *ra = (const sg_row_t *)a;
     const sg_row_t *rb = (const sg_row_t *)b;
-    const int c = sg_cmp_sig(ra->ix, ra->sc, rb->ix, rb->sc,
+    const int c = sg_cmp_sig(ra->ix, ra->sm, rb->ix, rb->sm,
             ((sg_ctx_t *)ctxp)->ht);
     if (c != 0) {
         return c;
     }
-    const hm_t la = ra->r[OFFSET];
-    const hm_t lb = rb->r[OFFSET];
-    return la == lb ? 0 : (la > lb ? -1 : 1);
+    /* rows of equal signature keep their build order: a given row comes
+     * before every reducer row of its signature (eder-2017 §6.2, Lemma
+     * (singular criterion): exactly one row of a signature is handled) */
+    if (ra->id != rb->id) {
+        return ra->id < rb->id ? -1 : 1;
+    }
+    return 0;
 }
 
 /* reducer order: increasing sig-lead ratio, then fewer terms, then
@@ -1276,6 +1329,7 @@ static int64_t sg_round(
     const uint64_t p = sg->fc;
 
     const double t0 = realtime();
+    const uint64_t nly0 = sg->nearly;
     /* select the pending signatures of least degree */
     deg_t d = sg->ps[0].deg;
     for (i = 1; i < sg->pld; ++i) {
@@ -1348,30 +1402,30 @@ static int64_t sg_round(
                 memcpy(best, lt, (unsigned long)evl * sizeof(exp_t));
             }
         }
-        if (rw == NULL) {
-            if (m[0] != 0) {
-                continue;
-            }
-            rw = sg->g + ix;
-        } else if (rw->sm == sel[i].sm) {
-            /* an element with this signature exists already */
-            continue;
-        }
-        if (rw != sg->g + ix) {
-            /* the row a*rw keeps its lead term L = a*lm(rw) unless an
-             * element of smaller sig-lead ratio than rw divides L: only its
-             * multiple reaching L has a smaller signature. The first such
-             * divisor in the reducer order has the least ratio. */
+        /* lairez-2022 §5.7, Algorithm 8, line 94: the reductant of the
+         * signature joins the given rows only if its lead term
+         * L = a*lm(rw) is reducible by an element of smaller sig-lead
+         * ratio than rw -- only its multiple reaching L has a smaller
+         * signature. The first divisor in the reducer order has the
+         * least sig-lead ratio among the elements. The multiple joins
+         * the given rows only if the least sig-lead ratio of a divisor
+         * of L is strictly smaller than the rewriter's. Otherwise a
+         * multiple of smaller signature top-reduces it, the signature
+         * is consumed without a row. */
+        {
             const sdm_t nl = ~generate_short_divmask(best, bht);
+            const sg_el_t *d = NULL;
             for (k = 0; k < sg->ld; ++k) {
                 if ((rsdm[k] & nl) || rdeg[k] > best[0]) {
                     continue;
                 }
                 if (sg_divides_exp(bht->ev[sg->e[ro[k]].p[OFFSET]], best, evl)) {
+                    d = sg->e + ro[k];
                     break;
                 }
             }
-            if (k == sg->ld || sg->e[ro[k]].tau >= rw->tau) {
+            /* d exists always: the lead of the rewriter divides L */
+            if (sg_cmp_ratio(d, rw, sg) >= 0) {
                 sg->nearly++;
                 continue;
             }
@@ -1381,14 +1435,20 @@ static int64_t sg_round(
         for (j = 0; j < evl; ++j) {
             q[j] = m[j] - es[j];
         }
-        rows[nr] = sg_multiple(sg, rw, q, 0, rw == sg->g + ix
-                ? (SG_GEN | ix) : (len_t)(rw - sg->e));
-        rows[nr].gen = rw == sg->g + ix;
-        mix = rows[nr].ix;
-        msc = rows[nr].sc;
+        rows[nr] = sg_multiple(sg, rw, q, 0, (len_t)(rw - sg->e));
+        rows[nr].gen = 1;
+        rows[nr].id  = nr;
+        /* the largest signature of the rows to be reduced, in the
+         * Schreyer order of the signatures */
+        if (nr == 0 || sg_cmp_sig(rows[nr].ix, rows[nr].sm, mix, msc, bht) > 0) {
+            mix = rows[nr].ix;
+            msc = rows[nr].sm;
+        }
         nr++;
     }
     free(sel);
+    const len_t nsr = nr; /* S-rows built from the selected signatures */
+    const len_t smon = (len_t)(sht->eld - 1); /* monomials of the S-rows */
     if (nr == 0) {
         free(rows);
         free(ro);
@@ -1421,12 +1481,14 @@ static int64_t sg_round(
                 continue;
             }
             /* the reducer is only of use if its signature is less than
-             * the largest one of a row to be reduced */
+             * the largest signature of a row to be reduced (eder-2017
+             * §7.2, Algorithm RB: the reduction stays below the largest
+             * signature of the round) */
             exp_t q[evl], s[evl];
-            const exp_t * const esc = bht->ev[e->sc];
+            const exp_t * const esm = bht->ev[e->sm];
             for (j = 0; j < evl; ++j) {
                 q[j] = em[j] - el[j];
-                s[j] = q[j] + esc[j];
+                s[j] = q[j] + esm[j];
             }
             int c = sg_cmp_exp(s, bht->ev[msc], evl);
             if (c == 0) {
@@ -1439,7 +1501,9 @@ static int64_t sg_round(
                 rsz  = 2 * rsz;
                 rows = realloc(rows, (unsigned long)rsz * sizeof(sg_row_t));
             }
-            rows[nr++] = sg_multiple(sg, e, q, 1, ro[k]);
+            rows[nr] = sg_multiple(sg, e, q, 1, ro[k]);
+            rows[nr].id = nr;
+            nr++;
             break;
         }
     }
@@ -1563,22 +1627,19 @@ static int64_t sg_round(
             pc[lc]  = r;
             pcf[lc] = (cf32_t *)row->cf;
             if (rd != NULL) {
-                sg_rec_add(rd, row->src, row->mul, 0, r);
+                /* the record keeps the pre-run element numbering: the
+                 * input generators flagged, computed elements counted
+                 * from zero */
+                sg_rec_add(rd, row->src < sg->ng ?
+                        SG_GEN | row->src : row->src - sg->ng,
+                        row->mul, 0, r);
                 kcol[rd->n-1] = lc;
             }
             continue;
         }
-        if (i > 0 && row->ix == rows[i-1].ix && row->sm == rows[i-1].sm) {
+        if (row->reducer && i > 0 && row->ix == rows[i-1].ix
+                && row->sm == rows[i-1].sm) {
             /* a row of the same signature comes before */
-            free(r);
-            row->r = NULL;
-            continue;
-        }
-        if (!row->reducer && !row->gen && pc[lc] == NULL) {
-            /* the row a*g at the signature s is not regular top-reducible,
-             * so its reduction keeps the lead term a*lm(g) and the
-             * signature s = a*sig(g): it is singular top-reducible by g
-             * and not needed */
             free(r);
             row->r = NULL;
             continue;
@@ -1610,7 +1671,7 @@ static int64_t sg_round(
                     continue;
                 }
                 const hm_t xc = x->r[OFFSET];
-                if (pc[xc] == NULL && (x->reducer || !x->gen)) {
+                if (pc[xc] == NULL && x->reducer) {
                     break;
                 }
                 if (x->ix == rows[l-1].ix && x->sm == rows[l-1].sm) {
@@ -1745,8 +1806,9 @@ static int64_t sg_round(
                     if (x->ix == rows[l-1].ix && x->sm == rows[l-1].sm) {
                         continue;
                     }
-                    if (!x->reducer && !x->gen && pc[xc] == NULL) {
-                        /* dropped as singular anyway */
+                    if (!x->reducer && pc[xc] == NULL) {
+                        /* a given row of a free lead column keeps its lead
+                         * term, it cannot reduce to zero */
                         continue;
                     }
                     grp[ng++] = l;
@@ -1808,7 +1870,10 @@ static int64_t sg_round(
         nw[nn].cf = ecf;
         nn++;
         if (rd != NULL) {
-            sg_rec_add(rd, row->src, row->mul, 1, r);
+            /* see the encoding comment above */
+            sg_rec_add(rd, row->src < sg->ng ?
+                    SG_GEN | row->src : row->src - sg->ng,
+                    row->mul, 1, r);
             kcol[rd->n-1] = nc;
         }
         free(r);
@@ -1902,8 +1967,10 @@ static int64_t sg_round(
     clean_hash_table(sht);
 
     if (md->info_level > 1) {
-        fprintf(VERBSTREAM, " %7u new %7u zero %10.2f sec\n",
-                (unsigned)nn, (unsigned)sg->nzero, realtime()-t0);
+        fprintf(VERBSTREAM, " %7u new %7u zero %10.2f sec %lu subs | %u srows %u reds %lu nearly %u smon\n",
+                (unsigned)nn, (unsigned)sg->nzero, realtime()-t0,
+                (unsigned long)sg->nsubs, (unsigned)nsr, (unsigned)(nr-nsr),
+                (unsigned long)(sg->nearly-nly0), (unsigned)smon);
         fflush(VERBSTREAM);
     }
     return constant ? -1 : (int64_t)nn;
@@ -1958,7 +2025,11 @@ static void sg_free(
 {
     len_t i;
     for (i = 0; i < sg->ld; ++i) {
-        free(sg->e[i].p);
+        /* the input generators keep their polynomials in bs, only their
+         * coefficients were copied for the elements */
+        if (i >= sg->ng) {
+            free(sg->e[i].p);
+        }
         free(sg->e[i].cf);
     }
     free(sg->e);
@@ -2043,8 +2114,6 @@ static void sg_load_basis(
                 bs->cf_32[ci] = NULL;
                 break;
         }
-        free(bs->hm[i]);
-        bs->hm[i] = NULL;
     }
     bs->ld = 0;
     check_enlarge_basis(bs, n, md);
@@ -2126,7 +2195,7 @@ static int sig_f4(
         sg_rec_t *rec
         )
 {
-    len_t i, j;
+    len_t i, j, k;
     double rt = realtime();
     ht_t *bht = bs->ht;
     sg_t sg;
@@ -2162,7 +2231,7 @@ static int sig_f4(
     sg.ps   = (sg_sig_t *)malloc((unsigned long)sg.psz * sizeof(sg_sig_t));
     exp_t one[evl];
     memset(one, 0, (unsigned long)evl * sizeof(exp_t));
-    const hm_t h1 = sg_insert(one, bht);
+    sg_insert(one, bht);
     for (i = 0; i < ng; ++i) {
         const hm_t *b   = bs->hm[gi[i]];
         const len_t len = b[LENGTH];
@@ -2185,19 +2254,32 @@ static int sig_f4(
             sg.wide = 1;
         }
         sg.g[i].p  = (hm_t *)b;
-        sg.g[i].cf = cf;
         sg.g[i].ix = i;
-        sg.g[i].sm = h1;
+        sg.g[i].sm = b[OFFSET];
         sg.g[i].sc = b[OFFSET];
-        sg_add_pending(&sg, i, one, bht->ev[b[OFFSET]]);
+        /* the inputs enter with their lead terms as signatures (eder-2017
+         * §7.2, Algorithm RB): the sig-lead ratio of a generator is 1, so
+         * the signature slot sc holds the lead term */
+        sg_add_element(&sg, (hm_t *)b, cf, i, b[OFFSET], b[OFFSET]);
     }
-    /* Koszul syzygies of the input generators: lm(f_j) e_i for j < i */
+    /* the Koszul syzygies of the inputs: lm(f_i)*lm(f_j) e_i for j < i
+     * (eder-2017 §7.2, Algorithm RB, line 3) */
     for (i = 1; i < ng; ++i) {
         for (j = 0; j < i; ++j) {
-            memcpy(sg.e0, bht->ev[sg.g[j].p[OFFSET]],
-                    (unsigned long)evl * sizeof(exp_t));
+            const exp_t * const ei = bht->ev[sg.g[i].p[OFFSET]];
+            const exp_t * const ej = bht->ev[sg.g[j].p[OFFSET]];
+            for (k = 0; k < evl; ++k) {
+                sg.e0[k] = ei[k] + ej[k];
+            }
+            if ((uint64_t)ei[0] + ej[0] > EXP_MAX) {
+                continue;
+            }
             sg_add_syzygy_exp(&sg, i, sg.e0);
         }
+    }
+    /* the S-pairs among the input generators */
+    for (i = 0; i < ng; ++i) {
+        sg_new_pairs(&sg, i);
     }
     if (rec != NULL) {
         rec->ng = ng;
@@ -2441,7 +2523,7 @@ static int name(                                                        \
     len_t *gi  = sg_generator_order(bs, ng);                            \
     cf_t **gcf = INPUT_COEFFS(bs, gi, ng, md);                          \
                                                                         \
-    len_t nel = 0, esz = 64;                                            \
+    len_t nel, esz = 64;                                                \
     hm_t **ep  = (hm_t **)malloc((unsigned long)esz * sizeof(hm_t *));  \
     cf_t **ecf = (cf_t **)malloc((unsigned long)esz * sizeof(cf_t *));  \
                                                                         \
@@ -2454,6 +2536,20 @@ static int name(                                                        \
         gcl[i] = b[LENGTH] == rec->gs[i][0] && memcmp(b + OFFSET, rec->gs[i] + 1, \
                 (unsigned long)b[LENGTH] * sizeof(hm_t)) == 0;          \
     }                                                                   \
+    /* the generators open the replayed basis as they open the basis of \
+     * the recorded run; their polynomials stay in bs, their freshly \
+     * extracted coefficients are taken over by the basis loader */     \
+    while (ng >= esz) {                                                 \
+        esz = 2 * esz;                                                  \
+    }                                                                   \
+    ep  = (hm_t **)realloc(ep, (unsigned long)esz * sizeof(hm_t *));    \
+    ecf = (cf_t **)realloc(ecf, (unsigned long)esz * sizeof(cf_t *));   \
+    ecl = (int8_t *)realloc(ecl, (unsigned long)esz * sizeof(int8_t));  \
+    for (i = 0; i < ng; ++i) {                                          \
+        ep[i]  = (hm_t *)bs->hm[gi[i]];                                 \
+        ecf[i] = gcf[i];                                                \
+    }                                                                   \
+    nel = ng;                                                           \
                                                                         \
     for (r = 0; r < rec->nrd && ok; ++r) {                              \
         const sg_rrd_t * const rd = rec->rd + r;                        \
@@ -2464,7 +2560,7 @@ static int name(                                                        \
         int cached = rd->rc != NULL;                                    \
         for (i = 0; i < nr && cached; ++i) {                            \
             const len_t src = rd->src[i];                               \
-            cached = (src & SG_GEN) ? gcl[src & ~SG_GEN] : ecl[src];    \
+            cached = (src & SG_GEN) ? gcl[src & ~SG_GEN] : ecl[src + ng];    \
         }                                                               \
     redo: ;                                                             \
         /* the rows */                                                  \
@@ -2474,8 +2570,8 @@ static int name(                                                        \
         hi_t *hcm = NULL;                                               \
         for (i = 0; i < nr; ++i) {                                      \
             const len_t src   = rd->src[i];                             \
-            const hm_t *poly  = (src & SG_GEN) ? bs->hm[gi[src & ~SG_GEN]] : ep[src]; \
-            rcf[i]            = (src & SG_GEN) ? gcf[src & ~SG_GEN] : ecf[src]; \
+            const hm_t *poly  = (src & SG_GEN) ? bs->hm[gi[src & ~SG_GEN]] : ep[src + ng]; \
+            rcf[i]            = (src & SG_GEN) ? gcf[src & ~SG_GEN] : ecf[src + ng]; \
             if (cached) {                                               \
                 const len_t len = rd->rc[i][0];                         \
                 rows[i] = (hm_t *)malloc((unsigned long)(len + OFFSET) * sizeof(hm_t)); \
@@ -2708,16 +2804,18 @@ static int name(                                                        \
     }                                                                   \
     free(gcl);                                                          \
     free(ecl);                                                          \
-    for (i = 0; i < ng; ++i) {                                          \
-        free(gcf[i]);                                                   \
-    }                                                                   \
+    /* the generator coefficients are owned by ecf[0..ng) now: taken    \
+     * over or copied by the basis loader on success, freed in the      \
+     * failure branch below */                                          \
     free(gcf);                                                          \
     free(gi);                                                           \
     if (ok) {                                                           \
         sg_load_basis(bs, md, ep, (void **)ecf, nel, ng);               \
     } else {                                                            \
-        for (i = 0; i < nel; ++i) {                                     \
+        for (i = ng; i < nel; ++i) {                                    \
             free(ep[i]);                                                \
+        }                                                               \
+        for (i = 0; i < nel; ++i) {                                     \
             free(ecf[i]);                                               \
         }                                                               \
     }                                                                   \
