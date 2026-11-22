@@ -1025,9 +1025,6 @@ static int sg_reducer_cmp(
     if (ea->tau != eb->tau) {
         return ea->tau < eb->tau ? -1 : 1;
     }
-    if (ea->p[LENGTH] != eb->p[LENGTH]) {
-        return ea->p[LENGTH] < eb->p[LENGTH] ? -1 : 1;
-    }
     return ia < ib ? -1 : (ia > ib ? 1 : 0);
 }
 
@@ -1397,7 +1394,9 @@ static int64_t sg_round(
             for (j = 0; j < evl; ++j) {
                 lt[j] = m[j] - es[j] + el[j];
             }
-            if (rw == NULL || sg_cmp_exp(lt, best, evl) < 0) {
+            const int cl = rw == NULL ? -1 : sg_cmp_exp(lt, best, evl);
+            if (rw == NULL || cl < 0
+                    || (cl == 0 && sg_cmp_exp(es, bht->ev[rw->sm], evl) > 0)) {
                 rw = e;
                 memcpy(best, lt, (unsigned long)evl * sizeof(exp_t));
             }
