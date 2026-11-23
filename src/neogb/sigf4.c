@@ -1211,38 +1211,62 @@ static void sg_band_reduce(
             /* the multipliers and coefficients are below 2^31, their
              * products are 32 x 32 -> 64 bit products */
             uint32_t m[SG_BAND];
+            len_t nz = 0, one = 0;
             for (b = 0; b < SG_BAND; ++b) {
                 const uint64_t v = x[b] % p;
                 m[b] = (uint32_t)(v == 0 ? 0 : p - v);
                 x[b] = 0;
+                if (v != 0) {
+                    ++nz;
+                    one = b;
+                }
             }
             const hm_t * const pr   = pc[k] + OFFSET;
             const cf32_t * const pf = pcf[k];
             const len_t pl          = pc[k][LENGTH];
-            if (small) {
-                for (j = 1; j < pl; ++j) {
-                    uint64_t * const y = bd + (unsigned long)pr[j] * SG_BAND;
-                    const uint32_t f   = pf[j];
-#pragma omp simd
-                    for (b = 0; b < SG_BAND; ++b) {
-                        y[b] += (uint64_t)m[b] * f;
+            /* boyer-2016 §4.2: where only one row of the band holds an
+             * entry, a specialized operation reduces that row alone, and
+             * the row operations run only on the nonzero multipliers */
+            if (nz == 1) {
+                if (small) {
+                    for (j = 1; j < pl; ++j) {
+                        bd[(unsigned long)pr[j] * SG_BAND + one] +=
+                            (uint64_t)m[one] * pf[j];
+                    }
+                } else {
+                    for (j = 1; j < pl; ++j) {
+                        uint64_t * const y = bd + (unsigned long)pr[j] * SG_BAND + one;
+                        const uint64_t t = *y + (uint64_t)m[one] * pf[j];
+                        *y = t - (t >= big ? big : 0);
                     }
                 }
+                *nsubs += pl;
             } else {
-                for (j = 1; j < pl; ++j) {
-                    uint64_t * const y = bd + (unsigned long)pr[j] * SG_BAND;
-                    const uint32_t f   = pf[j];
+                if (small) {
+                    for (j = 1; j < pl; ++j) {
+                        uint64_t * const y = bd + (unsigned long)pr[j] * SG_BAND;
+                        const uint32_t f   = pf[j];
 #pragma omp simd
-                    for (b = 0; b < SG_BAND; ++b) {
-                        const uint64_t t = y[b] + (uint64_t)m[b] * f;
-                        y[b] = t - (t >= big ? big : 0);
+                        for (b = 0; b < SG_BAND; ++b) {
+                            y[b] += (uint64_t)m[b] * f;
+                        }
+                    }
+                } else {
+                    for (j = 1; j < pl; ++j) {
+                        uint64_t * const y = bd + (unsigned long)pr[j] * SG_BAND;
+                        const uint32_t f   = pf[j];
+#pragma omp simd
+                        for (b = 0; b < SG_BAND; ++b) {
+                            const uint64_t t = y[b] + (uint64_t)m[b] * f;
+                            y[b] = t - (t >= big ? big : 0);
+                        }
                     }
                 }
+                *nsubs += (uint64_t)pl * nz;
             }
             if (used != NULL) {
                 used[k] = 1;
             }
-            *nsubs += (uint64_t)pl * nb;
             continue;
         }
         /* a column without pivot: the entries of the rows in turn */
