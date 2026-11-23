@@ -713,50 +713,6 @@ static void sg_add_element(
     sg->ld++;
 }
 
-/* the syzygy f_i * h - h * e_i of the new element h = sg->e[n] and each
- * input generator f_i, written as module element: its terms are
- * lm(f_i) * sig(h) with Schreyer monomial lm(f_i) * sc(h) and lm(h) * e_i
- * with Schreyer monomial lm(h) * lm(f_i), the larger one is its
- * signature. If both are the same module term they may cancel. */
-static void sg_principal_syzygies(
-        sg_t *sg,
-        const len_t n
-        )
-{
-    len_t i, j;
-    ht_t *ht         = sg->bht;
-    const len_t nw   = sg->nw;
-    const sg_el_t *h = sg->e + n;
-    uint64_t w[nw];
-    /* lm(f_i) * sc(h) against lm(h) * lm(f_i) is sc(h) against lm(h) */
-    const int c0 = sg_cmp_exp(ht->ev[h->sc], ht->ev[h->p[OFFSET]], ht->evl);
-    const deg_t dsm = ht->hd[h->sm].deg;
-
-    for (i = 0; i < sg->ng; ++i) {
-        int c = c0;
-        if (c == 0) {
-            if (h->ix == i) {
-                continue;
-            }
-            c = h->ix > i ? 1 : -1;
-        }
-        if (c > 0) {
-            if (dsm + ht->hd[sg->g[i].p[OFFSET]].deg > SG_LMAX) {
-                sg->wide = 1;
-                return;
-            }
-            const uint64_t * const a = sg->gpl + (unsigned long)i * nw;
-            const uint64_t * const b = SG_PS(sg, n);
-            for (j = 0; j < nw; ++j) {
-                w[j] = a[j] + b[j];
-            }
-            sg_add_syzygy(sg, h->ix, w);
-        } else {
-            sg_add_syzygy(sg, i, SG_PL(sg, n));
-        }
-    }
-}
-
 /* the signature of the S-pair of the elements a and b: returns 0 for a
  * singular S-pair, otherwise sets the index and the module monomial of
  * the signature and if the lead terms are coprime. With L the lcm of the
@@ -900,14 +856,17 @@ static void sg_new_pairs(
         }
     }
     /* x^v of roune-2012 Theorem 8: lm(bd)*sig(n)/sig(bd), infinite where
-     * the lead of n does not exceed it */
+     * the lead of n does not exceed it. Only the variables take part in
+     * the divisibility test: x^v has infinite components, so its degree
+     * lane is not the degree of a monomial dividing it. */
     exp_t v[evl];
+    v[0] = EXP_MAX;
     if (bd != n) {
         const exp_t * const elb = ht->ev[sg->e[bd].p[OFFSET]];
         const exp_t * const esb = ht->ev[sg->e[bd].sm];
         const exp_t * const eln = ht->ev[sg->e[n].p[OFFSET]];
         const exp_t * const esn = ht->ev[sg->e[n].sm];
-        for (j = 0; j < evl; ++j) {
+        for (j = 1; j < evl; ++j) {
             const exp_t pj = elb[j] + esn[j] - esb[j];
             v[j] = eln[j] <= pj ? EXP_MAX : pj;
         }
@@ -927,7 +886,7 @@ static void sg_new_pairs(
         if (bd != n && i != bd && sg->e[i].tau < sg->e[bd].tau
                 && sg->e[i].tau < sg->e[n].tau && sg_tri_get(sg, bd, i)) {
             const exp_t * const elg = ht->ev[sg->e[i].p[OFFSET]];
-            for (j = 0; j < evl; ++j) {
+            for (j = 1; j < evl; ++j) {
                 if (elg[j] > v[j]) {
                     break;
                 }
@@ -1024,6 +983,11 @@ static int sg_reducer_cmp(
     const sg_el_t *eb = sg->e + ib;
     if (ea->tau != eb->tau) {
         return ea->tau < eb->tau ? -1 : 1;
+    }
+    /* ties to fewer terms, then to the element made first (eder-2017
+     * §7.3, Definition of ⊴_rat) */
+    if (ea->p[LENGTH] != eb->p[LENGTH]) {
+        return ea->p[LENGTH] < eb->p[LENGTH] ? -1 : 1;
     }
     return ia < ib ? -1 : (ia > ib ? 1 : 0);
 }
@@ -1362,17 +1326,20 @@ static int64_t sg_round(
 
     /* rows of the selected signatures, by rewriting */
     len_t nr = 0, rsz = 2 * ns + 16;
+    len_t t_dedup = 0, t_syz = 0; /* dropped in this round, for the report */
     sg_row_t *rows = (sg_row_t *)malloc((unsigned long)rsz * sizeof(sg_row_t));
     exp_t m[evl];
     len_t mix   = 0;  /* the largest signature of a row to be reduced */
     hm_t msc    = 0;
     for (i = 0; i < ns; ++i) {
         if (i > 0 && sel[i].ix == sel[i-1].ix && sel[i].sm == sel[i-1].sm) {
+            t_dedup++;
             continue;
         }
         const len_t ix = sel[i].ix;
         memcpy(m, bht->ev[sel[i].sm], (unsigned long)evl * sizeof(exp_t));
         if (sg_is_syzygy_exp(sg, ix, m)) {
+            t_syz++;
             continue;
         }
         /* rewriter: largest sig-lead ratio, i.e. least lead term of the
@@ -1447,6 +1414,11 @@ static int64_t sg_round(
     }
     free(sel);
     const len_t nsr = nr; /* S-rows built from the selected signatures */
+    if (md->info_level > 1) {
+        fprintf(VERBSTREAM, "pop: selected=%u dedup=%u syzygy=%u nearly=%u srows=%u\n",
+                (unsigned)ns, (unsigned)t_dedup, (unsigned)t_syz,
+                (unsigned)sg->nearly, (unsigned)nr);
+    }
     const len_t smon = (len_t)(sht->eld - 1); /* monomials of the S-rows */
     if (nr == 0) {
         free(rows);
@@ -1984,6 +1956,10 @@ static int sg_hand_over(
         )
 {
     const char *why = NULL;
+    if (md->info_level > 1) {
+        fprintf(VERBSTREAM, "hand-gate: nn=%d nzero=%d ndiv=%d gap=%d ld=%d nsubs=%lu\n",
+                nn, sg->nzero, sg->ndiv, gap, sg->ld, (unsigned long)sg->nsubs);
+    }
     if (md->sig_f4 == 2) {
         /* the signature-based F4 is not to hand over */
         return 0;
@@ -2160,25 +2136,21 @@ static void sg_load_basis(
     bs->mltdeg = mltdeg;
 }
 
-/* the input generators by increasing lead term, the order of the indices of
- * their signatures */
+/* the input generators in their given order, the order of the indices of
+ * their signatures; the echelonized rows stand at the position of the
+ * generator whose row won its pivot, so the generators' order is the
+ * order of the input as read (gebauer-1988 §4.6: with the inputs ordered
+ * by decreasing head term, an element is redundant exactly when a later
+ * one's head term divides its own) */
 static len_t *sg_generator_order(
         const bs_t * const bs,
         const len_t ng
         )
 {
-    len_t i, j;
+    len_t i;
     len_t *gi = (len_t *)malloc((unsigned long)(ng + 1) * sizeof(len_t));
     for (i = 0; i < ng; ++i) {
         gi[i] = i;
-    }
-    for (i = 1; i < ng; ++i) {
-        const len_t t = gi[i];
-        for (j = i; j > 0 && monomial_cmp_drl(bs->hm[gi[j-1]][OFFSET],
-                    bs->hm[t][OFFSET], bs->ht) > 0; --j) {
-            gi[j] = gi[j-1];
-        }
-        gi[j] = t;
     }
     return gi;
 }
@@ -2310,9 +2282,6 @@ static int sig_f4(
         if (sg_hand_over(&sg, (len_t)nn, sg.maxgap, md)) {
             ok = 0;
             break;
-        }
-        for (i = ob; i < sg.ld; ++i) {
-            sg_principal_syzygies(&sg, i);
         }
         for (i = ob; i < sg.ld; ++i) {
             sg_new_pairs(&sg, i);

@@ -1913,9 +1913,14 @@ int64_t f4_trace_julia(
      * read some input data for applying heuristics */
     calculate_divmask(bht);
 
-    /* sort initial elements, smallest lead term first */
-    sort_r(bs_qq->hm, (unsigned long)bs_qq->ld, sizeof(hm_t *),
-            initial_input_cmp, bht);
+    /* the signature-based F4 takes the generators in their given order,
+     * the order of the indices of the signatures follows the input as
+     * read; the plain F4 sorts the initial elements, smallest lead term
+     * first (gebauer-1988 §4.6) */
+    if (st->use_signatures == 0) {
+        sort_r(bs_qq->hm, (unsigned long)bs_qq->ld, sizeof(hm_t *),
+                initial_input_cmp, bht);
+    }
     remove_content_of_initial_basis(bs_qq);
 
     /* generate lucky prime numbers */

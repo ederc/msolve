@@ -92,9 +92,23 @@ int initialize_gba_input_data(
      * read some input data for applying heuristics */
     calculate_divmask(bht);
 
-    /* sort initial elements, smallest lead term first */
-    sort_r(bs->hm, (unsigned long)bs->ld, sizeof(hm_t *),
-            initial_input_cmp, bht);
+    /* the signature-based F4 takes the generators in their given order,
+     * the order of the indices of the signatures follows the input as
+     * read (gebauer-1988 §4.6: with the inputs ordered by decreasing
+     * head term, an element is redundant exactly when a later one's head
+     * term divides its own; the signature-based variant keeps the input
+     * order to preserve the signature indices); the plain F4 sorts the
+     * initial elements, smallest lead term first */
+    {
+        const int sig_run = (st->fc == 0)
+            ? (st->use_signatures > 0)
+            : (st->fc > 2 && st->fc < ((uint64_t)1 << 31)
+                && !is_gf2_ext(st->fc) && st->mo == 0 && st->nev == 0);
+        if (!sig_run) {
+            sort_r(bs->hm, (unsigned long)bs->ld, sizeof(hm_t *),
+                    initial_input_cmp, bht);
+        }
+    }
     /* normalize input generators */
     if (st->fc > 0) {
         normalize_initial_basis(bs, st->fc);

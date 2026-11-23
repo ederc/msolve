@@ -2897,9 +2897,22 @@ int msolve_trace_qq(mpz_param_t *mpz_paramp,
    * read some input data for applying heuristics */
   calculate_divmask(bs_qq->ht);
 
-  /* sort initial elements, smallest lead term first */
-  sort_r(bs_qq->hm, (unsigned long)bs_qq->ld, sizeof(hm_t *), initial_input_cmp,
-         bs_qq->ht);
+  /* the signature-based F4 takes the generators in their given order,
+   * the order of the indices of the signatures follows the input as
+   * read; the plain F4 sorts the initial elements, smallest lead term
+   * first (gebauer-1988 §4.6) */
+  {
+      const int sig_run = (gens->field_char == 0)
+          ? (use_signatures > 0)
+          : (gens->field_char > 2
+              && gens->field_char < ((uint64_t)1 << 31)
+              && !is_gf2_ext(gens->field_char) && st->mo == 0
+              && st->nev == 0);
+      if (!sig_run) {
+          sort_r(bs_qq->hm, (unsigned long)bs_qq->ld, sizeof(hm_t *), initial_input_cmp,
+                 bs_qq->ht);
+      }
+  }
   if (gens->field_char == 0) {
     remove_content_of_initial_basis(bs_qq);
     /* generate lucky prime numbers */

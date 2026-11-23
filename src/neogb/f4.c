@@ -448,10 +448,40 @@ static int32_t echelonize_input_generators(
         free(bs->hm[i]);
         bs->hm[i] = NULL;
     }
-    /* the rows come by increasing leading monomial, the basis takes
-     * the largest first as for the new elements of a round */
+    /* the rows stand at the position of the generator whose row won its
+     * pivot; the basis takes them in the generators' order, which fixes
+     * the order of the indices of the signatures (gebauer-1988 §4.6:
+     * with the inputs ordered by decreasing head term, an element is
+     * redundant exactly when a later one's head term divides its own) */
+    hm_t **gold = (hm_t **)calloc((unsigned long)ng, sizeof(hm_t *));
+    len_t ngs = 0; /* rows that kept the index of their generator */
     for (k = 0; k < np; ++k) {
-        hm_t *r         = rows[np-1-k];
+        const len_t b = (len_t)rows[k][BINDEX];
+        if (b >= 0 && b < ng && gold[b] == NULL) {
+            gold[b] = rows[k];
+            ngs++;
+        }
+    }
+    if (ngs != np) {
+        /* the linear algebra combined rows, so the indices of the
+         * generators are lost (probabilistic variants); take the rows in
+         * the echelon's pivot order, largest lead term first */
+        memset(gold, 0, (unsigned long)ng * sizeof(hm_t *));
+        for (k = 0; k < np; ++k) {
+            gold[k] = rows[np-1-k];
+        }
+    }
+    /* compact the surviving rows in generator order */
+    {
+        len_t kk = 0;
+        for (k = 0; k < ng; ++k) {
+            if (gold[k] != NULL) {
+                gold[kk++] = gold[k];
+            }
+        }
+    }
+    for (k = 0; k < np; ++k) {
+        hm_t *r         = gold[k];
         const len_t len = r[LENGTH]+OFFSET;
         for (j = OFFSET; j < len; ++j) {
             r[j] = s2b[hcm[r[j]]];
@@ -487,6 +517,7 @@ static int32_t echelonize_input_generators(
             bs->constant = 1;
         }
     }
+    free(gold);
     free(s2b);
     clean_hash_table(sht);
     clear_matrix(mat);
