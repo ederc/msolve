@@ -1425,7 +1425,10 @@ static void reduce_dense_rows_by_dense_block_ff_64(
         const cf64_t * const piv = dm[cl] - cl;
         j = cl;
 #ifdef FF64_VL
-        if (nr == LA_NRB) {
+        /* the vector multipliers hold values < 2^52, see ff64_init(),
+         * for wider primes the scalar loop below is exact for all
+         * p < 2^62 */
+        if (!f.wide && nr == LA_NRB) {
             ff64_m mv[LA_NRB];
             for (r = 0; r < LA_NRB; ++r) {
                 mv[r] = ff64_m_set1(mul[r], &f);
