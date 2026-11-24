@@ -40,12 +40,12 @@ static int check_pair(const uint64_t p, const uint64_t x, const uint64_t y)
 
 int main(void)
 {
-    /* 2^61 + 13213743 and 2^62 - 19 are prime; also one mid-range and
-     * the boundary-relevant 2^62-1-adjacent prime 2^62-57 */
+    /* the Mersenne prime 2^61-1, the boundary-relevant prime 2^62-57,
+     * and a mid-range prime */
     const uint64_t primes[] = {
-        2305843009213693951ULL + 13213743ULL, /* 2^61 + 13213743 */
-        4611686018427387847ULL,               /* 2^62 - 19 */
-        4611686018427387827ULL                /* 2^62 - 39 */
+        2305843009213693951ULL,               /* 2^61 - 1 */
+        4611686018427387847ULL,               /* 2^62 - 57 */
+        3458764513820540933ULL                /* mid-range */
     };
     const int nprimes = (int)(sizeof(primes) / sizeof(primes[0]));
 
@@ -98,6 +98,33 @@ int main(void)
                 }
             }
         }
+        /* edges: a zero multiplier is the identity on the dense row,
+         * and a zero pivot coefficient leaves its column untouched */
+        uint64_t *snap = (uint64_t *)malloc(ncols * sizeof(uint64_t));
+        memcpy(snap, dr, ncols * sizeof(uint64_t));
+        sg_sub_row_64(dr, pr, pf, ncols, 0, p);
+        for (len_t j = 0; j < ncols; ++j) {
+            if (dr[j] != snap[j]) {
+                printf("FAIL sg_sub_row_64 edge v=0: dr[%d] changed\n", (int)j);
+                return 1;
+            }
+        }
+        pf[ncols / 2] = 0;
+        sg_sub_row_64(dr, pr, pf, ncols, rng() % p, p);
+        if (dr[ncols / 2] != snap[ncols / 2]) {
+            printf("FAIL sg_sub_row_64 edge pf=0: dr[%d] changed\n",
+                   (int)(ncols / 2));
+            return 1;
+        }
+        for (len_t j = 0; j < ncols; ++j) {
+            if (dr[j] >= 2 * p) {
+                printf("FAIL sg_sub_row_64 edge: dr[%d]=%llu >= 2p=%llu\n",
+                       (int)j, (unsigned long long)dr[j],
+                       (unsigned long long)(2 * p));
+                return 1;
+            }
+        }
+        free(snap);
         free(dr);
         free(pf);
         free(pr);

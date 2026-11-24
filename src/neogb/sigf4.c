@@ -1439,7 +1439,7 @@ static int64_t sg_round(
     free(sel);
     const len_t nsr = nr; /* S-rows built from the selected signatures */
     if (md->info_level > 1) {
-        fprintf(VERBSTREAM, "pop: selected=%u dedup=%u syzygy=%u nearly=%u srows=%u\n",
+        fprintf(VERBSTREAM, "pop: selected=%u dedup=%u syzygy=%u els=%u srows=%u\n",
                 (unsigned)ns, (unsigned)t_dedup, (unsigned)t_syz,
                 (unsigned)sg->nearly, (unsigned)nr);
     }
@@ -2206,7 +2206,7 @@ static int sig_f4(
     sg.e2 = (exp_t *)calloc((unsigned long)evl, sizeof(exp_t));
     sg.e3 = (exp_t *)calloc((unsigned long)evl, sizeof(exp_t));
 
-    /* the input generators by increasing lead term: e_i < e_j for i < j */
+    /* the input generators in file order: e_i < e_j for i < j */
     const len_t ng = (len_t)md->ngens;
     len_t *gi = sg_generator_order(bs, ng);
     sg.ng   = ng;
@@ -2452,7 +2452,8 @@ static cf64_t **sg_input_coeffs_64(
 
 /* subtracting the pivot row (pr, pf) from the dense row: the 32-bit
  * instantiation uses the lazy big/small constants, the 64-bit
- * instantiation the Shoup factors pq of the pivot row */
+ * instantiation the Shoup product with the pre-inverse of the
+ * multiplier */
 #define SG_SUBROW_32(dr, pr, pf, pl, v, p, big, small) \
     sg_sub_row((dr), (pr), (pf), (pl), (p) - (v), (big), (small))
 #define SG_SUBROW_64(dr, pr, pf, pl, v, p, big, small) \
@@ -2474,8 +2475,7 @@ static cf64_t **sg_input_coeffs_64(
 
 /* the replay core shared by both coefficient widths: cf_t is the
  * coefficient type, the variant macros adapt input coefficient
- * extraction, dense-row invariant, pivot subtraction, monicization and
- * Shoup factor installation */
+ * extraction, dense-row invariant, pivot subtraction and monicization */
 #define SG_REPLAY(name, cf_t, INPUT_COEFFS, TAKE, SUBROW, INV, MUL_INV, \
         BIG_SMALL_DECL)                                                 \
 static int name(                                                        \
@@ -2801,9 +2801,9 @@ SG_REPLAY(sig_f4_replay_32, cf32_t,
         SG_BIG_SMALL_DECL_32)
 
 /* the wide replay for primes in [2^32, 2^62): coefficients in cf_64
- * arrays, dense rows in the redundant [0, 2p) representation, Shoup
- * factors precomputed per installed pivot row, monicization with
- * 128-bit products */
+ * arrays, dense rows in the redundant [0, 2p) representation, the Shoup
+ * product with a per-application pre-inverse of the row multiplier,
+ * monicization with 128-bit products */
 SG_REPLAY(sig_f4_replay_64, cf64_t,
         SG_INPUT_COEFFS_64, SG_TAKE_64, SG_SUBROW_64,
         SG_INV_64, SG_MUL_INV_64,
