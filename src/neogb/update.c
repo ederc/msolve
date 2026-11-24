@@ -19,7 +19,11 @@
  * Mohab Safey El Din */
 
 
-#include "update.h" 
+#include "update.h"
+
+#if defined(__AVX512F__) || defined(__AVX2__)
+#include <immintrin.h>
+#endif
 
 ps_t *initialize_pairset(
         void
@@ -210,6 +214,187 @@ static int spair_cmp_update_hash(
     return 0;
 }
 
+/* the total degree of the lcm of the lead monomials of the elements g and
+ * n, and the degree of their pair before the criteria are applied: -1 if
+ * the pair is useless as g is redundant, -2 for coprime lead monomials */
+static inline deg_t pair_degree(
+        deg_t *ldp,
+        const bi_t g,
+        const bi_t n,
+        const int useless,
+        const uint64_t * const vm,
+        const bs_t * const bs,
+        const ht_t * const bht,
+        const md_t * const st
+        )
+{
+    const hm_t lg = bs->hm[g][OFFSET];
+    const hm_t ln = bs->hm[n][OFFSET];
+    const exp_t * const ea  = bht->ev[lg];
+    const exp_t * const eb  = bht->ev[ln];
+    const deg_t gdeg  = (vm[g] & vm[n]) == 0 ? 0 : gcd_degree(ea, eb, bht);
+    const deg_t ldeg  = total_degree(ea, bht) + total_degree(eb, bht) - gdeg;
+    *ldp = ldeg;
+    if (useless) {
+        return -1;
+    }
+    if (gdeg == 0) {
+        return -2;
+    }
+    /* total degree of the pair, not trivial if block order is chosen */
+    if (st->nev == 0) {
+        return ldeg;
+    }
+    const deg_t deg1  = ldeg - bht->hd[lg].deg + bs->hm[g][DEG];
+    const deg_t deg2  = ldeg - bht->hd[ln].deg + bs->hm[n][DEG];
+    return deg1 > deg2 ? deg1 : deg2;
+}
+
+/* bit i - b0 is set for each i = b0, ..., b1-1, b1 - b0 <= 64, where the
+ * variable mask vm[i] meets bvm and k < mk[i] */
+static inline uint64_t pair_candidates(
+        const uint64_t * const vm,
+        const len_t * const mk,
+        const len_t b0,
+        const len_t b1,
+        const uint64_t bvm,
+        const len_t k
+        )
+{
+    len_t i = b0;
+    uint64_t bits = 0;
+#if defined(__AVX512F__)
+    const __m512i vb = _mm512_set1_epi64((long long)bvm);
+    const __m256i vk = _mm256_set1_epi32((int)k);
+    for (; i + 8 <= b1; i += 8) {
+        const __m512i v   = _mm512_loadu_si512((const void *)(vm + i));
+        const __m256i m   = _mm256_loadu_si256((const __m256i *)(mk + i));
+        const __mmask8 a  = _mm512_test_epi64_mask(v, vb);
+        const __mmask8 c  = _mm256_cmpgt_epu32_mask(m, vk);
+        bits |= (uint64_t)(a & c) << (i - b0);
+    }
+#endif
+    for (; i < b1; ++i) {
+        bits |= (uint64_t)((vm[i] & bvm) != 0 && k < mk[i]) << (i - b0);
+    }
+    return bits;
+}
+
+/* bit i - b0 is set for each i = b0, ..., b1-1, b1 - b0 <= 64, where the
+ * divmask ms has no bit outside of the divmask whose complement is nm[i] */
+static inline uint64_t mask_passes(
+        const sdm_t * const nm,
+        const uint64_t b0,
+        const uint64_t b1,
+        const sdm_t ms
+        )
+{
+    uint64_t i = b0, bits = 0;
+#if defined(__AVX512F__)
+    const __m512i vm = _mm512_set1_epi32((int)ms);
+    for (; i + 16 <= b1; i += 16) {
+        const __m512i v = _mm512_loadu_si512((const void *)(nm + i));
+        bits |= (uint64_t)_mm512_testn_epi32_mask(v, vm) << (i - b0);
+    }
+#elif defined(__AVX2__)
+    const __m256i vm = _mm256_set1_epi32((int)ms);
+    const __m256i z  = _mm256_setzero_si256();
+    for (; i + 8 <= b1; i += 8) {
+        const __m256i v = _mm256_and_si256(
+                _mm256_loadu_si256((const __m256i *)(nm + i)), vm);
+        const uint32_t r = (uint32_t)_mm256_movemask_ps(
+                _mm256_castsi256_ps(_mm256_cmpeq_epi32(v, z)));
+        bits |= (uint64_t)r << (i - b0);
+    }
+#endif
+    for (; i < b1; ++i) {
+        bits |= (uint64_t)((ms & nm[i]) == 0) << (i - b0);
+    }
+    return bits;
+}
+
+/* Gebauer-Moeller: removes the pairs p[0], ..., p[np-1] whose lcm the
+ * lead monomial of a new element n = bl + k, k = k0, ..., npivs-1,
+ * divides properly, unless the lcm equals the lcm of the pair of one of
+ * the elements of the pair with n. Where soff is given, only the pairs
+ * before soff[k] are checked against the k-th new element. nm holds the
+ * complements of the divmasks of the lcms. The pairs are handled in tiles
+ * which stay in the cache while all new elements are checked against them,
+ * by increasing k as when the new elements are added one after the other;
+ * the masks of a block of pairs are tested at once and only the pairs
+ * passing them are looked at. The lcm of a pair (g, h) is compared with
+ * the lcm of g and n only if n divides it: then g and n divide it, so
+ * does their lcm, and both lcms are equal iff their total degrees are
+ * equal. Thus the lcms of the new pairs are not looked up in the hash
+ * table. */
+#define GM_TILE 2048
+static void remove_pairs_by_new_elements(
+        spair_t *p,
+        sdm_t *nm,
+        const uint64_t np,
+        const uint64_t * const soff,
+        const len_t k0,
+        const len_t npivs,
+        const len_t bl,
+        const len_t * const mby,
+        const uint64_t * const vm,
+        const bs_t * const bs,
+        const ht_t * const bht,
+        const md_t * const st
+        )
+{
+    uint64_t t0;
+    const uint64_t nt = (np + GM_TILE - 1) / GM_TILE;
+
+#pragma omp parallel for num_threads(st->nthrds) private(t0) \
+        schedule(dynamic, 1)
+    for (t0 = 0; t0 < nt; ++t0) {
+        const uint64_t tb = GM_TILE * t0;
+        const uint64_t te = np - tb < GM_TILE ? np : tb + GM_TILE;
+        len_t k;
+        for (k = k0; k < npivs; ++k) {
+            const uint64_t ke = soff == NULL || soff[k] > te ? te : soff[k];
+            if (ke <= tb) {
+                continue;
+            }
+            const len_t n     = bl + k;
+            const hm_t nlm    = bs->hm[n][OFFSET];
+            const sdm_t nsdm  = bht->hd[nlm].sdm;
+            uint64_t b0;
+            for (b0 = tb; b0 < ke; b0 += 64) {
+                const uint64_t b1 = ke - b0 < 64 ? ke : b0 + 64;
+                uint64_t i, bits = mask_passes(nm, b0, b1, nsdm);
+                while (bits != 0) {
+                    i     = b0 + (uint64_t)__builtin_ctzll(bits);
+                    bits  &= bits - 1;
+                    if (p[i].deg < 0
+                            || !check_monomial_division(p[i].lcm, nlm, bht)) {
+                        continue;
+                    }
+                    /* the degrees of the pairs of g1 and g2 with n, only
+                     * computed where n divides the lcm */
+                    const bi_t g1   = p[i].gen1;
+                    const bi_t g2   = p[i].gen2;
+                    const deg_t ld  = total_degree(bht->ev[p[i].lcm], bht);
+                    deg_t l1, l2;
+                    const deg_t d1  = pair_degree(&l1, g1, n,
+                            g1 < bl ? mby[g1] <= k : bs->red[g1] != 0,
+                            vm, bs, bht, st);
+                    const deg_t d2  = pair_degree(&l2, g2, n,
+                            g2 < bl ? mby[g2] <= k : bs->red[g2] != 0,
+                            vm, bs, bht, st);
+                    if (d1 <= p[i].deg && d2 <= p[i].deg
+                            && l1 != ld && l2 != ld) {
+                        p[i].deg  = -1;
+                        /* no later new element looks at the pair */
+                        nm[i]     = ~(sdm_t)0;
+                    }
+                }
+            }
+        }
+    }
+}
+
 /* Boolean ring: writes the field pairs of the basis element g to p and
  * returns their number, i.e. the pairs of g with the field equations
  * x^2 + x of the variables x of its lead monomial. The polynomial of such
@@ -292,17 +477,12 @@ static void insert_and_update_spairs(
     hm_t *nch     = (hm_t *)malloc((uint64_t)npivs * sizeof(hm_t));
     deg_t *ndeg   = (deg_t *)malloc((uint64_t)npivs * sizeof(deg_t));
     int *marks    = (int *)malloc((uint64_t)npivs * sizeof(int));
-    /* position of the pairs of the k-th new element */
-    uint64_t *off = (uint64_t *)malloc((uint64_t)(npivs+1) * sizeof(uint64_t));
-    off[0] = 0;
     for (k = 0; k < npivs; ++k) {
         nch[k]    = bs->hm[bl+k][OFFSET];
         ndeg[k]   = bs->hm[bl+k][DEG];
         bs->mltdeg  = bs->mltdeg > ndeg[k] ? bs->mltdeg : ndeg[k];
         marks[k]  = bs->mltdeg > ndeg[k];
-        off[k+1]  = off[k] + bl + k;
     }
-    const uint64_t np = off[npivs];
 
     /* 1 + the index of the new element marking an old one as redundant
      * first, 0 if it is already redundant, npivs + 1 if it stays */
@@ -333,11 +513,62 @@ static void insert_and_update_spairs(
     }
     st->num_redundant += nred;
 
+    /* the elements a new element may form a useful pair with: the old
+     * elements which are not redundant, by increasing index, followed by
+     * the earlier new elements; the pairs with redundant elements are
+     * useless and are neither formed nor counted, which keeps the work of
+     * a round linear in the size of the minimal basis instead of the
+     * whole basis */
+    len_t nlv = 0;
+    for (i = 0; i < bl; ++i) {
+        nlv += mby[i] != 0;
+    }
+    len_t *cand = (len_t *)malloc((uint64_t)(nlv + npivs) * sizeof(len_t));
+    nlv = 0;
+    for (i = 0; i < bl; ++i) {
+        if (mby[i] != 0) {
+            cand[nlv++] = i;
+        }
+    }
+    for (k = 0; k < npivs; ++k) {
+        cand[nlv+k] = bl + k;
+    }
+    /* position of the pairs of the k-th new element */
+    uint64_t *off = (uint64_t *)malloc((uint64_t)(npivs+1) * sizeof(uint64_t));
+    off[0] = 0;
+    for (k = 0; k < npivs; ++k) {
+        off[k+1]  = off[k] + nlv + k;
+    }
+    const uint64_t np = off[npivs];
+
     /* variable masks of the lead monomials */
     uint64_t *vm  = (uint64_t *)malloc((uint64_t)(bl + npivs) * sizeof(uint64_t));
 #pragma omp parallel for num_threads(nthrds) private(i)
     for (i = 0; i < bl + npivs; ++i) {
         vm[i] = variable_mask(bht->ev[bs->hm[i][OFFSET]], bht);
+    }
+
+    /* the data of the lead monomials of the candidates side by side, the
+     * candidate loop below reads them for each new element */
+    const len_t ncd = nlv + npivs;
+    uint64_t *cvm = (uint64_t *)malloc((uint64_t)ncd * sizeof(uint64_t));
+    sdm_t *csdm   = (sdm_t *)malloc((uint64_t)ncd * sizeof(sdm_t));
+    deg_t *ctd    = (deg_t *)malloc((uint64_t)ncd * sizeof(deg_t));
+    exp_t *cev    = (exp_t *)malloc((uint64_t)ncd * evl * sizeof(exp_t));
+    /* the pair of the k-th new element and the candidate at position i is
+     * useless iff k >= cmby[i] */
+    len_t *cmby   = (len_t *)malloc((uint64_t)ncd * sizeof(len_t));
+    /* the number of the remaining new pairs of the k-th new element */
+    len_t *nkp    = (len_t *)calloc((uint64_t)npivs, sizeof(len_t));
+#pragma omp parallel for num_threads(nthrds) private(i)
+    for (i = 0; i < ncd; ++i) {
+        cmby[i] = i < nlv ? mby[cand[i]]
+            : (bs->red[cand[i]] != 0 ? 0 : npivs + 1);
+        const hm_t lm = bs->hm[cand[i]][OFFSET];
+        cvm[i]  = vm[cand[i]];
+        csdm[i] = bht->hd[lm].sdm;
+        ctd[i]  = total_degree(bht->ev[lm], bht);
+        memcpy(cev + (uint64_t)i * evl, bht->ev[lm], (uint64_t)evl * sizeof(exp_t));
     }
 
     /* Generate the new pairs of each new element and apply the
@@ -349,13 +580,11 @@ static void insert_and_update_spairs(
      * pairs of the same degree only remove the ones with the same lcm.
      * Only the pairs of one degree with a new lcm and the remaining pairs
      * in the end have to be sorted. The lcms are compared in a local view
-     * of the hash table. kd and kt store the degree of all pairs with the
-     * k-th new element and the total degree of their lcms before the
-     * criterion is applied, these are needed for the older pairs. */
-    spair_t *pp = (spair_t *)malloc(np * sizeof(spair_t));
-    deg_t *pdeg = (deg_t *)malloc(np * sizeof(deg_t));
-    deg_t *ptd  = (deg_t *)malloc(np * sizeof(deg_t));
-    const len_t nmax  = bl + npivs - 1;
+     * of the hash table. Only the pairs which are not removed by the
+     * redundancy of their older element or by the product criterion are
+     * formed, cps holds the position of their older element in cand. */
+    spair_t *pp = (spair_t *)malloc((np + 1) * sizeof(spair_t));
+    const len_t nmax  = nlv + npivs;
 #pragma omp parallel num_threads(nthrds) private(i, k)
     {
     exp_t *e      = (exp_t *)calloc((uint64_t)nmax * evl + 8, sizeof(exp_t));
@@ -374,6 +603,7 @@ static void insert_and_update_spairs(
     exp_t *dx     = (exp_t *)malloc((uint64_t)dxsz * sizeof(exp_t));
     len_t *dp     = (len_t *)malloc((uint64_t)dxsz * sizeof(len_t));
     spair_t *sp   = (spair_t *)malloc((uint64_t)nmax * sizeof(spair_t));
+    len_t *cps    = (len_t *)malloc((uint64_t)nmax * sizeof(len_t));
     len_t *cnt    = NULL;
     deg_t ccap    = 0;
     ht_t lht      = *bht;
@@ -385,48 +615,53 @@ static void insert_and_update_spairs(
 #pragma omp for schedule(dynamic)
     for (k = 0; k < npivs; ++k) {
         spair_t *p    = pp + off[k];
-        deg_t *kd     = pdeg + off[k];
-        deg_t *kt     = ptd + off[k];
         const len_t n = bl + k;
+        const len_t nc = nlv + k;
         const exp_t * const eb = bht->ev[nch[k]];
-        const deg_t bdeg  = total_degree(eb, bht);
         const sdm_t bsdm  = bht->hd[nch[k]].sdm;
         deg_t d, dmax = 0;
         len_t l, m, t;
-        for (i = 0; i < n; ++i) {
+        const uint64_t bvm  = vm[n];
+        const deg_t bdeg    = total_degree(eb, bht);
+        len_t nf = 0;
+        len_t c0;
+        for (c0 = 0; c0 < nc; c0 += 64) {
+        /* the pairs with redundant elements and the pairs of coprime lead
+         * terms, i.e. of disjoint variable masks, are not formed */
+        uint64_t bits = pair_candidates(cvm, cmby, c0,
+                nc - c0 < 64 ? nc : c0 + 64, bvm, k);
+        while (bits != 0) {
             /* the exponents of the lcm are only computed for the pairs
              * that are not removed by an lcm of lower degree, the short
              * divisor mask of the lcm is the one of the lead monomials */
-            const exp_t * const ea  = bht->ev[bs->hm[i][OFFSET]];
-            /* lead terms with disjoint variable masks are coprime */
-            const deg_t gdeg  = (vm[i] & vm[n]) == 0 ? 0 : gcd_degree(ea, eb, bht);
-            const deg_t ldeg  = total_degree(ea, bht) + bdeg - gdeg;
-            hd[i].sdm = bht->hd[bs->hm[i][OFFSET]].sdm | bsdm;
-            kt[i]     = ldeg;
-            dmax      = dmax > ldeg ? dmax : ldeg;
-            p[i].lcm  = 0;
-            p[i].gen1 = i;
-            p[i].gen2 = n;
-            p[i].type = S_PAIR;
-            if ((i < bl && mby[i] <= k) || (i >= bl && bs->red[i] != 0)) {
-                p[i].deg = -1;
-            } else {
+            i     = c0 + (len_t)__builtin_ctzll(bits);
+            bits  &= bits - 1;
+            const len_t g = cand[i];
+            deg_t ldeg, pdg;
+            if (st->nev == 0) {
+                const deg_t gdeg = gcd_degree(cev + (uint64_t)i * evl, eb, bht);
                 if (gdeg == 0) {
-                    p[i].deg = -2;
-                } else {
-                    /* compute total degree of pair, not trivial if block order is chosen */
-                    if (st->nev == 0) {
-                        p[i].deg = ldeg;
-                    } else {
-                        const deg_t deg1  = ldeg
-                            - bht->hd[bs->hm[i][OFFSET]].deg + bs->hm[i][DEG];
-                        const deg_t deg2  = ldeg
-                            - bht->hd[nch[k]].deg + bs->hm[n][DEG];
-                        p[i].deg = deg1 > deg2 ? deg1 : deg2;
-                    }
+                    continue;
+                }
+                ldeg  = ctd[i] + bdeg - gdeg;
+                pdg   = ldeg;
+            } else {
+                pdg   = pair_degree(&ldeg, g, n, 0, vm, bs, bht, st);
+                if (pdg < 0) {
+                    continue;
                 }
             }
-            kd[i] = p[i].deg;
+            hd[nf].sdm  = csdm[i] | bsdm;
+            hd[nf].deg  = ldeg;
+            dmax        = dmax > ldeg ? dmax : ldeg;
+            cps[nf]     = i;
+            p[nf].deg   = pdg;
+            p[nf].lcm   = 0;
+            p[nf].gen1  = g;
+            p[nf].gen2  = n;
+            p[nf].type  = S_PAIR;
+            nf++;
+        }
         }
         /* bucket the pairs that are not removed by the degree of
          * their lcms, cnt[d] is the end of the bucket of degree d */
@@ -438,18 +673,14 @@ static void insert_and_update_spairs(
         /* pairs with coprime lead terms are removed by the product
          * criterion, their lcms divide no other lcm of the new pairs of
          * non-redundant elements, so they are not bucketed */
-        for (i = 0; i < n; ++i) {
-            if (p[i].deg >= 0) {
-                cnt[kt[i]+1]++;
-            }
+        for (i = 0; i < nf; ++i) {
+            cnt[hd[i].deg+1]++;
         }
         for (d = 0; d <= dmax; ++d) {
             cnt[d+1] += cnt[d];
         }
-        for (i = 0; i < n; ++i) {
-            if (p[i].deg >= 0) {
-                srt[cnt[kt[i]]++] = i;
-            }
+        for (i = 0; i < nf; ++i) {
+            srt[cnt[hd[i].deg]++] = i;
         }
         spair_cmp_local_t ctx = {p, &lht};
         len_t nd  = 0;
@@ -462,8 +693,8 @@ static void insert_and_update_spairs(
             for (m = b0, l = b0; l < b1; ++l) {
                 const len_t x   = srt[l];
                 const sdm_t nsx = ~hd[x].sdm;
-                const uint64_t nvx  = ~vm[x];
-                const exp_t * const ea  = bht->ev[bs->hm[x][OFFSET]];
+                const uint64_t nvx  = ~cvm[cps[x]];
+                const exp_t * const ea  = cev + (uint64_t)cps[x] * evl;
                 if (p[x].deg >= 0) {
                     for (t = 0; t < nd; ++t) {
                         if (!(dm[t] & nvx) && !(dsdm[t] & nsx)) {
@@ -533,7 +764,7 @@ static void insert_and_update_spairs(
                     }
                     continue;
                 }
-                const exp_t * const ex  = bht->ev[bs->hm[x][OFFSET]];
+                const exp_t * const ex  = cev + (uint64_t)cps[x] * evl;
                 if (doff[nd] + evl > dxsz) {
                     dxsz  = 2 * dxsz > doff[nd] + evl ? 2 * dxsz : doff[nd] + evl;
                     dx    = realloc(dx, (uint64_t)dxsz * sizeof(exp_t));
@@ -567,9 +798,7 @@ static void insert_and_update_spairs(
             sp[l] = p[srt[l]];
         }
         memcpy(p, sp, (uint64_t)ns * sizeof(spair_t));
-        for (i = ns; i < n; ++i) {
-            p[i].deg = -1;
-        }
+        nkp[k] = ns;
     }
     free(e);
     free(ev);
@@ -581,14 +810,12 @@ static void insert_and_update_spairs(
     free(dx);
     free(dp);
     free(sp);
+    free(cps);
     free(cnt);
     }
 
-    /* Gebauer-Moeller: check old pairs. The lcm of a pair (g, h) is
-     * compared with the lcm of g and the new element n only if n divides
-     * it. Then g and n divide it, so does their lcm, and both lcms are
-     * equal iff their total degrees are equal. Thus we do not need to look
-     * up the lcms of the new pairs in the hash table. */
+    /* Gebauer-Moeller: check old pairs, see
+     * remove_pairs_by_new_elements() */
     spair_t *ps = psl->p;
     /* the complements of the divmasks of the old pairs' lcms side by side:
      * the scan over the old pairs for each new element reads them first
@@ -599,27 +826,8 @@ static void insert_and_update_spairs(
     for (i = 0; i < pl; ++i) {
         pnm[i]  = ~bht->hd[ps[i].lcm].sdm;
     }
-    for (k = 0; k < npivs; ++k) {
-        const deg_t *kd = pdeg + off[k];
-        const deg_t *kt = ptd + off[k];
-        const sdm_t nsdm  = bht->hd[nch[k]].sdm;
-#pragma omp parallel for num_threads(nthrds) private(i) \
-        schedule(static, 4096)
-        for (i = 0; i < pl; ++i) {
-            if (nsdm & pnm[i]) {
-                continue;
-            }
-            const bi_t g1 = ps[i].gen1;
-            const bi_t g2 = ps[i].gen2;
-            if (ps[i].deg >= 0 && kd[g1] <= ps[i].deg && kd[g2] <= ps[i].deg
-                    && check_monomial_division(ps[i].lcm, nch[k], bht)) {
-                const deg_t ld  = total_degree(bht->ev[ps[i].lcm], bht);
-                if (kt[g1] != ld && kt[g2] != ld) {
-                    ps[i].deg   =   -1;
-                }
-            }
-        }
-    }
+    remove_pairs_by_new_elements(ps, pnm, pl, NULL, 0, npivs, bl, mby,
+            vm, bs, bht, st);
     free(pnm);
 
     /* in the Boolean ring each new element f also gets the pairs with the
@@ -639,8 +847,8 @@ static void insert_and_update_spairs(
      * pairs of the first k new elements */
     uint64_t *soff  = (uint64_t *)malloc((uint64_t)(npivs+1) * sizeof(uint64_t));
     uint64_t nrem   = 0;
-    for (j = 0; j < np; ++j) {
-        nrem  += pp[j].deg >= 0;
+    for (k = 0; k < npivs; ++k) {
+        nrem  += nkp[k];
     }
     spair_t *pq     = (spair_t *)malloc((nrem + nfp) * sizeof(spair_t));
     /* the lcms of the remaining pairs are inserted in bht */
@@ -650,7 +858,7 @@ static void insert_and_update_spairs(
     j = 0;
     soff[0] = 0;
     for (k = 0; k < npivs; ++k) {
-        for (i = 0; i < bl+k; ++i) {
+        for (i = 0; i < nkp[k]; ++i) {
             if (pp[off[k]+i].deg >= 0) {
                 pq[j] = pp[off[k]+i];
                 /* insert the lcm of the remaining new pair */
@@ -675,27 +883,8 @@ static void insert_and_update_spairs(
     for (j = 0; j < soff[npivs]; ++j) {
         qnm[j]  = ~bht->hd[pp[j].lcm].sdm;
     }
-    for (k = 1; k < npivs; ++k) {
-        const deg_t *kd = pdeg + off[k];
-        const deg_t *kt = ptd + off[k];
-        const sdm_t nsdm  = bht->hd[nch[k]].sdm;
-#pragma omp parallel for num_threads(nthrds) private(j) \
-        schedule(static, 4096)
-        for (j = 0; j < soff[k]; ++j) {
-            if (nsdm & qnm[j]) {
-                continue;
-            }
-            const bi_t g1 = pp[j].gen1;
-            const bi_t g2 = pp[j].gen2;
-            if (pp[j].deg >= 0 && kd[g1] <= pp[j].deg && kd[g2] <= pp[j].deg
-                    && check_monomial_division(pp[j].lcm, nch[k], bht)) {
-                const deg_t ld  = total_degree(bht->ev[pp[j].lcm], bht);
-                if (kt[g1] != ld && kt[g2] != ld) {
-                    pp[j].deg   =   -1;
-                }
-            }
-        }
-    }
+    remove_pairs_by_new_elements(pp, qnm, soff[npivs], soff, 1, npivs, bl,
+            mby, vm, bs, bht, st);
     free(qnm);
 
     /* remove useless pairs from pairset, old ones first, then the new
@@ -722,7 +911,9 @@ static void insert_and_update_spairs(
         }
     }
 
-    st->num_gb_crit +=  pl + np + nfp - psl->ld;
+    /* the pairs with redundant elements count as removed */
+    st->num_gb_crit +=  pl + (uint64_t)npivs * bl
+        + (uint64_t)npivs * (npivs - 1) / 2 + nfp - psl->ld;
 
     bs->ld += npivs;
 
@@ -734,8 +925,13 @@ static void insert_and_update_spairs(
     free(soff);
     free(mby);
     free(pp);
-    free(pdeg);
-    free(ptd);
+    free(cand);
+    free(cvm);
+    free(cmby);
+    free(nkp);
+    free(csdm);
+    free(ctd);
+    free(cev);
 }
 
 static void update_lm(
@@ -808,13 +1004,8 @@ static void update_basis_f4(
     ct0 = cputime();
     rt0 = realtime();
 
-    /* compute number of new pairs we need to handle at most */
-    len_t np  = bs->ld * npivs;
-    for (i = 1; i < npivs; ++i) {
-        np  = np + i;
-    }
-    check_enlarge_pairset(ps, np);
-
+    /* the pairset is enlarged by the number of the remaining new pairs
+     * in insert_and_update_spairs() */
     insert_and_update_spairs(ps, bs, bht, st, npivs);
 
     const bl_t lml          = bs->lml;
