@@ -258,6 +258,13 @@ static inline void display_help(char *str){
   display_option_help_noopt("0  - no.\n");
   display_option_help_noopt("1  - yes, also learning traces over the rationals.\n");
   display_option_help_noopt("2  - as 1, without handing over (for testing).\n");
+  display_option_help(0, "gb-lifting", "GBL", "Lifting of Groebner bases over the rationals\n");
+  display_option_help_noopt("from their images modulo primes.\n");
+  display_option_help_noopt("0 - CRT and rational reconstruction of each\n");
+  display_option_help_noopt("    coefficient (default).\n");
+  display_option_help_noopt("1 - mixed radix digits of the coefficients times\n");
+  display_option_help_noopt("    their common denominator, rational\n");
+  display_option_help_noopt("    reconstruction only for new denominators.\n");
   display_option_help(0, "random-seed", "SEED", "Random seed to initialize the pseudo-random\n");
   display_option_help_noopt("generator.\n");
   display_option_help_noopt("-1       - time(0) will be used (default).\n");
@@ -348,6 +355,7 @@ static void getoptions(
     LEX_OPTION,
     ELIM_DRL_OPTION,
     SIGNATURE_F4_OPTION,
+    GB_LIFTING_OPTION,
     /* Below is the template for the next long option with
      * no equivalent short option */
     /* NEXT_OPTION */
@@ -373,6 +381,7 @@ static void getoptions(
     {"parametrization", required_argument, NULL, 'P'},
     {"random-seed", required_argument, NULL, RANDOM_SEED_OPTION},
     {"signature-f4", required_argument, NULL, SIGNATURE_F4_OPTION},
+    {"gb-lifting", required_argument, NULL, GB_LIFTING_OPTION},
     {"separating-element", required_argument, NULL, SEPARATING_ELEMENT_OPTION},
     {"dense-route", required_argument, NULL, DENSE_ROUTE_OPTION},
     {"split", required_argument, NULL, SPLIT_OPTION},
@@ -581,6 +590,12 @@ static void getoptions(
       neogb_sig_f4 = strtol(optarg, NULL, 10);
       if (neogb_sig_f4 < -1 || neogb_sig_f4 > 2) {
           neogb_sig_f4 = -1;
+      }
+      break;
+    case GB_LIFTING_OPTION:
+      msolve_gb_lifting = strtol(optarg, NULL, 10);
+      if (msolve_gb_lifting < 0 || msolve_gb_lifting > 1) {
+          msolve_gb_lifting = 0;
       }
       break;
     /* Below is the template for the next long option with

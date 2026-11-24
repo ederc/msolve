@@ -35,6 +35,7 @@ checkdiff       = \
 			  test/diff/diff_cyclic5-qq-options.sh \
 			  test/diff/diff_cyclic5-qq-wide.sh \
 			  test/diff/diff_kat7-qq-wide.sh \
+			  test/diff/diff_gb-lifting-qq.sh \
 			  test/diff/diff_eco10-31.sh \
 			  test/diff/diff_eco6-16.sh \
 			  test/diff/diff_eco6-31.sh \

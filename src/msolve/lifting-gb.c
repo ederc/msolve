@@ -27,6 +27,17 @@
 /* witnesses are reconstructed every rr primes, rr being the largest
    power of 2 <= nprimes / RR_PERIOD_DIV */
 #define RR_PERIOD_DIV 128
+
+/* lifting of the polynomials whose witness coefficients are lifted, see
+   the option --gb-lifting: 0 by multi-modular CRT and rational
+   reconstruction of each coefficient, 1 by the mixed radix digits of the
+   coefficients times their common denominator */
+int32_t msolve_gb_lifting = 0;
+/* number of products of the first primes kept by this lifting (their
+   memory grows with the square of their number) */
+#define MR_PRODUCTS 2048
+/* number of primes from which on this lifting uses a product tree */
+#define MR_COMB 256
 #ifndef MIN
 #define MIN(x, y) ((x) > (y) ? (y) : (x))
 #endif
@@ -1266,6 +1277,262 @@ static inline int crt_ratrecon_lift_modgbs(gb_modpoly_t modgbs, data_lift_t dl,
 }
 
 
+/* w * y mod p for w < p < 2^63, mu = shoup_mu(p, w) and any y < 2^64 */
+static inline uint64_t shoup_mulmod(const uint64_t w, const uint64_t mu,
+                                    const uint64_t y, const uint64_t p){
+  uint64_t r = w * y - shoup_mul(mu, y) * p;
+  return r >= p ? r - p : r;
+}
+
+/*
+  Same as crt_ratrecon_lift_modgbs, the coefficients being lifted from
+  their mixed radix digits (Garner's algorithm). The coefficients of a
+  polynomial share their denominator, so with d the denominator found so
+  far, x = c * d is an integer for most coefficients c. Its digits w.r.t.
+  the primes p_0, p_1, ... are computed one after another from the
+  residues of c * d, and x is known as soon as its digits become 0
+  (x >= 0) resp. p_i - 1 (x < 0): lifting c costs as many primes as x has
+  bits, not the product of all primes. At least 60 bits of digits are
+  required to stop, i.e. one digit at a 61-bit prime, two at a 31-bit
+  one. Where x is not found with all primes, i.e. where the denominator
+  of c has a new factor, c * d is lifted by rational reconstruction, which
+  extends d.
+
+  The primes are the ones of mod_p, i.e. all but the learning one and the
+  last one, which is left for the verification of the lifted polynomials.
+ */
+static inline int crt_ratrecon_lift_modgbs_mr(gb_modpoly_t modgbs, data_lift_t dl,
+                                              int32_t start, int32_t end,
+                                              mpz_t mod_p, rrec_data_t rd1,
+                                              double *st_crt, double *st_rrec){
+
+  modpolys_t *polys = modgbs->modpolys;
+  /* the primes of the slots 1, ..., np */
+  const uint32_t np = modgbs->nprimes - 2;
+  const mp_limb_t *pr = modgbs->primes + 1;
+
+  uint32_t maxlen = 0;
+  for(int32_t k = start; k < end; k++){
+    if(dl->check1[k] > 1 && polys[k]->len > maxlen){
+      maxlen = polys[k]->len;
+    }
+  }
+  mpz_t x, P, rden, one;
+  mpz_inits(x, P, rden, one, NULL);
+  mpz_set_ui(one, 1);
+  mpz_set_ui(P, 1);
+  /* pinv[i] is the inverse of p_0 ... p_{i-1} modulo p_i, dmod[i] the
+     residue of d modulo p_i, both with their Shoup pre-inverses in pinvs
+     and dmods */
+  uint64_t *pinv = (uint64_t *)malloc(sizeof(uint64_t) * 4 * (np + 1));
+  uint64_t *pinvs = pinv + np + 1;
+  uint64_t *dmod = pinvs + np + 1;
+  uint64_t *dmods = dmod + np + 1;
+  /* the products p_0 ... p_{i-1} are kept for the first primes */
+  const uint32_t npp = np < MR_PRODUCTS ? np + 1 : MR_PRODUCTS;
+  mpz_t *pp = (mpz_t *)malloc(sizeof(mpz_t) * npp);
+  for(uint32_t i = 0; i < np; i++){
+    if(i < npp){
+      mpz_init_set(pp[i], P);
+    }
+    pinv[i] = mod_p_inverse_64((int64_t)mpz_fdiv_ui(P, pr[i]), (int64_t)pr[i]);
+    pinvs[i] = shoup_mu(pr[i], pinv[i]);
+    mpz_mul_ui(P, P, pr[i]);
+  }
+  if(np < npp){
+    mpz_init_set(pp[np], P);
+  }
+  /* for many primes the quadratic cost of the digits exceeds the one of
+     a product tree */
+  const int comb_init = np >= MR_COMB;
+  uint64_t *res = NULL;
+  fmpz_comb_t comb;
+  fmpz_comb_temp_t comb_temp;
+  fmpz_t y;
+  if(comb_init){
+    res = (uint64_t *)malloc(sizeof(uint64_t) * np);
+    fmpz_comb_init(comb, (mp_limb_t *)pr, np);
+    fmpz_comb_temp_init(comb_temp, comb);
+    fmpz_init(y);
+  }
+  /* the denominators by which the coefficients have been lifted: the
+     coefficient of index l is cf_qq[l] / eden[ep[l]] */
+  uint32_t *ep = (uint32_t *)malloc(sizeof(uint32_t) * (maxlen + 1));
+  uint32_t nealloc = 0;
+  mpz_t *eden = NULL;
+
+  int32_t ret = end;
+  double rt;
+
+  for(int32_t k = start; k < end; k++){
+    if(dl->check1[k] > 1 && polys[k]->len > 0){
+      modpolys_t *pol = polys + k;
+      rt = realtime();
+      /* the lcm of the witness denominators is the first guess */
+      mpz_set(dl->tmp, dl->cden[k]);
+      for(uint32_t i = 0; i < np; i++){
+        dmod[i] = mpz_fdiv_ui(dl->tmp, pr[i]);
+        dmods[i] = shoup_mu(pr[i], dmod[i]);
+      }
+      set_recdata_guess(rd1, mod_p, dl->tmp);
+      uint32_t ne = 0;
+      if(nealloc == 0){
+        eden = (mpz_t *)malloc(sizeof(mpz_t) * 4);
+        for(uint32_t e = 0; e < 4; e++){
+          mpz_init(eden[e]);
+        }
+        nealloc = 4;
+      }
+      mpz_set(eden[ne++], dl->tmp);
+      int ok = 1;
+      for(int32_t l = 0; l < pol[0]->len; l++){
+        uint32_t i = np;
+        if(comb_init){
+          /* x from all primes by a product tree, in balanced form */
+          for(uint32_t j = 0; j < np; j++){
+            const uint64_t c = modgbs->wide ?
+              MODCF64(pol[0], l, j + 1) : (uint64_t)MODCF(pol[0], l, j + 1);
+            res[j] = shoup_mulmod(dmod[j], dmods[j], c, pr[j]);
+          }
+          fmpz_multi_CRT_ui(y, res, comb, comb_temp, 1);
+          fmpz_get_mpz(x, y);
+          if(mpz_cmpabs(x, rd1->N) <= 0){
+            i = 0;
+          }
+        }
+        else{
+          mpz_set_ui(x, 0);
+          /* sign of the run of digits ending x (0: digits 0, 1: digits
+             p_i - 1) and its number of bits */
+          int sgn = -1, bits = 0;
+          for(i = 0; i < np; i++){
+            const uint64_t p = pr[i];
+            const uint64_t c = modgbs->wide ?
+              MODCF64(pol[0], l, i + 1) : (uint64_t)MODCF(pol[0], l, i + 1);
+            const uint64_t r = shoup_mulmod(dmod[i], dmods[i], c, p);
+            const uint64_t xm = mpz_fdiv_ui(x, p);
+            uint64_t v = r >= xm ? r - xm : r + (p - xm);
+            v = shoup_mulmod(pinv[i], pinvs[i], v, p);
+            if(i > 0 && (v == 0 || v == p - 1)){
+              const int s = v != 0;
+              bits = s == sgn ? bits + (p >> 32 ? 61 : 30) : (p >> 32 ? 61 : 30);
+              sgn = s;
+            }
+            else{
+              sgn = -1;
+            }
+            if(i < npp - 1){
+              if(v != 0){
+                mpz_addmul_ui(x, pp[i], v);
+              }
+            }
+            else{
+              if(i == npp - 1){
+                mpz_set(P, pp[i]);
+              }
+              if(v != 0){
+                mpz_addmul_ui(x, P, v);
+              }
+              mpz_mul_ui(P, P, p);
+            }
+            if(sgn >= 0 && bits >= 60){
+              /* the digits from the start of the run on are p_j - 1:
+                 x is the current value minus p_0 ... p_i */
+              if(sgn == 1){
+                mpz_sub(x, x, i < npp - 1 ? pp[i + 1] : P);
+              }
+              break;
+            }
+          }
+        }
+        if(i < np){
+          mpz_swap(pol[0]->cf_qq[l], x);
+          ep[l] = ne - 1;
+          continue;
+        }
+        /* x is the residue of c * d modulo mod_p */
+        double rt2 = realtime();
+        if(!lift_ratreconwden(pol[0]->cf_qq[l], rden, x, mod_p, one, rd1)){
+          *st_rrec += realtime() - rt2;
+          /* the witnesses of this poly are still valid: their common
+             denominator remains the best guess for reconstructing them */
+          mpz_set(dl->gden, dl->cden[k]);
+          for(int32_t i = k; i < modgbs->ld; i++){
+            dl->check2[i] = 0;
+          }
+          ok = 0;
+          break;
+        }
+        if(mpz_cmp_ui(rden, 1)){
+          mpz_mul(dl->tmp, dl->tmp, rden);
+          for(uint32_t i = 0; i < np; i++){
+            dmod[i] = mpz_fdiv_ui(dl->tmp, pr[i]);
+            dmods[i] = shoup_mu(pr[i], dmod[i]);
+          }
+          set_recdata_guess(rd1, mod_p, dl->tmp);
+          if(ne == nealloc){
+            eden = (mpz_t *)realloc(eden, sizeof(mpz_t) * 2 * nealloc);
+            for(uint32_t e = nealloc; e < 2 * nealloc; e++){
+              mpz_init(eden[e]);
+            }
+            nealloc *= 2;
+          }
+          mpz_set(eden[ne++], dl->tmp);
+        }
+        ep[l] = ne - 1;
+        *st_rrec += realtime() - rt2;
+        rt += realtime() - rt2;
+      }
+      *st_crt += realtime() - rt;
+      if(!ok){
+        ret = k;
+        break;
+      }
+      mpz_set(pol[0]->lm, dl->tmp);
+      if(ne > 1){
+        /* numerators w.r.t. the final denominator */
+        for(uint32_t e = 0; e < ne - 1; e++){
+          mpz_divexact(eden[e], dl->tmp, eden[e]);
+        }
+        for(int32_t l = 0; l < pol[0]->len; l++){
+          if(ep[l] < ne - 1){
+            mpz_mul(pol[0]->cf_qq[l], pol[0]->cf_qq[l], eden[ep[l]]);
+          }
+        }
+      }
+      dl->check2[k] += 1;
+    }
+    if(dl->check1[k] < 1 && polys[k]->len > 0){
+      ret = k;
+      break;
+    }
+    if(polys[k]->len == 0){
+        dl->check2[k] += 1;
+    }
+  }
+
+  for(uint32_t e = 0; e < nealloc; e++){
+    mpz_clear(eden[e]);
+  }
+  free(eden);
+  free(ep);
+  if(comb_init){
+    fmpz_clear(y);
+    fmpz_comb_temp_clear(comb_temp);
+    fmpz_comb_clear(comb);
+    free(res);
+  }
+  for(uint32_t i = 0; i < npp; i++){
+    mpz_clear(pp[i]);
+  }
+  free(pp);
+  free(pinv);
+  mpz_clears(x, P, rden, one, NULL);
+
+  return ret;
+}
+
+
 /* returns (coef == num / den mod prime) */
 static inline int verif_coef(mpz_t num, mpz_t den, uint64_t prime, uint64_t coef){
   uint64_t lc = mpz_fdiv_ui(den, prime);
@@ -1477,9 +1744,16 @@ static void ratrecon_gb(gb_modpoly_t modgbs, data_lift_t dl,
   }
   *st_rrec += realtime()-st;
   if(dl->lstart != dl->start){
-    dl->start = crt_ratrecon_lift_modgbs(modgbs, dl, dl->lstart, dl->start,
-                                         mod_p, recdata1, recdata2,
-                                         st_crt, st_rrec);
+    if(msolve_gb_lifting == 1){
+      dl->start = crt_ratrecon_lift_modgbs_mr(modgbs, dl, dl->lstart, dl->start,
+                                              mod_p, recdata1,
+                                              st_crt, st_rrec);
+    }
+    else{
+      dl->start = crt_ratrecon_lift_modgbs(modgbs, dl, dl->lstart, dl->start,
+                                           mod_p, recdata1, recdata2,
+                                           st_crt, st_rrec);
+    }
   }
   dl->lstart = dl->start;
 
