@@ -132,6 +132,44 @@ static inline deg_t gcd_degree(
     return (deg_t)d;
 }
 
+/* total degree of the gcd of two monomials with the exponents of their
+ * variables a and b packed into bytes, padded with zeros to a multiple
+ * nb of 64 bytes, the degree lanes being zero */
+static inline deg_t gcd_degree_8(
+        const uint8_t * const a,
+        const uint8_t * const b,
+        const len_t nb
+        )
+{
+    len_t i;
+#if defined(__AVX512BW__)
+    __m512i s = _mm512_setzero_si512();
+    for (i = 0; i < nb; i += 64) {
+        const __m512i m = _mm512_min_epu8(
+                _mm512_loadu_si512((const void *)(a + i)),
+                _mm512_loadu_si512((const void *)(b + i)));
+        s = _mm512_add_epi64(s, _mm512_sad_epu8(m, _mm512_setzero_si512()));
+    }
+    return (deg_t)_mm512_reduce_add_epi64(s);
+#elif defined(__AVX2__)
+    __m256i s = _mm256_setzero_si256();
+    for (i = 0; i < nb; i += 32) {
+        const __m256i m = _mm256_min_epu8(
+                _mm256_loadu_si256((const __m256i *)(a + i)),
+                _mm256_loadu_si256((const __m256i *)(b + i)));
+        s = _mm256_add_epi64(s, _mm256_sad_epu8(m, _mm256_setzero_si256()));
+    }
+    return (deg_t)(_mm256_extract_epi64(s, 0) + _mm256_extract_epi64(s, 1)
+            + _mm256_extract_epi64(s, 2) + _mm256_extract_epi64(s, 3));
+#else
+    deg_t d = 0;
+    for (i = 0; i < nb; ++i) {
+        d += a[i] < b[i] ? a[i] : b[i];
+    }
+    return d;
+#endif
+}
+
 /* mask of the variables of the monomial with exponents e, folded to 64
  * bits */
 static inline uint64_t variable_mask(
@@ -560,8 +598,31 @@ static void insert_and_update_spairs(
     len_t *cmby   = (len_t *)malloc((uint64_t)ncd * sizeof(len_t));
     /* the number of the remaining new pairs of the k-th new element */
     len_t *nkp    = (len_t *)calloc((uint64_t)npivs, sizeof(len_t));
+    /* where all exponents of the variables are below 256 they are also
+     * stored in bytes for gcd_degree_8(), the degree lanes being zero */
+    exp_t emax = 0;
+    for (i = 0; i < ncd; ++i) {
+        const exp_t * const e = bht->ev[bs->hm[cand[i]][OFFSET]];
+        for (len_t v = 1; v < evl; ++v) {
+            if (v != bht->ebl && e[v] > emax) {
+                emax = e[v];
+            }
+        }
+    }
+    const len_t nb8 = 64 * ((evl + 63) / 64);
+    uint8_t *cev8   = NULL;
+    if (emax < 256 && st->nev == 0) {
+        cev8 = (uint8_t *)calloc((uint64_t)ncd * nb8, sizeof(uint8_t));
+    }
 #pragma omp parallel for num_threads(nthrds) private(i)
     for (i = 0; i < ncd; ++i) {
+        if (cev8 != NULL) {
+            const exp_t * const e = bht->ev[bs->hm[cand[i]][OFFSET]];
+            uint8_t * const c = cev8 + (uint64_t)i * nb8;
+            for (len_t v = 1; v < evl; ++v) {
+                c[v] = v == bht->ebl ? 0 : (uint8_t)e[v];
+            }
+        }
         cmby[i] = i < nlv ? mby[cand[i]]
             : (bs->red[cand[i]] != 0 ? 0 : npivs + 1);
         const hm_t lm = bs->hm[cand[i]][OFFSET];
@@ -623,6 +684,8 @@ static void insert_and_update_spairs(
         len_t l, m, t;
         const uint64_t bvm  = vm[n];
         const deg_t bdeg    = total_degree(eb, bht);
+        const uint8_t * const eb8 = cev8 != NULL
+            ? cev8 + (uint64_t)nc * nb8 : NULL;
         len_t nf = 0;
         len_t c0;
         for (c0 = 0; c0 < nc; c0 += 64) {
@@ -639,7 +702,9 @@ static void insert_and_update_spairs(
             const len_t g = cand[i];
             deg_t ldeg, pdg;
             if (st->nev == 0) {
-                const deg_t gdeg = gcd_degree(cev + (uint64_t)i * evl, eb, bht);
+                const deg_t gdeg = eb8 != NULL
+                    ? gcd_degree_8(cev8 + (uint64_t)i * nb8, eb8, nb8)
+                    : gcd_degree(cev + (uint64_t)i * evl, eb, bht);
                 if (gdeg == 0) {
                     continue;
                 }
@@ -932,6 +997,7 @@ static void insert_and_update_spairs(
     free(csdm);
     free(ctd);
     free(cev);
+    free(cev8);
 }
 
 static void update_lm(
