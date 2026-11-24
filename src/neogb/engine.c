@@ -102,7 +102,8 @@ int initialize_gba_input_data(
     {
         const int sig_run = (st->fc == 0)
             ? (st->use_signatures > 0)
-            : (st->fc > 2 && st->fc < ((uint64_t)1 << 31)
+            : (st->use_signatures != 0
+                && st->fc > 2 && st->fc < ((uint64_t)1 << 31)
                 && !is_gf2_ext(st->fc) && st->mo == 0 && st->nev == 0);
         if (!sig_run) {
             sort_r(bs->hm, (unsigned long)bs->ld, sizeof(hm_t *),

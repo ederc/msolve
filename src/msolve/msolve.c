@@ -2904,7 +2904,8 @@ int msolve_trace_qq(mpz_param_t *mpz_paramp,
   {
       const int sig_run = (gens->field_char == 0)
           ? (use_signatures > 0)
-          : (gens->field_char > 2
+          : (use_signatures != 0
+              && gens->field_char > 2
               && gens->field_char < ((uint64_t)1 << 31)
               && !is_gf2_ext(gens->field_char) && st->mo == 0
               && st->nev == 0);
