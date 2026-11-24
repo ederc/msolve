@@ -292,6 +292,82 @@ static void sg_rec_free(
     free(rec);
 }
 
+/* The lead terms of the rows of the record which gave new elements, in
+ * the basis hash table bht, sorted and without repetitions: these rows
+ * are rows of S-pairs, so their lead terms are the lcms of the S-pairs
+ * the run did not find to reduce to zero. Their number is stored in n. */
+hm_t *sig_record_lead_terms(
+        const void * const recp,
+        ht_t *bht,
+        len_t *n
+        )
+{
+    len_t i, j, r;
+    const sg_rec_t * const rec = (const sg_rec_t *)recp;
+    const len_t evl = bht->evl;
+
+    /* the lead terms of the new elements in the order of the elements */
+    len_t nel = 0, ne = 0, nl = 0, szl = 0;
+    for (r = 0; r < rec->nrd; ++r) {
+        nel += rec->rd[r].nn;
+    }
+    hm_t *elm = (hm_t *)malloc((unsigned long)(nel + 1) * sizeof(hm_t));
+    for (r = 0; r < rec->nrd; ++r) {
+        for (i = 0; i < rec->rd[r].nn; ++i) {
+            elm[ne++] = rec->rd[r].lm[i];
+        }
+    }
+    hm_t *l = NULL;
+    exp_t *e = (exp_t *)malloc((unsigned long)evl * sizeof(exp_t));
+    for (r = 0; r < rec->nrd; ++r) {
+        const sg_rrd_t * const rd = rec->rd + r;
+        for (i = 0; i < rd->n; ++i) {
+            if (rd->kind[i] == 0) {
+                continue;
+            }
+            const len_t src = rd->src[i];
+            hm_t lt;
+            if (src & SG_GEN) {
+                if (rec->gs == NULL) {
+                    continue;
+                }
+                lt = rec->gs[src & ~SG_GEN][1];
+            } else {
+                if (src >= nel) {
+                    continue;
+                }
+                lt = elm[src];
+            }
+            const exp_t * const em = bht->ev[rd->mul[i]];
+            const exp_t * const el = bht->ev[lt];
+            for (j = 0; j < evl; ++j) {
+                e[j] = em[j] + el[j];
+            }
+            if (bht->eld == bht->esz-1) {
+                enlarge_hash_table(bht);
+            }
+            if (nl == szl) {
+                szl = szl > 0 ? 2 * szl : 256;
+                l   = (hm_t *)realloc(l, (unsigned long)szl * sizeof(hm_t));
+            }
+            l[nl++] = insert_in_hash_table(e, bht);
+        }
+    }
+    free(e);
+    free(elm);
+    if (nl > 0) {
+        qsort(l, (unsigned long)nl, sizeof(hm_t), hash_cmp);
+        for (i = 1, j = 1; i < nl; ++i) {
+            if (l[i] != l[j-1]) {
+                l[j++] = l[i];
+            }
+        }
+        nl = j;
+    }
+    *n = nl;
+    return l;
+}
+
 /* a copy of the n entries h[0], ..., h[n-1] led by n */
 static hm_t *sg_copy_terms(
         const hm_t * const h,

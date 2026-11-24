@@ -95,6 +95,14 @@ int64_t export_results_from_f4(
     md_t **stp
     );
 
+/* the lcms of the S-pairs which gave new elements in the signature-based
+ * run of the record recp, see sigf4.c */
+hm_t *sig_record_lead_terms(
+        const void * const recp,
+        ht_t *bht,
+        len_t *n
+        );
+
 /* Computes the Groebner basis of gbs, for an elimination order possibly
  * via a DRL Groebner basis, see md_t->elim_drl. Over the rationals
  * (gmd->fc != fc) the DRL data is kept in gmd for the next primes and

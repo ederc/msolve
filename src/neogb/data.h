@@ -499,6 +499,11 @@ struct md_t
     int32_t mo; /* monomial ordering: 0=DRL, 1=LEX*/
     int32_t laopt;
     int32_t sig_f4;   /* 1 if the signature-based F4 is tried first */
+    /* if not NULL, F4 only selects the S-pairs whose lcms are among the
+     * nglcm hashes of the basis hash table in glcm, sorted, see
+     * select_spairs_by_minimal_degree() */
+    hm_t *glcm;
+    len_t nglcm;
     int32_t init_hts;
     int32_t nthrds;
     int32_t reset_ht;

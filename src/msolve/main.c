@@ -258,6 +258,10 @@ static inline void display_help(char *str){
   display_option_help_noopt("0  - no.\n");
   display_option_help_noopt("1  - yes, also learning traces over the rationals.\n");
   display_option_help_noopt("2  - as 1, without handing over (for testing).\n");
+  display_option_help_noopt("3  - as -1, the traces over the rationals are\n");
+  display_option_help_noopt("     learned by F4 selecting the S-pairs which\n");
+  display_option_help_noopt("     do not reduce to zero in a signature-based\n");
+  display_option_help_noopt("     run.\n");
   display_option_help(0, "gb-lifting", "GBL", "Lifting of Groebner bases over the rationals\n");
   display_option_help_noopt("from their images modulo primes.\n");
   display_option_help_noopt("0 - CRT and rational reconstruction of each\n");
@@ -588,6 +592,10 @@ static void getoptions(
       break;
     case SIGNATURE_F4_OPTION:
       neogb_sig_f4 = strtol(optarg, NULL, 10);
+      if (neogb_sig_f4 == 3) {
+          msolve_guided_learning = 1;
+          neogb_sig_f4 = -1;
+      }
       if (neogb_sig_f4 < -1 || neogb_sig_f4 > 2) {
           neogb_sig_f4 = -1;
       }

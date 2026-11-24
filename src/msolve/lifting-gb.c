@@ -827,6 +827,87 @@ static inline int32_t compute_num_gb(int32_t *bexp_lm, int32_t len, int nv, int 
   return len;
 }
 
+/* whether the traces over the rationals are learned guided by a
+   signature-based run, see the option --signature-f4 3 and
+   guided_trace_learning() */
+int32_t msolve_guided_learning = 0;
+
+/* returns 1 if the reduced Groebner bases a and b over the same prime
+   field, with the same basis hash table, are equal */
+static int same_reduced_basis(const bs_t * const a, const bs_t * const b){
+  if(a->lml != b->lml || a->constant != b->constant){
+    return 0;
+  }
+  for(len_t i = 0; i < a->lml; i++){
+    const hm_t *ha = a->hm[a->lmps[i]];
+    const hm_t *hb = b->hm[b->lmps[i]];
+    const len_t len = ha[LENGTH];
+    if(hb[LENGTH] != len
+       || memcmp(ha + OFFSET, hb + OFFSET, (size_t)len * sizeof(hm_t)) != 0
+       || memcmp(a->cf_32[ha[COEFFS]], b->cf_32[hb[COEFFS]],
+                 (size_t)len * sizeof(cf32_t)) != 0){
+      return 0;
+    }
+  }
+  return 1;
+}
+
+/*
+  Learns the trace modulo fc guided by a signature-based run: the
+  signature-based F4 computes the reduced Groebner basis modulo fc and
+  shows which S-pairs do not reduce to zero, F4 then learns its trace
+  selecting only the S-pairs with the lcms of these, so that it reduces
+  few rows to zero. The rows of F4 are elements of the ideal, so if the
+  basis of F4 is the one of the signature-based run, the trace is the one
+  of a computation of the reduced Groebner basis. Otherwise, or if the
+  signature-based run hands over to F4, the trace is learned by F4 as
+  usual. The trace is applied as any trace learned by F4, which is
+  cheaper than the application of the record of the signature-based run.
+  Where the signature-based run is expensive or the selected S-pairs do
+  not give the basis this costs more than learning the trace by F4, so
+  it is optional.
+ */
+static bs_t *guided_trace_learning(bs_t *bs_qq, md_t *st, const int32_t fc,
+                                   const int info_level, int32_t *errp){
+  neogb_sig_f4 = 1;
+  bs_t *ref = core_gba(bs_qq, st, errp, fc);
+  neogb_sig_f4 = -1;
+  if(*errp == 0 && ref != NULL && (st->tr == NULL || st->tr->sgr == NULL)){
+    /* the signature-based run has handed over to F4, which has learned
+       the trace */
+    return ref;
+  }
+  bs_t *bs = NULL;
+  if(*errp == 0 && ref != NULL && !ref->constant){
+    st->glcm = sig_record_lead_terms(st->tr->sgr, bs_qq->ht, &(st->nglcm));
+    free_trace(&(st->tr));
+    st->trace_level = NO_TRACER;
+    bs = core_gba(bs_qq, st, errp, fc);
+    free(st->glcm);
+    st->glcm  = NULL;
+    st->nglcm = 0;
+    if(*errp == 0 && bs != NULL && same_reduced_basis(bs, ref)){
+      free_basis_without_hash_table(&ref);
+      return bs;
+    }
+  }
+  if(info_level){
+    fprintf(VERBSTREAM, "trace learned without guide\n");
+  }
+  if(bs != NULL){
+    free_basis_without_hash_table(&bs);
+  }
+  if(ref != NULL){
+    free_basis_without_hash_table(&ref);
+  }
+  if(st->tr != NULL){
+    free_trace(&(st->tr));
+  }
+  st->trace_level = NO_TRACER;
+  *errp = 0;
+  return core_gba(bs_qq, st, errp, fc);
+}
+
 static int32_t gb_modular_trace_learning(gb_modpoly_t modgbs,
                                            int32_t *mgb,
                                            int32_t *num_gb,
@@ -848,7 +929,16 @@ static int32_t gb_modular_trace_learning(gb_modpoly_t modgbs,
     bs_t *bs = NULL;
     int32_t err     = 0;
     st->f4_qq_round = 1;
-    bs = core_gba(bs_qq, st, &err, fc);
+    if (msolve_guided_learning && neogb_sig_f4 < 0
+        && st->trace_level == NO_TRACER
+        && st->laopt < 40 && st->reduce_gb == 1 && st->nev == 0
+        && st->mo == 0 && !bs_qq->ht->boolean
+        && fc > ((uint32_t)1 << 16) && fc < ((uint32_t)1 << 31)){
+      bs = guided_trace_learning(bs_qq, st, fc, info_level, &err);
+    }
+    else{
+      bs = core_gba(bs_qq, st, &err, fc);
+    }
     if (err) {
       fprintf(ERRSTREAM,"Problem with F4, stopped computation.\n");
       exit(1);

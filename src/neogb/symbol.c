@@ -193,6 +193,16 @@ static void select_all_spairs(
 }
 #endif
 
+static int hash_cmp(
+        const void *a,
+        const void *b
+        )
+{
+    const hm_t x = *(const hm_t *)a;
+    const hm_t y = *(const hm_t *)b;
+    return (x > y) - (x < y);
+}
+
 /* selection of spairs, at the moment only selection
 by minial degree of the spairs is supported
 
@@ -272,6 +282,26 @@ static int32_t select_spairs_by_minimal_degree(
         }
     }
     npd  = i;
+    if (md->glcm != NULL) {
+        /* only the pairs with the lcms given are kept, the others are
+         * removed from the pair set */
+        for (i = 0, j = 0; i < npd; ++i) {
+            const hm_t * const g = bsearch(&(ps[i].lcm), md->glcm,
+                    (unsigned long)md->nglcm, sizeof(hm_t), hash_cmp);
+            if (g != NULL) {
+                ps[j++] = ps[i];
+            }
+        }
+        memmove(ps+j, ps+npd, (unsigned long)(psl->ld-npd) * sizeof(spair_t));
+        psl->ld -= npd - j;
+        npd      = j;
+        if (npd == 0) {
+            if (psl->ld == 0) {
+                return 1;
+            }
+            return select_spairs_by_minimal_degree(mat, bs, md);
+        }
+    }
     /* printf("npd %d\n", npd); */
     /* sort_r(ps, (unsigned long)npd, sizeof(spair_t), spair_cmp, bht); */
     /* now do maximal selection if it applies */
