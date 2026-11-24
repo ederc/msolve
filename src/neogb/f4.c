@@ -1096,6 +1096,123 @@ static void finalize_f4(
     free_local_data(matp, lmdp);
 }
 
+/* Proves that the reduced basis bs computed with probabilistic linear
+ * algebra is a Groebner basis of the ideal of the input generators gens:
+ * all rows of the computation, also the random combinations, are linear
+ * combinations of elements of the ideal, so bs lies in the ideal. It
+ * generates the ideal if each generator reduces to zero modulo bs, and it
+ * is a Groebner basis if all S-pairs of its elements which are not removed
+ * by the criteria of Buchberger and of Gebauer and Moeller reduce to zero
+ * (gebauer-1988). Both is checked with exact linear algebra. Returns 1 if
+ * bs is proven to be the reduced Groebner basis, 0 otherwise. */
+static int verify_basis(
+        bs_t *bs,
+        mat_t *mat,
+        md_t *md,
+        bs_t *gens
+        )
+{
+    len_t i;
+    int ok = 1;
+    ht_t *bht = bs->ht;
+    ht_t *sht = md->ht;
+    const int32_t il = md->info_level;
+    const double rt = realtime();
+    md->info_level = 0;
+
+    /* the generators reduce to zero modulo bs */
+    clean_hash_table(sht);
+    exp_t *mul = (exp_t *)calloc((unsigned long)bht->evl, sizeof(exp_t));
+    md->nf = 1;
+    select_tbr(gens, mul, 0, mat, md, sht, bht, NULL);
+    free(mul);
+    symbolic_preprocessing(mat, bs, md);
+    convert_hashes_to_columns(mat, md, sht);
+    sort_matrix_rows_decreasing(mat->rr, mat->nru);
+    exact_linear_algebra(mat, gens, bs, md);
+    for (i = 0; i < mat->np; ++i) {
+        if (mat->tr[i] != NULL) {
+            ok = 0;
+        }
+    }
+    free_new_matrix_rows(mat, md);
+    md->nf = 0;
+    clean_hash_table(sht);
+    clear_matrix(mat);
+
+    /* the S-pairs of the elements of bs reduce to zero: the elements are
+     * added to an empty basis as new elements of a round, which applies
+     * the criteria, and the pairs are reduced degree by degree; any new
+     * pivot disproves the basis */
+    if (ok) {
+        const len_t n = bs->ld;
+        memset(bs->red, 0, (unsigned long)n * sizeof(int8_t));
+        bs->ld      = 0;
+        bs->lo      = 0;
+        bs->lml     = 0;
+        bs->mltdeg  = 0;
+        md->ps->ld  = 0;
+        md->np      = n;
+        update(bs, md);
+        while (ok && md->ps->ld > 0) {
+            if (select_spairs_by_minimal_degree(mat, bs, md)) {
+                break;
+            }
+            symbolic_preprocessing(mat, bs, md);
+            if (mat->nc > 0) {
+                convert_hashes_to_columns(mat, md, sht);
+                sort_matrix_rows_decreasing(mat->rr, mat->nru);
+                exact_linear_algebra(mat, bs, bs, md);
+                ok = mat->np == 0;
+                free_new_matrix_rows(mat, md);
+            }
+            clean_hash_table(sht);
+            clear_matrix(mat);
+        }
+    }
+    md->info_level = il;
+    if (md->info_level > 1) {
+        fprintf(VERBSTREAM, "verification of the basis %s %.2f sec\n",
+                ok ? "passed" : "failed", realtime() - rt);
+    }
+    return ok;
+}
+
+/* the input generators of gbs as a basis of their own with the same hash
+ * table, for verify_basis() and for computing the basis again */
+static bs_t *copy_input_generators(
+        const bs_t * const gbs,
+        md_t *md
+        )
+{
+    len_t i;
+    const len_t ng = (len_t)md->ngens;
+    hm_t **h;
+    void **c;
+    copy_generators(&h, &c, gbs, ng, md);
+    bs_t *gens = initialize_basis(md, gbs->ht);
+    check_enlarge_basis(gens, ng, md);
+    for (i = 0; i < ng; ++i) {
+        h[i][COEFFS]  = i;
+        gens->hm[i]   = h[i];
+        switch (md->ff_bits) {
+            case 8:
+                gens->cf_8[i] = (cf8_t *)c[i];
+                break;
+            case 16:
+                gens->cf_16[i] = (cf16_t *)c[i];
+                break;
+            default:
+                gens->cf_32[i] = (cf32_t *)c[i];
+                break;
+        }
+    }
+    gens->ld = ng;
+    free(h);
+    free(c);
+    return gens;
+}
+
 static bs_t *run_f4(
         bs_t *gbs,
         md_t *gmd,
@@ -1118,6 +1235,23 @@ static bs_t *run_f4(
 
     /* reset error */
     *errp = 0;
+
+    /* with linear algebra option 45 the basis computed with probabilistic
+     * linear algebra over a prime field is proven, the input generators
+     * are kept for this; where the proof is not available, the basis is
+     * computed with exact linear algebra */
+    bs_t *gens = NULL;
+    if (gmd->laopt == 45) {
+        if (gmd->fc == fc && gmd->trace_level == NO_TRACER && gmd->nev == 0
+                && gmd->mo == 0 && gmd->reduce_gb == 1
+                && (gmd->ff_bits == 16 || gmd->ff_bits == 32)
+                && !gbs->ht->boolean) {
+            gens = copy_input_generators(gbs, gmd);
+        } else {
+            gmd->laopt = 2;
+        }
+    }
+
     done = initialize_f4(&bs, &md, &mat, gmd, gbs, fc, errp);
 
 
@@ -1155,6 +1289,20 @@ static bs_t *run_f4(
 
         /* reduce final basis? */
         reduce_final_basis(bs, mat, md);
+
+        if (gens != NULL) {
+            if (!bs->constant && !verify_basis(bs, mat, md, gens)) {
+                /* compute the basis again with exact linear algebra */
+                if (md->info_level > 0) {
+                    fprintf(VERBSTREAM, "computing the basis again with exact linear algebra\n");
+                }
+                free_basis_without_hash_table(&bs);
+                finalize_f4(gmd, gbs, &bs, &md, &mat, 0);
+                gmd->laopt = 2;
+                return core_f4(gens, gmd, errp, fc);
+            }
+            free_basis_without_hash_table(&gens);
+        }
 
         md->f4_rtime = realtime() - rt;
         md->f4_ctime = cputime() - ct;

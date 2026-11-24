@@ -215,6 +215,11 @@ static inline void display_help(char *str){
   display_option_help_noopt("42 - sparse / dense linearization\n");
   display_option_help_noopt("     (probabilistic).\n");
   display_option_help_noopt("44 - sparse linearization (probabilistic).\n");
+  display_option_help_noopt("45 - as 44 over prime fields, then the basis is\n");
+  display_option_help_noopt("     proven exactly, computed again with 2 if the\n");
+  display_option_help_noopt("     proof fails; the result is exact. Faster where\n");
+  display_option_help_noopt("     many rows reduce to zero, else up to several\n");
+  display_option_help_noopt("     times slower. As 2 over QQ.\n");
   display_option_help('L', "lifting-mulmat", "LIF", "Controls lifting of multiplication matrices over\n");
   display_option_help_noopt("the rationals.\n");
   display_option_help_noopt("0 - no lifting (default).\n");
@@ -801,6 +806,10 @@ int main(int argc, char **argv){
     gens->hensel_cost_scale = hensel_cost_scale;
     gens->hensel_memory = hensel_memory;
 
+    if(field_char == 0 && la_option == 45){
+        /* the basis is only proven over prime fields */
+        la_option = 2;
+    }
     if(0 < field_char && field_char < pow(2, 15) && la_option > 2){
         if(info_level){
             fprintf(ERRSTREAM, "Warning: characteristic is too low for choosing \nprobabilistic linear algebra\n");
