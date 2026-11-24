@@ -24,6 +24,10 @@
 #include <time.h>
 #include "data.h"
 
+#if defined(__BMI2__)
+#include <immintrin.h>
+#endif
+
 /* cpu time */
 double cputime(
     void
@@ -203,6 +207,23 @@ static inline uint64_t shoup_mul(
     return (uint64_t)(((unsigned __int128)mu * y) >> 64);
 }
 
+/* the high word of mu * y; the BMI2 mulx instruction computes it in one
+ * step without tying the mul accumulator pair, which measurably shortens
+ * the dependency chain of the dense row subtraction below */
+static inline uint64_t mulx_hi(
+        const uint64_t mu,
+        const uint64_t y
+        )
+{
+#if defined(__BMI2__)
+    unsigned long long hi;
+    _mulx_u64(mu, y, &hi);
+    return (uint64_t)hi;
+#else
+    return shoup_mul(mu, y);
+#endif
+}
+
 /* subtracts v times the pivot row (pr, pf) of length pl, but its lead
  * entry, from the dense row dr; pf holds the pivot coefficients. The
  * Shoup pre-inverse psi = floor(v * 2^64 / p) of the multiplier v < p
@@ -224,7 +245,7 @@ static inline void sg_sub_row_64(
     const uint64_t twice = 2 * p;
     const uint64_t psi   = shoup_mu(p, v);
     for (j = 1; j < pl; ++j) {
-        const uint64_t q = shoup_mul(psi, pf[j]);
+        const uint64_t q = mulx_hi(psi, pf[j]);
         const uint64_t d = v * pf[j] - q * p; /* in [0, 2p) */
         const uint64_t e = dr[pr[j]];
         /* e - d plus 2p on borrow: the borrow generates the correction
