@@ -439,6 +439,26 @@ static inline void ob_u64(
     ob_put(o, t + i, (size_t)(20 - i));
 }
 
+/* the decimal digits of v, with a minus sign where v is negative */
+static inline void ob_mpz(
+        obuf_t *o,
+        const mpz_t v
+        )
+{
+    /* mpz_get_str() writes at most the digits, the sign and the
+     * terminating null character */
+    const size_t len = mpz_sizeinbase(v, 10) + 2;
+    if (o->n + len > o->sz) {
+        ob_flush(o);
+        if (len > o->sz) {
+            mpz_out_str(o->f, 10, v);
+            return;
+        }
+    }
+    mpz_get_str(o->b + o->n, 10, v);
+    o->n += strlen(o->b + o->n);
+}
+
 /* the hexadecimal digits of v after 0x */
 static inline void ob_hex(
         obuf_t *o,

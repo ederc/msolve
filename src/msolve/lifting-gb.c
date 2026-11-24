@@ -442,82 +442,56 @@ static inline void display_modpoly(FILE *file,
   }
   len_t len = modgbs->modpolys[pos]->len + 1;
   /* once lifted, all coefficients are integers (common denominator is
-   * stored in lm), cf_qq[i] is the coefficient of index i */
+   * stored in lm), cf_qq[i] is the coefficient of index i; the terms are
+   * written through a buffer */
   mpz_t *cf = modgbs->modpolys[pos]->cf_qq;
-  for(i = modgbs->modpolys[pos]->len-1; i > 0 ; i--){
-    if(mpz_cmp_ui(cf[i], 0)>0){
-      fprintf(file, "+");
+  obuf_t ob = {file, (char *)malloc(1 << 16), 0, 1 << 16};
+  for(i = modgbs->modpolys[pos]->len; i > 0 ; i--){
+    const len_t c = i - 1;
+    const int sg = mpz_sgn(cf[c]);
+    const exp_t * const e = ht->ev[hm[len-i]];
+    int deg = 0;
+    for (k = 0; k < nv; ++k) {
+      deg += e[evi[k]];
     }
+    if(sg > 0){
+      ob_char(&ob, '+');
+    }
+    if(c == 0 && deg == 0){
+      /* the constant term */
+      ob_mpz(&ob, cf[c]);
+      continue;
+    }
+    const int one = mpz_cmpabs_ui(cf[c], 1) == 0;
     //coef is -1
-    if(mpz_cmp_si(cf[i], -1) == 0){
-        fprintf(file, "-");
+    if(one && sg < 0){
+      ob_char(&ob, '-');
     }
-    int star = 0;
     //coef is neither 1 nor -1
-    if(mpz_cmp_ui(cf[i], 1) != 0 && mpz_cmp_si(cf[i], -1) != 0){
-        mpz_out_str_10(file, cf[i]);
-        fprintf(file, "*");
+    if(!one){
+      ob_mpz(&ob, cf[c]);
+      ob_char(&ob, '*');
     }
-    if(mpz_cmp_ui(cf[i], 0) != 0){
+    if(sg != 0){
+      int star = 0;
       for (k = 0; k < nv; ++k) {
-         if (ht->ev[hm[len-i-1]][evi[k]] == 1) {
-            if(star == 1){
-                fprintf(file, "*");
-            }
-            fprintf(file, "%s",gens->vnames[k]);
-            star = 1;
-         }
-         if (ht->ev[hm[len-i-1]][evi[k]] > 1) {
-            if(star == 1){
-                fprintf(file, "*");
-            }
-            fprintf(file, "%s^%u",gens->vnames[k], ht->ev[hm[len-i-1]][evi[k]]);
-            star = 1;
-         }
-     }
-    }
-    fflush(file);
-  }
-  if(mpz_cmp_ui(cf[0], 0) > 0){
-    fprintf(file, "+");
-  }
-  int deg = 0;
-  for (k = 0; k < nv; ++k) {
-     deg += ht->ev[hm[len-1]][evi[k]];
-  }
-  if(deg == 0){
-    mpz_out_str_10(file, cf[0]);
-  }
-  else{
-    if(mpz_cmp_si(cf[0], -1) == 0){
-        fprintf(file, "-");
-    }
-    int star = 0;
-    //coef is neither 1 nor -1
-    if(mpz_cmp_ui(cf[0], 1) != 0 && mpz_cmp_si(cf[0], -1) != 0){
-        mpz_out_str_10(file, cf[0]);
-        fprintf(file, "*");
-    }
-    fflush(file);
-    if(mpz_cmp_ui(cf[0], 0) != 0){
-      for (k = 0; k < nv; ++k) {
-         if (ht->ev[hm[len-1]][evi[k]] == 1) {
-            if(star == 1){
-                fprintf(file, "*");
-            }
-            fprintf(file, "%s",gens->vnames[k]);
-            star = 1;
-         }
-         if (ht->ev[hm[len-1]][evi[k]] > 1) {
-            if(star == 1){
-                fprintf(file, "*");
-            }
-            fprintf(file, "%s^%u",gens->vnames[k], ht->ev[hm[len-1]][evi[k]]);
-            star = 1;
-         }
-     }
+        if (e[evi[k]] == 0) {
+          continue;
+        }
+        if(star == 1){
+          ob_char(&ob, '*');
+        }
+        ob_put(&ob, gens->vnames[k], strlen(gens->vnames[k]));
+        if (e[evi[k]] > 1) {
+          ob_char(&ob, '^');
+          ob_u64(&ob, e[evi[k]]);
+        }
+        star = 1;
+      }
     }
   }
+  ob_flush(&ob);
+  free(ob.b);
 
   free(evi);
 }
