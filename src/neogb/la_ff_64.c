@@ -995,10 +995,8 @@ static len_t reduce_dense_row_by_known_pivots_ff_64(
     const len_t ncl   = mat->ncl;
     cf64_t * const * const mcf  = mat->cf_64;
 
-    for (i = dpiv; i < ncols; ++i) {
-        if (dr[i] == 0) {
-            continue;
-        }
+    for (i = next_nonzero_column(dr, dpiv, ncols); i < ncols;
+            i = next_nonzero_column(dr, i+1, ncols)) {
         if (pivs[i] == NULL) {
             k++;
             continue;
@@ -1034,12 +1032,11 @@ static hm_t *dense_row_to_sparse_row_ff_64(
     hm_t *row   = (hm_t *)malloc((uint64_t)(k+OFFSET) * sizeof(hm_t));
     cf64_t *cf  = (cf64_t *)malloc((uint64_t)(k) * sizeof(cf64_t));
     hm_t *rs    = row + OFFSET;
-    for (i = mat->ncl; i < ncols; ++i) {
-        if (dr[i] != 0) {
-            rs[j] = (hm_t)i;
-            cf[j] = (cf64_t)dr[i];
-            j++;
-        }
+    for (i = next_nonzero_column(dr, mat->ncl, ncols); i < ncols;
+            i = next_nonzero_column(dr, i+1, ncols)) {
+        rs[j] = (hm_t)i;
+        cf[j] = (cf64_t)dr[i];
+        j++;
     }
     row[BINDEX]   = bi;
     row[MULT]     = mh;
@@ -1120,10 +1117,8 @@ static cf64_t *reduce_dense_row_by_dense_new_pivots_ff_64(
     len_t np  = -1;
     const ff64_t f  = ff64_init(fc);
 
-    for (i = *pc; i < ncr; ++i) {
-        if (dr[i] == 0) {
-            continue;
-        }
+    for (i = next_nonzero_column(dr, *pc, ncr); i < ncr;
+            i = next_nonzero_column(dr, i+1, ncr)) {
         if (pivs[i] == NULL) {
             if (np == (len_t)-1) {
                 np  = i;
@@ -1169,8 +1164,9 @@ static cf64_t *reduce_dense_row_by_all_pivots_ff_64(
     const ff64_t f    = ff64_init(fc);
 
     /* step 1: reduce by sparse known pivots */
-    for (i = *pc; i < ncl; ++i) {
-        if (dr[i] == 0 || pivs[i] == NULL) {
+    for (i = next_nonzero_column(dr, *pc, ncl); i < ncl;
+            i = next_nonzero_column(dr, i+1, ncl)) {
+        if (pivs[i] == NULL) {
             continue;
         }
         ff64_submul_sparse(dr, pivs[i]+OFFSET, bs->cf_64[pivs[i][COEFFS]],

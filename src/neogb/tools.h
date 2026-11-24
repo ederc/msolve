@@ -24,7 +24,7 @@
 #include <time.h>
 #include "data.h"
 
-#if defined(__BMI2__)
+#if defined(__BMI2__) || defined(__AVX2__) || defined(__AVX512F__)
 #include <immintrin.h>
 #endif
 
@@ -100,6 +100,42 @@ static inline uint16_t mod_p_inverse_16(
  * m = barrett_multiplier(p) = floor((2^64-1) / p). The quotient estimate
  * is at most one too small, so one correction step suffices. This is
  * much cheaper than a 64 bit division in the linear algebra kernels. */
+/* the first column i >= from with dr[i] != 0, or to if there is none;
+ * the dense rows of the linear algebra are mostly zero, so the blocks of
+ * zero entries are skipped with SIMD compares */
+static inline uint32_t next_nonzero_column(
+        const int64_t * const dr,
+        uint32_t from,
+        const uint32_t to
+        )
+{
+#if defined(__AVX512F__)
+    while (from + 8 <= to) {
+        const __mmask8 m = _mm512_test_epi64_mask(
+                _mm512_loadu_si512((const void *)(dr + from)),
+                _mm512_set1_epi64(-1));
+        if (m != 0) {
+            return from + (uint32_t)__builtin_ctz((unsigned)m);
+        }
+        from += 8;
+    }
+#elif defined(__AVX2__)
+    while (from + 4 <= to) {
+        const __m256i v = _mm256_loadu_si256((const __m256i *)(dr + from));
+        const int m = _mm256_movemask_pd(_mm256_castsi256_pd(
+                    _mm256_cmpeq_epi64(v, _mm256_setzero_si256())));
+        if (m != 0xF) {
+            return from + (uint32_t)__builtin_ctz((unsigned)(~m & 0xF));
+        }
+        from += 4;
+    }
+#endif
+    while (from < to && dr[from] == 0) {
+        from++;
+    }
+    return from;
+}
+
 static inline uint64_t barrett_multiplier(
         const uint64_t p
         )

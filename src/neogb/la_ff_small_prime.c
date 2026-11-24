@@ -78,10 +78,9 @@ static hm_t *LA_SMALL(trace_reduce_dense_row_by_known_pivots_sparse)(
     LA_CF_T * const * const mcf  = mat->LA_CF;
 
     k = 0;
-    for (i = dpiv; i < ncols; ++i) {
-        if (dr[i] != 0) {
-            dr[i] = (int64_t)barrett_reduce((uint64_t)dr[i], mod, bm);
-        }
+    for (i = next_nonzero_column(dr, dpiv, ncols); i < ncols;
+            i = next_nonzero_column(dr, i+1, ncols)) {
+        dr[i] = (int64_t)barrett_reduce((uint64_t)dr[i], mod, bm);
         if (dr[i] == 0) {
             continue;
         }
@@ -131,12 +130,11 @@ static hm_t *LA_SMALL(trace_reduce_dense_row_by_known_pivots_sparse)(
     LA_CF_T *cf  = (LA_CF_T *)malloc((uint64_t)(k) * sizeof(LA_CF_T));
     j = 0;
     hm_t *rs = row + OFFSET;
-    for (i = ncl; i < ncols; ++i) {
-        if (dr[i] != 0) {
-            rs[j] = (hm_t)i;
-            cf[j] = (LA_CF_T)dr[i];
-            j++;
-        }
+    for (i = next_nonzero_column(dr, ncl, ncols); i < ncols;
+            i = next_nonzero_column(dr, i+1, ncols)) {
+        rs[j] = (hm_t)i;
+        cf[j] = (LA_CF_T)dr[i];
+        j++;
     }
     row[BINDEX]   = bi;
     row[MULT]     = mh;
@@ -168,10 +166,9 @@ static LA_CF_T *LA_SMALL(reduce_dense_row_by_all_pivots)(
     const len_t ncols = mat->nc;
 
     /* step 1: reduce by sparse known pivots */
-    for (i = *pc; i < ncl; ++i) {
-        if (dr[i] != 0) {
-            dr[i] = (int64_t)barrett_reduce((uint64_t)dr[i], mod, bm);
-        }
+    for (i = next_nonzero_column(dr, *pc, ncl); i < ncl;
+            i = next_nonzero_column(dr, i+1, ncl)) {
+        dr[i] = (int64_t)barrett_reduce((uint64_t)dr[i], mod, bm);
         if (dr[i] == 0) {
             continue;
         }
@@ -198,10 +195,9 @@ static LA_CF_T *LA_SMALL(reduce_dense_row_by_all_pivots)(
     }
     k = 0;
     /* step 2: reduce by new dense pivots */
-    for (i = ncl; i < ncols; ++i) {
-        if (dr[i] != 0) {
-            dr[i] = (int64_t)barrett_reduce((uint64_t)dr[i], mod, bm);
-        }
+    for (i = next_nonzero_column(dr, ncl, ncols); i < ncols;
+            i = next_nonzero_column(dr, i+1, ncols)) {
+        dr[i] = (int64_t)barrett_reduce((uint64_t)dr[i], mod, bm);
         if (dr[i] == 0) {
             continue;
         }
@@ -232,10 +228,9 @@ static LA_CF_T *LA_SMALL(reduce_dense_row_by_all_pivots)(
     }
 
     LA_CF_T *row = (LA_CF_T *)calloc((uint64_t)(ncols-np), sizeof(LA_CF_T));
-    for (i = np; i < ncols; ++i) {
-        if (dr[i] != 0) {
-            dr[i] = (int64_t)barrett_reduce((uint64_t)dr[i], mod, bm);
-        }
+    for (i = next_nonzero_column(dr, np, ncols); i < ncols;
+            i = next_nonzero_column(dr, i+1, ncols)) {
+        dr[i] = (int64_t)barrett_reduce((uint64_t)dr[i], mod, bm);
         row[i-np]  = (LA_CF_T)dr[i];
     }
     if (row[0] != 1) {
@@ -449,10 +444,9 @@ static LA_CF_T *LA_SMALL(reduce_dense_row_by_dense_new_pivots)(
     }
 
     LA_CF_T *row = (LA_CF_T *)calloc((uint64_t)(ncr-np), sizeof(LA_CF_T));
-    for (i = np; i < ncr; ++i) {
-        if (dr[i] != 0) {
-            dr[i] = (int64_t)barrett_reduce((uint64_t)dr[i], mod, bm);
-        }
+    for (i = next_nonzero_column(dr, np, ncr); i < ncr;
+            i = next_nonzero_column(dr, i+1, ncr)) {
+        dr[i] = (int64_t)barrett_reduce((uint64_t)dr[i], mod, bm);
         row[i-np]  = (LA_CF_T)dr[i];
     }
     if (row[0] != 1) {

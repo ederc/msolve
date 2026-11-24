@@ -149,10 +149,9 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_ff_8(
 #endif
 
     k = 0;
-    for (i = dpiv; i < ncols; ++i) {
-        if (dr[i] != 0) {
-            dr[i] = (int64_t)barrett_reduce((uint64_t)dr[i], mod, bm);
-        }
+    for (i = next_nonzero_column(dr, dpiv, ncols); i < ncols;
+            i = next_nonzero_column(dr, i+1, ncols)) {
+        dr[i] = (int64_t)barrett_reduce((uint64_t)dr[i], mod, bm);
         if (dr[i] == 0) {
             continue;
         }
@@ -545,12 +544,11 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_ff_8(
     cf8_t *cf  = (cf8_t *)malloc((uint64_t)(k) * sizeof(cf8_t));
     j = 0;
     hm_t *rs = row + OFFSET;
-    for (i = ncl; i < ncols; ++i) {
-        if (dr[i] != 0) {
-            rs[j] = (hm_t)i;
-            cf[j] = (cf8_t)dr[i];
-            j++;
-        }
+    for (i = next_nonzero_column(dr, ncl, ncols); i < ncols;
+            i = next_nonzero_column(dr, i+1, ncols)) {
+        rs[j] = (hm_t)i;
+        cf[j] = (cf8_t)dr[i];
+        j++;
     }
     row[BINDEX]   = bi;
     row[MULT]     = mh;
