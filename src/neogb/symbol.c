@@ -541,89 +541,61 @@ static void select_tbr(
 }
 
 
-/* returns the position of the reducer of the monomial m in bs->lmps
- * plus one, 0 if m is not divisible by any lead term of bs. Among all
- * divisors we choose the one of shortest length, the newest one among the
- * shortest ones: this leads to sparser matrices.
- * Does not change any data, so it can be called in parallel. */
-/* Index for finding reducers: the positions of the lead monomials of
- * the basis sorted by their short divisor masks, together with a binary
- * trie on the sorted masks. Each node of the trie stores the bits which
- * all masks of its range have in common, so the lead monomials whose
- * masks are contained in the mask of a given monomial can be found
- * without checking all lead monomials. */
+/* Index for finding reducers: the lead monomials of the basis sorted by
+ * increasing length of their elements and, for equal lengths, from the
+ * newest element to the oldest one. Among all divisors of a monomial we
+ * choose the one of shortest length, the newest one among the shortest
+ * ones: this leads to sparser matrices. In the order of the index this is
+ * the first divisor, so the search stops there. The lead monomials are
+ * filtered by their short divisor masks and by the masks of their
+ * variables in blocks before their exponents are compared. */
 typedef struct
 {
-    sdm_t cm;     /* bits all masks in this node have in common */
-    len_t lo;     /* range of sorted masks of this node */
-    len_t hi;
-    len_t c0;     /* children, 0 for leaves */
-    len_t c1;
-} red_node_t;
-
-typedef struct
-{
-    sdm_t *sdm;         /* sorted masks */
+    sdm_t *sdm;         /* short divisor masks */
+    uint64_t *vm;       /* masks of the variables, folded to 64 bits */
     len_t *pos;         /* positions of the lead monomials in bs->lm */
-    len_t *len;         /* lengths of the corresponding basis elements */
     exp_t *ev;          /* exponent vectors of the lead monomials */
-    red_node_t *nd;     /* nodes of the trie, nd[0] is the root */
-    len_t nnd;
-    len_t snd;
+    len_t n;
+    len_t evl;
+    len_t ebl;
 } red_idx_t;
 
-#define RED_IDX_LEAF 32
+/* mask of the variables of the monomial with exponents e, the variable
+ * of index i, i.e. exponent e[i], gives bit (i-1) mod 64 */
+static inline uint64_t reducer_variable_mask(
+        const exp_t * const e,
+        const len_t evl,
+        const len_t ebl
+        )
+{
+    len_t i;
+    uint64_t m = 0;
+    for (i = 1; i < evl; ++i) {
+        if (e[i] != 0 && i != ebl) {
+            m |= (uint64_t)1 << ((i - 1) & 63);
+        }
+    }
+    return m;
+}
 
-static int cmp_uint64(
+typedef struct
+{
+    len_t len;
+    bl_t idx;
+    len_t pos;
+} red_key_t;
+
+static int red_key_cmp(
         const void *a,
         const void *b
         )
 {
-    const uint64_t x = *((const uint64_t *)a);
-    const uint64_t y = *((const uint64_t *)b);
-    return x < y ? -1 : (x > y);
-}
-
-/* adds the node for the range lo,...,hi-1 of sorted masks and its
- * subtree, returns the index of the node */
-static len_t add_reducer_index_node(
-        red_idx_t *ri,
-        const len_t lo,
-        const len_t hi
-        )
-{
-    len_t i;
-
-    if (ri->nnd == ri->snd) {
-        ri->snd = 2 * ri->snd;
-        ri->nd  = realloc(ri->nd, (unsigned long)ri->snd * sizeof(red_node_t));
+    const red_key_t *x = (const red_key_t *)a;
+    const red_key_t *y = (const red_key_t *)b;
+    if (x->len != y->len) {
+        return x->len < y->len ? -1 : 1;
     }
-    const len_t n = ri->nnd++;
-    sdm_t cm = ri->sdm[lo];
-    for (i = lo+1; i < hi; ++i) {
-        cm &= ri->sdm[i];
-    }
-    ri->nd[n].cm  = cm;
-    ri->nd[n].lo  = lo;
-    ri->nd[n].hi  = hi;
-    ri->nd[n].c0  = 0;
-    ri->nd[n].c1  = 0;
-    /* the masks are sorted, so the first and the last mask differ in
-     * the highest bit in which any two masks of the range differ */
-    const sdm_t d = ri->sdm[lo] ^ ri->sdm[hi-1];
-    if (hi - lo <= RED_IDX_LEAF || d == 0) {
-        return n;
-    }
-    const sdm_t b = (sdm_t)1 << (8*sizeof(sdm_t) - 1 - __builtin_clz(d));
-    len_t m = lo;
-    while (!(ri->sdm[m] & b)) {
-        m++;
-    }
-    const len_t c0  = add_reducer_index_node(ri, lo, m);
-    const len_t c1  = add_reducer_index_node(ri, m, hi);
-    ri->nd[n].c0    = c0;
-    ri->nd[n].c1    = c1;
-    return n;
+    return x->idx > y->idx ? -1 : (x->idx < y->idx);
 }
 
 static void initialize_reducer_index(
@@ -633,35 +605,32 @@ static void initialize_reducer_index(
 {
     len_t i;
 
-    const len_t n = bs->lml;
-    ri->sdm = (sdm_t *)malloc((unsigned long)n * sizeof(sdm_t));
-    ri->pos = (len_t *)malloc((unsigned long)n * sizeof(len_t));
-    ri->len = NULL;
-    ri->ev  = NULL;
-    ri->nnd = 0;
-    ri->snd = 64;
-    ri->nd  = (red_node_t *)malloc((unsigned long)ri->snd * sizeof(red_node_t));
-    if (n == 0) {
-        return;
-    }
-    uint64_t *tmp = (uint64_t *)malloc((unsigned long)n * sizeof(uint64_t));
-    for (i = 0; i < n; ++i) {
-        tmp[i] = ((uint64_t)bs->lm[i] << 32) | i;
-    }
-    qsort(tmp, (unsigned long)n, sizeof(uint64_t), cmp_uint64);
+    const len_t n   = bs->lml;
     const len_t evl = bs->ht->evl;
-    ri->len = (len_t *)malloc((unsigned long)n * sizeof(len_t));
-    ri->ev  = (exp_t *)malloc((unsigned long)n * evl * sizeof(exp_t));
+    ri->n   = n;
+    ri->evl = evl;
+    ri->ebl = bs->ht->ebl;
+    ri->sdm = (sdm_t *)malloc((unsigned long)(n + 1) * sizeof(sdm_t));
+    ri->vm  = (uint64_t *)malloc((unsigned long)(n + 1) * sizeof(uint64_t));
+    ri->pos = (len_t *)malloc((unsigned long)(n + 1) * sizeof(len_t));
+    ri->ev  = (exp_t *)malloc((unsigned long)(n + 1) * evl * sizeof(exp_t));
+    red_key_t *k = (red_key_t *)malloc((unsigned long)(n + 1) * sizeof(red_key_t));
     for (i = 0; i < n; ++i) {
-        ri->sdm[i]      = (sdm_t)(tmp[i] >> 32);
-        ri->pos[i]      = (len_t)(tmp[i] & 0xFFFFFFFF);
-        const hm_t *b   = bs->hm[bs->lmps[ri->pos[i]]];
-        ri->len[i]      = b[LENGTH];
-        memcpy(ri->ev + (unsigned long)i * evl, bs->ht->ev[b[OFFSET]],
+        const hm_t *b = bs->hm[bs->lmps[i]];
+        k[i].len = b[LENGTH];
+        k[i].idx = bs->lmps[i];
+        k[i].pos = i;
+    }
+    qsort(k, (unsigned long)n, sizeof(red_key_t), red_key_cmp);
+    for (i = 0; i < n; ++i) {
+        const exp_t * const e = bs->ht->ev[bs->hm[k[i].idx][OFFSET]];
+        ri->pos[i] = k[i].pos;
+        ri->sdm[i] = bs->lm[k[i].pos];
+        ri->vm[i]  = reducer_variable_mask(e, evl, ri->ebl);
+        memcpy(ri->ev + (unsigned long)i * evl, e,
                 (unsigned long)evl * sizeof(exp_t));
     }
-    free(tmp);
-    add_reducer_index_node(ri, 0, n);
+    free(k);
 }
 
 static void free_reducer_index(
@@ -669,77 +638,82 @@ static void free_reducer_index(
         )
 {
     free(ri->sdm);
+    free(ri->vm);
     free(ri->pos);
-    free(ri->nd);
-    free(ri->len);
     free(ri->ev);
-    ri->len = NULL;
-    ri->ev  = NULL;
     ri->sdm = NULL;
+    ri->vm  = NULL;
     ri->pos = NULL;
-    ri->nd  = NULL;
-    ri->nnd = ri->snd = 0;
+    ri->ev  = NULL;
+    ri->n   = 0;
 }
 
-/* Among all reducers of the monomial e with short divisor mask ms we
- * choose the shortest one and among those the newest one, i.e. the
- * result does not depend on the order in which the lead monomials are
- * checked. Returns the position of the reducer in bs->lm + 1, 0 if
- * there is no reducer. */
+/* bit l - l0 is set for each l = l0, ..., l1-1, l1 - l0 <= 64, where the
+ * masks of the l-th lead monomial have no bit outside of the complements
+ * ns and nv of the masks of the monomial */
+static inline uint64_t reducer_candidates(
+        const red_idx_t * const ri,
+        const len_t l0,
+        const len_t l1,
+        const sdm_t ns,
+        const uint64_t nv
+        )
+{
+    len_t l = l0;
+    uint64_t bits = 0;
+#if defined(__AVX512F__) && defined(__AVX512VL__)
+    const __m512i vv = _mm512_set1_epi64((long long)nv);
+    const __m256i vs = _mm256_set1_epi32((int)ns);
+    for (; l + 8 <= l1; l += 8) {
+        const __mmask8 a = _mm512_testn_epi64_mask(
+                _mm512_loadu_si512((const void *)(ri->vm + l)), vv);
+        const __mmask8 c = _mm256_testn_epi32_mask(
+                _mm256_loadu_si256((const __m256i *)(ri->sdm + l)), vs);
+        bits |= (uint64_t)(a & c) << (l - l0);
+    }
+#endif
+    for (; l < l1; ++l) {
+        bits |= (uint64_t)(((ri->vm[l] & nv) | (ri->sdm[l] & ns)) == 0)
+            << (l - l0);
+    }
+    return bits;
+}
+
+/* returns the position of the reducer of the monomial with exponents e
+ * and short divisor mask ms in bs->lm plus one, 0 if it is not divisible
+ * by any lead monomial of bs. Does not change any data, so it can be
+ * called in parallel. */
 static len_t search_reducer(
         const red_idx_t * const ri,
         const sdm_t ms,
-        const exp_t * const e,
-        const bs_t * const bs
+        const exp_t * const e
         )
 {
-    len_t i, k, l;
-    len_t st[64];
+    len_t l0, k;
 
-    const bl_t * const lmps   = bs->lmps;
-    const len_t evl           = bs->ht->evl;
-    const sdm_t ns            = ~ms;
-    const red_node_t * const nd = ri->nd;
+    const len_t n     = ri->n;
+    const len_t evl   = ri->evl;
+    const sdm_t ns    = ~ms;
+    const uint64_t nv = ~reducer_variable_mask(e, evl, ri->ebl);
 
-    len_t bi    = 0;
-    len_t blen  = 0;
-    len_t ns_   = 0;
-    if (ri->nnd > 0) {
-        st[ns_++] = 0;
-    }
-    while (ns_ > 0) {
-        const red_node_t * const n = nd + st[--ns_];
-        if (n->cm & ns) {
-            continue;
-        }
-        if (n->c0 != 0) {
-            st[ns_++] = n->c1;
-            st[ns_++] = n->c0;
-            continue;
-        }
-        for (l = n->lo; l < n->hi; ++l) {
-            if (ri->sdm[l] & ns) {
-                continue;
-            }
-            const len_t bl = ri->len[l];
-            if (blen != 0 && bl > blen) {
-                continue;
-            }
+    for (l0 = 0; l0 < n; l0 += 64) {
+        uint64_t bits = reducer_candidates(ri, l0,
+                n - l0 < 64 ? n : l0 + 64, ns, nv);
+        while (bits != 0) {
+            const len_t l = l0 + (len_t)__builtin_ctzll(bits);
+            bits &= bits - 1;
             const exp_t * const f = ri->ev + (unsigned long)l * evl;
             for (k = 0; k < evl; ++k) {
                 if (e[k] < f[k]) {
                     break;
                 }
             }
-            i = ri->pos[l];
-            if (k == evl
-                    && (blen == 0 || bl < blen || lmps[i] > lmps[bi])) {
-                bi    = i;
-                blen  = bl;
+            if (k == evl) {
+                return ri->pos[l] + 1;
             }
         }
     }
-    return blen > 0 ? bi + 1 : 0;
+    return 0;
 }
 
 static inline len_t find_reducer(
@@ -749,7 +723,8 @@ static inline len_t find_reducer(
         const ht_t * const sht
         )
 {
-    return search_reducer(ri, sht->hd[m].sdm, sht->ev[m], bs);
+    (void)bs;
+    return search_reducer(ri, sht->hd[m].sdm, sht->ev[m]);
 }
 
 static void symbolic_preprocessing(
