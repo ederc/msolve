@@ -713,6 +713,50 @@ static void sg_add_element(
     sg->ld++;
 }
 
+/* the syzygy f_i * h - h * e_i of the new element h = sg->e[n] and each
+ * input generator f_i, written as module element: its terms are
+ * lm(f_i) * sig(h) with Schreyer monomial lm(f_i) * sc(h) and lm(h) * e_i
+ * with Schreyer monomial lm(h) * lm(f_i), the larger one is its
+ * signature. If both are the same module term they may cancel. */
+static void sg_principal_syzygies(
+        sg_t *sg,
+        const len_t n
+        )
+{
+    len_t i, j;
+    ht_t *ht         = sg->bht;
+    const len_t nw   = sg->nw;
+    const sg_el_t *h = sg->e + n;
+    uint64_t w[nw];
+    /* lm(f_i) * sc(h) against lm(h) * lm(f_i) is sc(h) against lm(h) */
+    const int c0 = sg_cmp_exp(ht->ev[h->sc], ht->ev[h->p[OFFSET]], ht->evl);
+    const deg_t dsm = ht->hd[h->sm].deg;
+
+    for (i = 0; i < sg->ng; ++i) {
+        int c = c0;
+        if (c == 0) {
+            if (h->ix == i) {
+                continue;
+            }
+            c = h->ix > i ? 1 : -1;
+        }
+        if (c > 0) {
+            if (dsm + ht->hd[sg->g[i].p[OFFSET]].deg > SG_LMAX) {
+                sg->wide = 1;
+                return;
+            }
+            const uint64_t * const a = sg->gpl + (unsigned long)i * nw;
+            const uint64_t * const b = SG_PS(sg, n);
+            for (j = 0; j < nw; ++j) {
+                w[j] = a[j] + b[j];
+            }
+            sg_add_syzygy(sg, h->ix, w);
+        } else {
+            sg_add_syzygy(sg, i, SG_PL(sg, n));
+        }
+    }
+}
+
 /* the signature of the S-pair of the elements a and b: returns 0 for a
  * singular S-pair, otherwise sets the index and the module monomial of
  * the signature and if the lead terms are coprime. With L the lcm of the
@@ -2160,21 +2204,25 @@ static void sg_load_basis(
     bs->mltdeg = mltdeg;
 }
 
-/* the input generators in their given order, the order of the indices of
- * their signatures; the echelonized rows stand at the position of the
- * generator whose row won its pivot, so the generators' order is the
- * order of the input as read (gebauer-1988 §4.6: with the inputs ordered
- * by decreasing head term, an element is redundant exactly when a later
- * one's head term divides its own) */
+/* the input generators by increasing lead term, the order of the indices of
+ * their signatures */
 static len_t *sg_generator_order(
         const bs_t * const bs,
         const len_t ng
         )
 {
-    len_t i;
+    len_t i, j;
     len_t *gi = (len_t *)malloc((unsigned long)(ng + 1) * sizeof(len_t));
     for (i = 0; i < ng; ++i) {
         gi[i] = i;
+    }
+    for (i = 1; i < ng; ++i) {
+        const len_t t = gi[i];
+        for (j = i; j > 0 && monomial_cmp_drl(bs->hm[gi[j-1]][OFFSET],
+                    bs->hm[t][OFFSET], bs->ht) > 0; --j) {
+            gi[j] = gi[j-1];
+        }
+        gi[j] = t;
     }
     return gi;
 }
@@ -2306,6 +2354,9 @@ static int sig_f4(
         if (sg_hand_over(&sg, (len_t)nn, sg.maxgap, md)) {
             ok = 0;
             break;
+        }
+        for (i = ob; i < sg.ld; ++i) {
+            sg_principal_syzygies(&sg, i);
         }
         for (i = ob; i < sg.ld; ++i) {
             sg_new_pairs(&sg, i);
