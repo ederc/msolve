@@ -1079,6 +1079,26 @@ static uint8_t *compress_row(
     return p;
 }
 
+/* bytes of the rows of the matrices stored uncompressed in the trace
+ * cache: decompressing the rows takes up to a tenth of the time of the
+ * application of the trace, the first matrices are therefore stored as
+ * they are, this bounds the additional memory usage */
+#define TC_RAW_MAX ((unsigned long)64 << 20)
+
+/* the length of the row of index i of the cached matrix tc */
+static inline len_t cached_row_length(
+        const tc_t * const tc,
+        const len_t i
+        )
+{
+    uint32_t len;
+    if (tc->raw) {
+        return ((const hm_t *)(tc->rows + tc->ro[i]))[LENGTH];
+    }
+    read_varint(tc->rows + tc->ro[i], &len);
+    return len;
+}
+
 static void decompress_row(
         hm_t *row,
         const uint8_t *p
@@ -1128,25 +1148,28 @@ static void matrix_from_trace_cache(
     mat->rba  = (rba_t **)malloc((unsigned long)tc->nrl * sizeof(rba_t *));
     /* the reducer rows are handed over to the linear algebra in one block */
     for (i = 0; i < nru; ++i) {
-        read_varint(tc->rows + tc->ro[i], &len);
-        sz += len+OFFSET;
+        sz += cached_row_length(tc, i)+OFFSET;
     }
     mat->rrb  = (hm_t *)malloc(sz * sizeof(hm_t));
     sz = 0;
     for (i = 0; i < nru; ++i) {
-        read_varint(tc->rows + tc->ro[i], &len);
         mat->rr[i] = mat->rrb + sz;
-        sz += len+OFFSET;
+        sz += cached_row_length(tc, i)+OFFSET;
     }
     for (i = 0; i < tc->nrl; ++i) {
-        read_varint(tc->rows + tc->ro[nru+i], &len);
+        len = cached_row_length(tc, nru+i);
         mat->tr[i]  = (hm_t *)malloc((unsigned long)(len+OFFSET) * sizeof(hm_t));
         mat->rba[i] = td->rba[i];
     }
 #pragma omp parallel for num_threads(nthrds) private(i) schedule(dynamic, 64)
     for (i = 0; i < nr; ++i) {
-        decompress_row(i < nru ? mat->rr[i] : mat->tr[i-nru],
-                tc->rows + tc->ro[i]);
+        if (tc->raw) {
+            memcpy(i < nru ? mat->rr[i] : mat->tr[i-nru],
+                    tc->rows + tc->ro[i], tc->ro[i+1] - tc->ro[i]);
+        } else {
+            decompress_row(i < nru ? mat->rr[i] : mat->tr[i-nru],
+                    tc->rows + tc->ro[i]);
+        }
     }
     mat->nru  = tc->nru;
     mat->nrl  = tc->nrl;
@@ -1174,15 +1197,28 @@ static void store_matrix_in_trace_cache(
     tc_t *tc  = (tc_t *)malloc(sizeof(tc_t));
     tc->ro    = (unsigned long *)malloc((unsigned long)(nr+1)
             * sizeof(unsigned long));
+    unsigned long rsz = 0;
+    for (i = 0; i < nr; ++i) {
+        rsz += (unsigned long)((i < nru ? mat->rr[i] : mat->tr[i-nru])[LENGTH]
+                + OFFSET) * sizeof(hm_t);
+    }
+    tc->raw   = __atomic_add_fetch(&(tr->tcraw), rsz, __ATOMIC_RELAXED)
+        <= TC_RAW_MAX;
     tc->ro[0] = 0;
     for (i = 0; i < nr; ++i) {
-        tc->ro[i+1] = tc->ro[i] + compressed_row_size(
-                i < nru ? mat->rr[i] : mat->tr[i-nru]);
+        const hm_t * const row = i < nru ? mat->rr[i] : mat->tr[i-nru];
+        tc->ro[i+1] = tc->ro[i] + (tc->raw ?
+                (unsigned long)(row[LENGTH]+OFFSET) * sizeof(hm_t)
+                : compressed_row_size(row));
     }
     tc->rows  = (uint8_t *)malloc(tc->ro[nr]);
     for (i = 0; i < nr; ++i) {
-        compress_row(tc->rows + tc->ro[i],
-                i < nru ? mat->rr[i] : mat->tr[i-nru]);
+        const hm_t * const row = i < nru ? mat->rr[i] : mat->tr[i-nru];
+        if (tc->raw) {
+            memcpy(tc->rows + tc->ro[i], row, tc->ro[i+1] - tc->ro[i]);
+        } else {
+            compress_row(tc->rows + tc->ro[i], row);
+        }
     }
     const len_t evl = sht->evl;
     tc->ev  = (exp_t *)malloc((unsigned long)mat->ncr * evl * sizeof(exp_t));

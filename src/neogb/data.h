@@ -338,12 +338,14 @@ struct td_t
 typedef struct tc_t tc_t;
 struct tc_t
 {
-    uint8_t *rows;      /* compressed rows, first the nru reducer rows,
-                         * then the nrl to be reduced rows: the header
-                         * entries (LENGTH first) as varints, then the
-                         * differences of consecutive column indices as
-                         * zigzag encoded varints */
+    uint8_t *rows;      /* rows, first the nru reducer rows, then the nrl
+                         * to be reduced rows. If raw is 0 they are
+                         * compressed: the header entries (LENGTH first)
+                         * as varints, then the differences of consecutive
+                         * column indices as zigzag encoded varints. If
+                         * raw is 1 they are stored as they are. */
     unsigned long *ro;  /* start of each row in rows */
+    int raw;            /* 1 if the rows are not compressed */
     exp_t *ev;    /* exponent vectors of the columns ncl,...,nc-1 */
     len_t nru;    /* number of reducer rows */
     len_t nrl;    /* number of to be reduced rows */
@@ -378,6 +380,8 @@ struct trace_t
      * afterwards. The trace may be applied for several primes in
      * parallel, so the entries are published atomically. */
     tc_t **tc;    /* matrices of the rounds in column representation */
+    unsigned long tcraw; /* bytes of the rows of the matrices of tc stored
+                          * uncompressed */
     hm_t **bsp;   /* reference supports of basis elements used for tc in
                    * the format length, coefficient index, hashes */
     len_t bsz;    /* number of basis elements, i.e. size of bsp */
