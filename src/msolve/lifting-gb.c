@@ -732,10 +732,20 @@ static inline int modpgbs_set(gb_modpoly_t modgbs,
         continue;
       }
       int32_t bc = modgbs->modpolys[i]->len - 1;
-      const cf64_t * const cfs = bs->cf_64[bs->hm[idx][COEFFS]];
-      for (j = 1; j < len; ++j) {
-        MODCF64(modgbs->modpolys[i], bc, modgbs->nprimes) = cfs[j];
-        bc--;
+      if(fc > UINT32_MAX){
+        const cf64_t * const cfs = bs->cf_64[bs->hm[idx][COEFFS]];
+        for (j = 1; j < len; ++j) {
+          MODCF64(modgbs->modpolys[i], bc, modgbs->nprimes) = cfs[j];
+          bc--;
+        }
+      }
+      else{
+        /* an image at a ~31-bit prime after images at 61-bit primes */
+        const uint32_t * const cfs = bs->cf_32[bs->hm[idx][COEFFS]];
+        for (j = 1; j < len; ++j) {
+          MODCF64(modgbs->modpolys[i], bc, modgbs->nprimes) = cfs[j];
+          bc--;
+        }
       }
     }
     else{
@@ -1756,18 +1766,26 @@ restart:
 
     learn = 0;
     /* the application phase replays the learned signature record at
-     * 61-bit primes when such a record exists, and walks ~31-bit primes
-     * with the classic trace otherwise (unchanged) */
-    const int wide_walk = (st->tr != NULL && st->tr->sgr != NULL);
-    if(wide_walk){
+     * 61-bit primes when such a record exists. The classic trace is
+     * applied at two ~31-bit primes, the first one warming up the
+     * data, and then at a 61-bit prime, and the walk goes on with the
+     * primes of the size which gives more bits of the coefficients per
+     * second: a 61-bit prime gives about twice the bits, but the linear
+     * algebra at 61-bit primes is slower for denser matrices. The time
+     * at the 61-bit prime includes the widening of the images stored so
+     * far, which keeps the decision on the side of the ~31-bit primes. */
+    const int sig_walk = (st->tr != NULL && st->tr->sgr != NULL);
+    int wide_walk = sig_walk;
+    /* 0, 1, 2: the probe applications of the classic trace, 3: decided */
+    int probe = sig_walk ? 3 : 0;
+    double tprobe[2] = {0, 0};
+    {
       /* seed a random prime in [2^61, 2^62) from two rand() calls */
       uint64_t r = ((uint64_t)rand() << 31) | (uint64_t)rand();
       prime64 = ((uint64_t)1 << 61) + r % ((uint64_t)1 << 61);
       prime64 = next_prime_64(prime64);
     }
-    else{
-      prime = next_prime(rand() % (1303905301 - (1<<30) + 1) + (1<<30));
-    }
+    prime = next_prime(rand() % (1303905301 - (1<<30) + 1) + (1<<30));
     if(info_level){
         if(wide_walk){
           printf("application phase at 61-bit primes\n");
@@ -1782,6 +1800,9 @@ restart:
 
       int nthrds = 1; /* mono-threaded mult-mid comp */
 
+      if(probe < 3){
+        wide_walk = probe == 2;
+      }
       if(wide_walk){
         /* walk the primes in [2^61, 2^62), wrapping around at 2^62 */
         prime64 = next_prime_64(prime64);
@@ -1839,6 +1860,7 @@ restart:
         gb_modpoly_realloc((*modgbsp), MAX(4, (uint32_t)nprimes / 16));
       }
 
+      const double tapp = realtime();
       gb_modular_trace_application((*modgbsp), msd->mgb,
                                    msd->num_gb,
                                    msd->leadmons_ori,
@@ -1848,6 +1870,23 @@ restart:
                                    0, /* info_level, */
                                    wide_walk ? prime64 : (uint64_t)prime,
                                    dlift->S, &stf4, msd->bad_primes);
+      if(probe < 3){
+        if(probe > 0){
+          tprobe[probe-1] = realtime() - tapp;
+        }
+        if(msd->bad_primes[0] != 0){
+          /* the time of a bad prime says nothing, keep ~31-bit primes */
+          probe = 3;
+          wide_walk = 0;
+        }
+        else if(++probe == 3){
+          wide_walk = tprobe[1] < 1.9 * tprobe[0];
+          if(info_level > 1){
+            fprintf(VERBSTREAM, "(%s-bit primes: %.3f s at 31 bits, %.3f s at 61 bits)",
+                    wide_walk ? "61" : "31", tprobe[0], tprobe[1]);
+          }
+        }
+      }
 
       /* nprimes += st->nthrds; */
       nprimes += 1; /* at the moment, multi-mod comp is mono-threaded */
