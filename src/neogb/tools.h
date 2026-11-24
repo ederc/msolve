@@ -203,16 +203,17 @@ static inline uint64_t shoup_mul(
     return (uint64_t)(((unsigned __int128)mu * y) >> 64);
 }
 
-/* subtracts v times the pivot row (pr, pf, pfq) of length pl, but its
- * lead entry, from the dense row dr; pf holds the pivot coefficients,
- * pfq their Shoup factors. Dense row entries are kept in [0, 2p) as
- * redundant representatives: the difference of two entries in [0, 2p)
- * is corrected by 2p on borrow, which is exact and overflow-safe for
- * all p < 2^62. */
+/* subtracts v times the pivot row (pr, pf) of length pl, but its lead
+ * entry, from the dense row dr; pf holds the pivot coefficients. The
+ * Shoup pre-inverse psi = floor(v * 2^64 / p) of the multiplier v < p
+ * is computed once per application, the per-element quotient is
+ * mulhi(pf[j], psi) (harvey-2014 §3). Dense row entries are kept in
+ * [0, 2p) as redundant representatives: the difference of two entries
+ * in [0, 2p) is corrected by 2p on borrow, which is exact and
+ * overflow-safe for all p < 2^62. */
 static inline void sg_sub_row_64(
         uint64_t *dr,
         const hm_t * const pr,
-        const uint64_t * const pfq,
         const cf64_t * const pf,
         const len_t pl,
         const uint64_t v,
@@ -221,11 +222,16 @@ static inline void sg_sub_row_64(
 {
     len_t j;
     const uint64_t twice = 2 * p;
+    const uint64_t psi   = shoup_mu(p, v);
     for (j = 1; j < pl; ++j) {
-        const uint64_t q = shoup_mul(pfq[j], v);
+        const uint64_t q = shoup_mul(psi, pf[j]);
         const uint64_t d = v * pf[j] - q * p; /* in [0, 2p) */
         const uint64_t e = dr[pr[j]];
-        dr[pr[j]] = e >= d ? e - d : e - d + twice;
+        /* e - d plus 2p on borrow: the borrow generates the correction
+         * mask, no conditional branch (harvey-2014 §2) */
+        const uint64_t diff = e - d;
+        const uint64_t brw  = e < d;
+        dr[pr[j]] = diff + (((uint64_t)0 - brw) & twice);
     }
 }
 #endif

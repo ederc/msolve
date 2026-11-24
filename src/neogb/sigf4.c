@@ -2453,10 +2453,10 @@ static cf64_t **sg_input_coeffs_64(
 /* subtracting the pivot row (pr, pf) from the dense row: the 32-bit
  * instantiation uses the lazy big/small constants, the 64-bit
  * instantiation the Shoup factors pq of the pivot row */
-#define SG_SUBROW_32(dr, pr, pf, pq, pl, v, p, big, small) \
+#define SG_SUBROW_32(dr, pr, pf, pl, v, p, big, small) \
     sg_sub_row((dr), (pr), (pf), (pl), (p) - (v), (big), (small))
-#define SG_SUBROW_64(dr, pr, pf, pq, pl, v, p, big, small) \
-    sg_sub_row_64((dr), (pr), (pq), (pf), (pl), (v), (p))
+#define SG_SUBROW_64(dr, pr, pf, pl, v, p, big, small) \
+    sg_sub_row_64((dr), (pr), (pf), (pl), (v), (p))
 
 /* inverting the lead coefficient and scaling by the inverse for
  * monicization */
@@ -2464,23 +2464,6 @@ static cf64_t **sg_input_coeffs_64(
 #define SG_INV_64(x, p) mod_p_inverse_64((int64_t)(x), (int64_t)(p))
 #define SG_MUL_INV_32(x, inv, p) (cf32_t)(((uint64_t)(x) * (inv)) % (p))
 #define SG_MUL_INV_64(x, inv, p) (cf64_t)mul_mod_64((x), (inv), (p))
-
-/* precomputing the Shoup factors of the coefficients of an installed
- * pivot row; only the wide instantiation does anything */
-#define SG_SHOUP_INSTALL_32(pcq, k, cf, len, p)  \
-    do {                                         \
-        (void)(cf);                              \
-        (void)(len);                             \
-    } while (0)
-#define SG_SHOUP_INSTALL_64(pcq, k, cf, len, p)                          \
-    do {                                                                 \
-        len_t _sj;                                                       \
-        (pcq)[k] = (uint64_t *)malloc(                                   \
-                (unsigned long)(len) * sizeof(uint64_t));                \
-        for (_sj = 0; _sj < (len); ++_sj) {                              \
-            (pcq)[k][_sj] = shoup_mu((p), (cf)[_sj]);                    \
-        }                                                                \
-    } while (0)
 
 /* local constants of the lazy representation, only declared by the
  * 32-bit instantiation */
@@ -2494,7 +2477,7 @@ static cf64_t **sg_input_coeffs_64(
  * extraction, dense-row invariant, pivot subtraction, monicization and
  * Shoup factor installation */
 #define SG_REPLAY(name, cf_t, INPUT_COEFFS, TAKE, SUBROW, INV, MUL_INV, \
-        SHOUP_INSTALL, BIG_SMALL_DECL)                                  \
+        BIG_SMALL_DECL)                                                 \
 static int name(                                                        \
         bs_t *bs,                                                       \
         md_t *md,                                                       \
@@ -2604,7 +2587,6 @@ static int name(                                                        \
         /* the reduction in the recorded order */                       \
         hm_t **pc       = (hm_t **)calloc((unsigned long)nc + 1, sizeof(hm_t *)); \
         cf_t **pcf      = (cf_t **)calloc((unsigned long)nc + 1, sizeof(cf_t *)); \
-        uint64_t **pcq  = (uint64_t **)calloc((unsigned long)nc + 1, sizeof(uint64_t *)); \
         uint64_t *dr    = (uint64_t *)calloc((unsigned long)nc + 1, sizeof(uint64_t)); \
         hm_t *nrow      = (hm_t *)malloc((unsigned long)(nc + 1) * sizeof(hm_t)); \
         cf_t *ncf       = (cf_t *)malloc((unsigned long)(nc + 1) * sizeof(cf_t)); \
@@ -2625,7 +2607,6 @@ static int name(                                                        \
                 }                                                       \
                 pc[lc]  = row;                                          \
                 pcf[lc] = (cf_t *)rcf[i];                               \
-                SHOUP_INSTALL(pcq, lc, pcf[lc], row[LENGTH], p);        \
                 continue;                                               \
             }                                                           \
             const len_t len = row[LENGTH];                              \
@@ -2663,7 +2644,7 @@ static int name(                                                        \
                     }                                                   \
                     const hm_t * const pr = pc[k] + OFFSET;             \
                     const len_t pl        = pc[k][LENGTH];              \
-                    SUBROW(dr, pr, pcf[k], pcq[k], pl, v, p, big, small); \
+                    SUBROW(dr, pr, pcf[k], pl, v, p, big, small);       \
                     for (j = 1; j < pl; ++j) {                          \
                         mk[pr[j] / 64] |= (uint64_t)1 << (pr[j] % 64);  \
                     }                                                   \
@@ -2687,7 +2668,7 @@ static int name(                                                        \
                         ncf[nl++] = (cf_t)v;                            \
                         continue;                                       \
                     }                                                   \
-                    SUBROW(dr, pc[k] + OFFSET, pcf[k], pcq[k], pc[k][LENGTH], v, p, big, small); \
+                    SUBROW(dr, pc[k] + OFFSET, pcf[k], pc[k][LENGTH], v, p, big, small); \
                     wr += pc[k][LENGTH];                                \
                 }                                                       \
             }                                                           \
@@ -2720,7 +2701,6 @@ static int name(                                                        \
             er[BINDEX]  = 0;                                            \
             pc[er[OFFSET]]  = er;                                       \
             pcf[er[OFFSET]] = ec;                                       \
-            SHOUP_INSTALL(pcq, er[OFFSET], ec, nl, p);                  \
             nw[nn]  = er;                                               \
             nwc[nn] = ec;                                               \
             nn++;                                                       \
@@ -2776,10 +2756,6 @@ static int name(                                                        \
         free(hcm);                                                      \
         free(pc);                                                       \
         free(pcf);                                                      \
-        for (k = 0; k < nc + 1; ++k) {                                  \
-            free(pcq[k]);                                               \
-        }                                                               \
-        free(pcq);                                                      \
         free(dr);                                                       \
         free(nrow);                                                     \
         free(ncf);                                                      \
@@ -2821,7 +2797,7 @@ static int name(                                                        \
  * before the core was parameterized by the coefficient width */
 SG_REPLAY(sig_f4_replay_32, cf32_t,
         SG_INPUT_COEFFS_32, SG_TAKE_32, SG_SUBROW_32,
-        SG_INV_32, SG_MUL_INV_32, SG_SHOUP_INSTALL_32,
+        SG_INV_32, SG_MUL_INV_32,
         SG_BIG_SMALL_DECL_32)
 
 /* the wide replay for primes in [2^32, 2^62): coefficients in cf_64
@@ -2830,7 +2806,7 @@ SG_REPLAY(sig_f4_replay_32, cf32_t,
  * 128-bit products */
 SG_REPLAY(sig_f4_replay_64, cf64_t,
         SG_INPUT_COEFFS_64, SG_TAKE_64, SG_SUBROW_64,
-        SG_INV_64, SG_MUL_INV_64, SG_SHOUP_INSTALL_64,
+        SG_INV_64, SG_MUL_INV_64,
         SG_BIG_SMALL_DECL_64)
 
 /* dispatches on the field width of the run */

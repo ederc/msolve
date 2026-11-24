@@ -79,17 +79,15 @@ int main(void)
         const uint64_t p = primes[pi];
         const len_t ncols = 512;
         uint64_t *dr = (uint64_t *)calloc(ncols, sizeof(uint64_t));
-        uint64_t *pfq = (uint64_t *)malloc(ncols * sizeof(uint64_t));
         cf64_t *pf = (cf64_t *)malloc(ncols * sizeof(cf64_t));
         hm_t *pr = (hm_t *)malloc(ncols * sizeof(hm_t));
         for (len_t j = 0; j < ncols; ++j) {
             pr[j]  = (hm_t)j;
             pf[j]  = rng() % p;              /* canonical pivot coefficient */
-            pfq[j] = shoup_mu(p, pf[j]);     /* its Shoup factor */
         }
         for (int i = 0; i < 1000; ++i) {
             const uint64_t v = rng() % p; /* consumed dense value */
-            sg_sub_row_64(dr, pr, pfq, pf, ncols, v, p);
+            sg_sub_row_64(dr, pr, pf, ncols, v, p);
             for (len_t j = 0; j < ncols; ++j) {
                 if (dr[j] >= 2 * p) {
                     printf("FAIL sg_sub_row_64: dr[%d]=%llu >= 2p=%llu (p=%llu, iter %d)\n",
@@ -101,7 +99,6 @@ int main(void)
             }
         }
         free(dr);
-        free(pfq);
         free(pf);
         free(pr);
     }
