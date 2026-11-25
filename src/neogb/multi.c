@@ -140,6 +140,27 @@ static inline void ml_add_row(
         _mm256_storeu_si256(y, t0);
         _mm256_storeu_si256(y + 1, t1);
     }
+#elif defined __aarch64__
+    /* the lanes in four pairs, vmull_u32 multiplies two 32-bit lanes to
+     * 64-bit products; the multipliers are below 2^32 */
+    len_t l;
+    uint32x2_t mv[ML/2];
+    uint64x2_t bv[ML/2];
+    for (l = 0; l < ML/2; ++l) {
+        mv[l] = vmovn_u64(vld1q_u64(m + 2*l));
+        bv[l] = vld1q_u64(big + 2*l);
+    }
+    for (j = 1; j < pl; ++j) {
+        uint64_t *y = dr + (unsigned long)pr[j] * ML;
+        const uint32_t *c = pc + (unsigned long)j * ML;
+        for (l = 0; l < ML/2; ++l) {
+            uint64x2_t t = vaddq_u64(vld1q_u64(y + 2*l),
+                    vmull_u32(mv[l], vld1_u32(c + 2*l)));
+            const uint64x2_t o = vcgeq_u64(t, bv[l]);
+            t = vsubq_u64(t, vandq_u64(o, bv[l]));
+            vst1q_u64(y + 2*l, t);
+        }
+    }
 #else
     len_t l;
     for (j = 1; j < pl; ++j) {
