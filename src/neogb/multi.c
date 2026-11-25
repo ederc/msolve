@@ -114,6 +114,32 @@ static inline void ml_add_row(
         t = _mm512_mask_sub_epi64(t, o, t, vb);
         _mm512_storeu_si512((void *)y, t);
     }
+#elif defined HAVE_AVX2
+    /* the lanes in two halves of four; AVX2 compares 64-bit integers
+     * only as signed ones, with the sign bits flipped t >= big becomes
+     * t > big - 1 */
+    const __m256i sg  = _mm256_set1_epi64x((long long)((uint64_t)1 << 63));
+    const __m256i m0  = _mm256_loadu_si256((const __m256i *)m);
+    const __m256i m1  = _mm256_loadu_si256((const __m256i *)(m + 4));
+    const __m256i b0  = _mm256_loadu_si256((const __m256i *)big);
+    const __m256i b1  = _mm256_loadu_si256((const __m256i *)(big + 4));
+    const __m256i one = _mm256_set1_epi64x(1);
+    const __m256i c0  = _mm256_xor_si256(_mm256_sub_epi64(b0, one), sg);
+    const __m256i c1  = _mm256_xor_si256(_mm256_sub_epi64(b1, one), sg);
+    for (j = 1; j < pl; ++j) {
+        __m256i *y = (__m256i *)(dr + (unsigned long)pr[j] * ML);
+        const uint32_t *c = pc + (unsigned long)j * ML;
+        const __m256i v0 = _mm256_cvtepu32_epi64(_mm_loadu_si128((const __m128i *)c));
+        const __m256i v1 = _mm256_cvtepu32_epi64(_mm_loadu_si128((const __m128i *)(c + 4)));
+        __m256i t0 = _mm256_add_epi64(_mm256_loadu_si256(y), _mm256_mul_epu32(m0, v0));
+        __m256i t1 = _mm256_add_epi64(_mm256_loadu_si256(y + 1), _mm256_mul_epu32(m1, v1));
+        const __m256i o0 = _mm256_cmpgt_epi64(_mm256_xor_si256(t0, sg), c0);
+        const __m256i o1 = _mm256_cmpgt_epi64(_mm256_xor_si256(t1, sg), c1);
+        t0 = _mm256_sub_epi64(t0, _mm256_and_si256(o0, b0));
+        t1 = _mm256_sub_epi64(t1, _mm256_and_si256(o1, b1));
+        _mm256_storeu_si256(y, t0);
+        _mm256_storeu_si256(y + 1, t1);
+    }
 #else
     len_t l;
     for (j = 1; j < pl; ++j) {
