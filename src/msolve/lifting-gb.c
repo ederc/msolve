@@ -832,6 +832,13 @@ static inline int32_t compute_num_gb(int32_t *bexp_lm, int32_t len, int nv, int 
    guided_trace_learning() */
 int32_t msolve_guided_learning = 0;
 
+/* the number of primes below 2^31 at which a trace is applied at once,
+   see core_f4_multi() */
+#define MULTI_PRIMES 8
+/* whether traces over the rationals are applied at several primes at
+   once */
+int32_t msolve_multi_primes = 1;
+
 /* returns 1 if the reduced Groebner bases a and b over the same prime
    field, with the same basis hash table, are equal */
 static int same_reduced_basis(const bs_t * const a, const bs_t * const b){
@@ -1048,7 +1055,9 @@ static void gb_modular_trace_application(gb_modpoly_t modgbs,
                                          uint64_t fc,
                                          int32_t start,
                                          double *stf4,
-                                         int *bad_primes)
+                                         int *bad_primes,
+                                         const int use_pre,
+                                         bs_t *pre)
 {
 
   double rt = realtime();
@@ -1068,7 +1077,14 @@ static void gb_modular_trace_application(gb_modpoly_t modgbs,
   /* hl_t eld = bs_qq->ht->eld; */
   bs_t *bs = NULL;
   int32_t error = 0;
-  bs = core_gba(bs_qq, st, &error, fc);
+  if(use_pre){
+    /* the basis is computed already together with other primes, see
+       core_f4_multi(), NULL if the prime is bad */
+    bs = pre;
+  }
+  else{
+    bs = core_gba(bs_qq, st, &error, fc);
+  }
   *stf4 = realtime()-rt;
   /* core_gba returns NULL (and has already free-ed its data) when the
    * prime has been detected as bad while applying the tracer */
@@ -2177,6 +2193,11 @@ restart:
           fprintf(VERBSTREAM, "New prime = %d\n", prime);
         }
     }
+    /* the bases of the next primes, computed together in one application
+       of the trace, see core_f4_multi() */
+    bs_t *mbs[MULTI_PRIMES];
+    uint64_t mpr[MULTI_PRIMES];
+    int mld = 0, mnx = 0;
     while(apply){
 
       int nthrds = 1; /* mono-threaded mult-mid comp */
@@ -2184,7 +2205,13 @@ restart:
       if(probe < 3){
         wide_walk = probe == 2;
       }
-      if(wide_walk){
+      /* is the basis of the next prime computed already? */
+      const int queued = mnx < mld && !(probe == 2);
+      double tmulti = -1;
+      if(queued){
+        /* the prime is the next one of the queue */
+      }
+      else if(wide_walk){
         /* walk the primes in [2^61, 2^62), wrapping around at 2^62 */
         prime64 = next_prime_64(prime64);
         if(prime64 >= (uint64_t)1 << 62){
@@ -2228,6 +2255,35 @@ restart:
           }
         }
         prime = msd->lp->p[nthrds /* st->nthrds */ - 1];
+        /* the trace is applied at this prime and the next lucky ones in
+           one pass if all its matrices are stored */
+        if(probe > 0 && msolve_multi_primes){
+          mpr[0] = prime;
+          uint32_t q = prime;
+          for(int l = 1; l < MULTI_PRIMES; l++){
+            q = next_prime(q);
+            if(q >= lprime){
+              q = next_prime(1<<30);
+            }
+            while(is_lucky_prime_ui(q, bs) || q==primeinit){
+              q = next_prime(q);
+              if(q >= lprime){
+                q = next_prime(1<<30);
+              }
+            }
+            mpr[l] = q;
+          }
+          const double t0 = realtime();
+          if(core_f4_multi(bs, st, mpr, MULTI_PRIMES, mbs)){
+            if(info_level > 1){
+              fprintf(VERBSTREAM, "(x%d)", MULTI_PRIMES);
+            }
+            tmulti = (realtime() - t0) / MULTI_PRIMES;
+            mld = MULTI_PRIMES;
+            mnx = 0;
+            prime = (uint32_t)mpr[MULTI_PRIMES-1];
+          }
+        }
       }
 
       if((*modgbsp)->alloc <= nprimes + 2){
@@ -2242,6 +2298,9 @@ restart:
       }
 
       const double tapp = realtime();
+      const int pre = mnx < mld && !(probe == 2);
+      const uint64_t afc = pre ? mpr[mnx]
+        : (wide_walk ? prime64 : (uint64_t)prime);
       gb_modular_trace_application((*modgbsp), msd->mgb,
                                    msd->num_gb,
                                    msd->leadmons_ori,
@@ -2249,11 +2308,16 @@ restart:
                                    msd->btrace,
                                    bs,  st,
                                    0, /* info_level, */
-                                   wide_walk ? prime64 : (uint64_t)prime,
-                                   dlift->S, &stf4, msd->bad_primes);
+                                   afc,
+                                   dlift->S, &stf4, msd->bad_primes,
+                                   pre, pre ? mbs[mnx] : NULL);
+      if(pre){
+        mbs[mnx++] = NULL;
+      }
       if(probe < 3){
         if(probe > 0){
-          tprobe[probe-1] = realtime() - tapp;
+          /* for primes applied together the time per prime */
+          tprobe[probe-1] = tmulti >= 0 ? tmulti : realtime() - tapp;
         }
         if(msd->bad_primes[0] != 0){
           /* the time of a bad prime says nothing, keep ~31-bit primes */
@@ -2338,6 +2402,11 @@ restart:
         free_rrec_data(recdata2);
         /* reset info_level to previous setting */
         st->info_level = info_level;
+        for(; mnx < mld; mnx++){
+          if(mbs[mnx] != NULL){
+            free_basis_and_only_local_hash_table_data(&mbs[mnx]);
+          }
+        }
         /* return core_groebner_qq(modgbsp, bs, msd, st, errp, fc, print_gb); */
         goto restart;
 
@@ -2388,6 +2457,11 @@ restart:
       }
       /* this is where learn could be reset to 1 */
       /* but then duplicated datas and others should be free-ed */
+    }
+    for(; mnx < mld; mnx++){
+      if(mbs[mnx] != NULL){
+        free_basis_and_only_local_hash_table_data(&mbs[mnx]);
+      }
     }
     if (info_level){
       fprintf(VERBSTREAM, " \n-------------------------------------------------\

@@ -57,6 +57,16 @@ bs_t *core_gba(
         const uint64_t fc
         );
 
+/* applies the trace md->tr at up to 8 primes below 2^31 at once, see
+ * multi.c */
+int core_f4_multi(
+        bs_t *gbs,
+        md_t *gmd,
+        const uint64_t * const p,
+        const len_t n,
+        bs_t **out
+        );
+
 int64_t export_results_from_gba(
     /* return values */
     int32_t *bld,   /* basis load */

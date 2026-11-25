@@ -50,6 +50,7 @@
 #include "engine.c"   /* global, shared parts of gb engine */
 #include "sigf4.c"    /* implementation of signature-based f4 */
 #include "f4.c"       /* implemenation of f4 algorithm */
+#include "multi.c"    /* applying traces at several primes at once */
 #include "sba.c"      /* implemenation of sba algorithm */
 #include "nf.c"       /* implemenation of normal form algorithm */
 #include "f4sat.c"    /* implemenation of saturation algorithm */
