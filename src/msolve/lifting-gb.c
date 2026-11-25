@@ -2162,19 +2162,17 @@ restart:
 
 
     learn = 0;
-    /* the application phase replays the learned signature record at
-     * 61-bit primes when such a record exists. The classic trace is
-     * applied at two ~31-bit primes, the first one warming up the
-     * data, and then at a 61-bit prime, and the walk goes on with the
-     * primes of the size which gives more bits of the coefficients per
-     * second: a 61-bit prime gives about twice the bits, but the linear
-     * algebra at 61-bit primes is slower for denser matrices. The time
-     * at the 61-bit prime includes the widening of the images stored so
-     * far, which keeps the decision on the side of the ~31-bit primes. */
-    const int sig_walk = (st->tr != NULL && st->tr->sgr != NULL);
-    int wide_walk = sig_walk;
-    /* 0, 1, 2: the probe applications of the classic trace, 3: decided */
-    int probe = sig_walk ? 3 : 0;
+    /* The trace, of F4 or of a signature-based run, is applied at two
+     * ~31-bit primes, the first one warming up the data, and then at a
+     * 61-bit prime, and the walk goes on with the primes of the size
+     * which gives more bits of the coefficients per second: a 61-bit
+     * prime gives about twice the bits, but the linear algebra at 61-bit
+     * primes is slower for denser matrices. The time at the 61-bit prime
+     * includes the widening of the images stored so far, which keeps the
+     * decision on the side of the ~31-bit primes. */
+    int wide_walk = 0;
+    /* 0, 1, 2: the probe applications of the trace, 3: decided */
+    int probe = 0;
     double tprobe[2] = {0, 0};
     {
       /* seed a random prime in [2^61, 2^62) from two rand() calls */
@@ -2227,6 +2225,12 @@ restart:
         const double tp = tpass >= 0 ? tpass
           : 0.6 * MULTI_PRIMES * tprobe[0];
         multi_now = tp < 0.9 * MULTI_PRIMES * unit && tp <= r31 * unit;
+      }
+      /* the tests set NEOGB_MULTI_FORCE to apply the trace at several
+         primes at once wherever this is possible */
+      if(!queued && probe >= 3 && !multi_off
+         && getenv("NEOGB_MULTI_FORCE") != NULL){
+        multi_now = 1;
       }
       if(queued){
         /* the prime is the next one of the queue */

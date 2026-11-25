@@ -1002,10 +1002,21 @@ static void initialize_trace_cache(
     len_t i;
 
     tr->tc  = (tc_t **)calloc((unsigned long)(tr->ltd + tr->fin), sizeof(tc_t *));
-    /* the basis grows by the new leading monomials of each round */
+    /* the basis grows by the new leading monomials of each round; the
+     * final reduction may use more elements, e.g. those of the trace of a
+     * signature-based run, which has no rounds of F4 */
     tr->bsz = md->ngens;
     for (i = 0; i < tr->ltd; ++i) {
         tr->bsz += tr->td[i].nlm;
+    }
+    if (tr->fin) {
+        const td_t * const td = tr->td + tr->ltd;
+        for (i = 0; i < td->rld; i += 2) {
+            tr->bsz = td->rri[i] >= tr->bsz ? td->rri[i] + 1 : tr->bsz;
+        }
+        for (i = 0; i < td->tld; i += 2) {
+            tr->bsz = td->tri[i] >= tr->bsz ? td->tri[i] + 1 : tr->bsz;
+        }
     }
     tr->bsp   = (hm_t **)calloc((unsigned long)tr->bsz, sizeof(hm_t *));
     tr->tceld = 0;

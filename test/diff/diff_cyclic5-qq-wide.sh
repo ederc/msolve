@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 
 # QQ lifting with a learned signature-F4 record: the application phase
-# must replay the record at 61-bit primes (see
+# replays the record at a 61-bit prime when probing the prime size (see
 # docs/superpowers/specs/2026-11-21-61bit-sigf4-tracer-replay-design.md).
 # Checks that
 # 1. the Groebner basis over Q is unchanged (same expected file as the
 #    plain -g 2 run), and
-# 2. the diagnostics contain the wide-application marker line
-#    "application phase at 61-bit primes".
+# 2. the diagnostics contain the line of the probe, which applies the
+#    record at a 61-bit prime: "...-bit primes: ... at 61 bits".
 #
 # The record is only learned for --signature-f4 > 0.  We use cyclic5-qq
 # with --signature-f4 2: mode 2 forbids the handover of the
@@ -35,7 +35,7 @@ if [ $? -gt 0 ]; then
 fi
 rm test/diff/$file.wide.res
 
-grep -q "application phase at 61-bit primes" test/diff/$file.wide.log
+grep -q -- "-bit primes: .* at 61 bits" test/diff/$file.wide.log
 if [ $? -gt 0 ]; then
     rm -f test/diff/$file.wide.log
     print_exit 3

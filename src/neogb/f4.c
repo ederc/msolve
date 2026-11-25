@@ -1122,8 +1122,7 @@ static void reduce_final_basis(
          * round, without symbolic preprocessing, or taken from the
          * matrices stored in the trace */
         const int traced = md->trace_level == APPLY_TRACER
-            && md->tr->fin && md->tr->sgr == NULL
-            && md->trace_rd == md->tr->ltd;
+            && md->tr->fin && md->trace_rd == md->tr->ltd;
         md->tc_state = 0;
         if (traced) {
             generate_matrix_from_trace(mat, bs, md);
@@ -1151,9 +1150,7 @@ static void reduce_final_basis(
             mat->nc = 0;
 
             symbolic_preprocessing(mat, bs, md);
-            /* the applications of the trace of a signature-based run
-             * number the basis elements differently */
-            if (md->trace_level == LEARN_TRACER && md->tr->sgr == NULL) {
+            if (md->trace_level == LEARN_TRACER) {
                 record_final_reduction(mat, bs, md);
             }
         }
