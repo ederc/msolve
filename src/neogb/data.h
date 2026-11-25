@@ -134,7 +134,10 @@ struct ht_t
 {
     exp_t **ev;   /* exponent vector */
     hd_t *hd;     /* hash data */
-    hi_t *hmap;   /* hash map */
+    hi_t *hmap;   /* hash map: an index of an entry is less than hsz, its
+                   * slot holds the bits of its hash value above those of
+                   * hsz-1 and the index, so that most other entries can
+                   * be told apart without reading their hash data */
     len_t elo;    /* load of exponent vector before current step */
     hl_t eld;     /* load of exponent vector */
     hl_t esz;     /* size of exponent vector */

@@ -457,7 +457,7 @@ static void enlarge_hash_table(
                 if (ht->hmap[k]) {
                     continue;
                 }
-                ht->hmap[k] = i;
+                ht->hmap[k] = (h & ~mod) | i;
                 break;
             }
         }
@@ -695,13 +695,14 @@ start:
 restart:
     for (; i < hsz; ++i) {
         k = (hi_t)((k+i) & mod);
-        const hi_t hm = ht->hmap[k];
-        if (!hm) {
+        const hi_t hs = ht->hmap[k];
+        if (!hs) {
             break;
         }
-        if (ht->hd[hm].val != h) {
+        if ((hs ^ h) & ~mod) {
             continue;
         }
+        const hi_t hm = hs & mod;
         const exp_t * const ehm = ht->ev[hm];
         for (j = 0; j < evl-1; j += 2) {
             if (a[j] != ehm[j] || a[j+1] != ehm[j+1]) {
@@ -717,7 +718,8 @@ restart:
     }
 
     /* add element to hash table */
-    ht->hmap[k]  = pos = (hi_t)ht->eld;
+    pos = (hi_t)ht->eld;
+    ht->hmap[k]  = (h & ~mod) | pos;
     e   = ht->ev[pos];
     d   = ht->hd + pos;
     memcpy(e, a, (unsigned long)evl * sizeof(exp_t));
@@ -761,13 +763,14 @@ static inline hi_t insert_multiplied_signature_in_hash_table(
 restart:
     for (; i < hsz; ++i) {
         k = (hi_t)((k+i) & mod);
-        const hi_t hm = ht->hmap[k];
-        if (!hm) {
+        const hi_t hs = ht->hmap[k];
+        if (!hs) {
             break;
         }
-        if (ht->hd[hm].val != h) {
+        if ((hs ^ h) & ~mod) {
             continue;
         }
+        const hi_t hm = hs & mod;
         const exp_t * const ehm = ht->ev[hm];
         for (j = 0; j < evl-1; j += 2) {
             if (a[j] != ehm[j] || a[j+1] != ehm[j+1]) {
@@ -783,7 +786,8 @@ restart:
     }
 
     /* add element to hash table */
-    ht->hmap[k]  = pos = (hi_t)ht->eld;
+    pos = (hi_t)ht->eld;
+    ht->hmap[k]  = (h & ~mod) | pos;
     e   = ht->ev[pos];
     d   = ht->hd + pos;
     memcpy(e, a, (unsigned long)evl * sizeof(exp_t));
@@ -825,14 +829,15 @@ static inline int32_t is_contained_in_hash_table(
 restart:
     for (; i < ht->hsz; ++i) {
         k = (hi_t)((k+i) & mod);
-        const hi_t hm = ht->hmap[k];
-        if (!hm) {
+        const hi_t hs = ht->hmap[k];
+        if (!hs) {
             *kp = k;
             return 0;
         }
-        if (ht->hd[hm].val != h) {
+        if ((hs ^ h) & ~mod) {
             continue;
         }
+        const hi_t hm = hs & mod;
         const exp_t * const ehm = ht->ev[hm];
         for (j = 0; j < ht->evl-1; j += 2) {
             if (a[j] != ehm[j] || a[j+1] != ehm[j+1]) {
@@ -862,7 +867,8 @@ static inline len_t add_to_hash_table(
 {
     /* add element to hash table */
     hi_t pos;
-    ht->hmap[k] = pos = (hi_t)ht->eld;
+    pos = (hi_t)ht->eld;
+    ht->hmap[k] = (h & ~(hi_t)(ht->hsz - 1)) | pos;
     exp_t *e    = ht->ev[pos];
     hd_t *d     = ht->hd + pos;
     memcpy(e, a, (unsigned long)ht->evl * sizeof(exp_t));
@@ -937,13 +943,14 @@ static inline hi_t insert_in_hash_table(
 restart:
     for (; i < hsz; ++i) {
         k = (hi_t)((k+i) & mod);
-        const hi_t hm = ht->hmap[k];
-        if (!hm) {
+        const hi_t hs = ht->hmap[k];
+        if (!hs) {
             break;
         }
-        if (ht->hd[hm].val != h) {
+        if ((hs ^ h) & ~mod) {
             continue;
         }
+        const hi_t hm = hs & mod;
         const exp_t * const ehm = ht->ev[hm];
         for (j = 0; j < evl-1; j += 2) {
             if (a[j] != ehm[j] || a[j+1] != ehm[j+1]) {
@@ -959,7 +966,8 @@ restart:
     }
 
     /* add element to hash table */
-    ht->hmap[k]  = pos = (hi_t)ht->eld;
+    pos = (hi_t)ht->eld;
+    ht->hmap[k]  = (h & ~mod) | pos;
     e   = ht->ev[pos];
     d   = ht->hd + pos;
     memcpy(e, a, (unsigned long)evl * sizeof(exp_t));
@@ -1098,13 +1106,14 @@ letsgo:
 restart:
         for (; i < hsz; ++i) {
             k = (hi_t)(k+i) & mod;
-            const hi_t hm = bht->hmap[k];
-            if (!hm) {
+            const hi_t hs = bht->hmap[k];
+            if (!hs) {
                 break;
             }
-            if (bht->hd[hm].val != h) {
+            if ((hs ^ h) & ~mod) {
                 continue;
             }
+            const hi_t hm = hs & mod;
             const exp_t * const ehm = bht->ev[hm];
             for (j = 0; j < evl-1; j += 2) {
                 if (n[j] != ehm[j] || n[j+1] != ehm[j+1]) {
@@ -1122,7 +1131,8 @@ restart:
         }
 
         /* add element to hash table */
-        bht->hmap[k] = pos = (hi_t)bht->eld;
+        pos = (hi_t)bht->eld;
+        bht->hmap[k] = (h & ~mod) | pos;
         d = bht->hd + bht->eld;
         d->sdm  = uht->hd[lcms[l]].sdm;
         d->deg  = uht->hd[lcms[l]].deg;
@@ -1199,7 +1209,7 @@ static void insert_in_hash_table_parallel(
         for (j = 0; ; ++j) {
             k = (hi_t)((k+j) & mod);
             if (ht->hmap[k] == 0
-                    && __sync_bool_compare_and_swap(ht->hmap+k, 0, p)) {
+                    && __sync_bool_compare_and_swap(ht->hmap+k, 0, (h & ~mod) | p)) {
                 break;
             }
         }
@@ -1350,6 +1360,27 @@ static inline int is_product_of(
         return is_product_of_8(a + t, b + t, c + t);
     }
 #endif
+    /* shorter exponent vectors are compared in words of 64 bits, the
+     * last word overlapping the previous one: the entries of products
+     * do not exceed EXP_MAX, see check_product_degree(), so the sums of
+     * the words do not carry from one entry into the next one */
+    const len_t wl = (len_t)(sizeof(uint64_t) / sizeof(exp_t));
+    if (evl >= wl) {
+        uint64_t x, y, z;
+        const len_t t = evl - wl;
+        for (j = 0; j < t; j += wl) {
+            memcpy(&x, a + j, sizeof(uint64_t));
+            memcpy(&y, b + j, sizeof(uint64_t));
+            memcpy(&z, c + j, sizeof(uint64_t));
+            if (x + y != z) {
+                return 0;
+            }
+        }
+        memcpy(&x, a + t, sizeof(uint64_t));
+        memcpy(&y, b + t, sizeof(uint64_t));
+        memcpy(&z, c + t, sizeof(uint64_t));
+        return x + y == z;
+    }
     for (j = 0; j < evl; ++j) {
         if ((exp_t)(a[j] + b[j]) != c[j]) {
             return 0;
@@ -1420,13 +1451,14 @@ static inline hi_t find_multiplied_in_hash_table(
     k = h;
     for (i = 0; i < hsz; ++i) {
         k = (hi_t)((k+i) & mod);
-        const hi_t hm = ht->hmap[k];
-        if (!hm) {
+        const hi_t hs = ht->hmap[k];
+        if (!hs) {
             return 0;
         }
-        if (ht->hd[hm].val != h) {
+        if ((hs ^ h) & ~mod) {
             continue;
         }
+        const hi_t hm = hs & mod;
         if (!is_product_of(ea, eb, ht->ev[0] + (uint64_t)hm * evl, evl)) {
             continue;
         }
@@ -1456,13 +1488,14 @@ static inline hi_t insert_multiplied_in_hash_table(
     k = h;
     for (i = 0; i < hsz; ++i) {
         k = (hi_t)((k+i) & mod);
-        const hi_t hm = ht->hmap[k];
-        if (!hm) {
+        const hi_t hs = ht->hmap[k];
+        if (!hs) {
             break;
         }
-        if (ht->hd[hm].val != h) {
+        if ((hs ^ h) & ~mod) {
             continue;
         }
+        const hi_t hm = hs & mod;
         if (!is_product_of(ea, eb, ht->ev[0] + (uint64_t)hm * evl, evl)) {
             continue;
         }
@@ -1471,7 +1504,7 @@ static inline hi_t insert_multiplied_in_hash_table(
 
     /* add element to hash table */
     const hi_t pos  = (hi_t)ht->eld;
-    ht->hmap[k]     = pos;
+    ht->hmap[k]     = (h & ~mod) | pos;
     exp_t *n        = ht->ev[pos];
     for (j = 0; j < evl; ++j) {
         n[j]  = (exp_t)(ea[j] + eb[j]);
@@ -1488,8 +1521,8 @@ static inline hi_t insert_multiplied_in_hash_table(
 
 /* distance in terms for prefetching when looking up the multiplied
  * terms of a polynomial in a hash table: the basis data of term l + 3d,
- * the hash map slot of term l + 2d and the hash data and the exponent
- * vector of the first probed entry of term l + d are prefetched while
+ * the hash map slot of term l + 2d and the exponent vector of the first
+ * probed entry of term l + d are prefetched while
  * handling term l, so that the loads of each stage hit the cache */
 #define MUL_PF_DIST 4
 
@@ -1511,8 +1544,7 @@ static inline void prefetch_multiplied_terms(
                 + ((h1 + hd1[b[l + 2*MUL_PF_DIST]].val) & mod));
     }
     if (l + MUL_PF_DIST < len) {
-        const hi_t hm = ht->hmap[(h1 + hd1[b[l + MUL_PF_DIST]].val) & mod];
-        __builtin_prefetch(ht->hd + hm);
+        const hi_t hm = ht->hmap[(h1 + hd1[b[l + MUL_PF_DIST]].val) & mod] & mod;
         __builtin_prefetch(ht->ev[0] + (uint64_t)hm * ht->evl);
     }
 }
@@ -1599,13 +1631,14 @@ letsgo:
 restart:
         for (; i < hsz; ++i) {
             k = (hi_t)(k+i) & mod;
-            const hi_t hm  = ht->hmap[k];
-            if (!hm) {
+            const hi_t hs  = ht->hmap[k];
+            if (!hs) {
                 break;
             }
-            if (ht->hd[hm].val != h) {
+            if ((hs ^ h) & ~mod) {
                 continue;
             }
+            const hi_t hm = hs & mod;
             const exp_t * const ehm = ht->ev[hm];
             for (j = 0; j < evl-1; j += 2) {
                 if (n[j] != ehm[j] || n[j+1] != ehm[j+1]) {
@@ -1623,7 +1656,8 @@ restart:
         }
 
         /* add element to hash table */
-        ht->hmap[k] = pos = (hi_t)ht->eld;
+        pos = (hi_t)ht->eld;
+        ht->hmap[k] = (h & ~mod) | pos;
         e = ht->ev[ht->eld];
         d = ht->hd + ht->eld;
         memcpy(e, n, (unsigned long)evl * sizeof(exp_t));
@@ -2140,8 +2174,7 @@ static len_t boolean_multiplied_row(
             __builtin_prefetch(sht->hmap + (br->h[rep[k+2*MUL_PF_DIST]] & mod));
         }
         if (k + MUL_PF_DIST < n) {
-            const hi_t hm = sht->hmap[br->h[rep[k+MUL_PF_DIST]] & mod];
-            __builtin_prefetch(sht->hd + hm);
+            const hi_t hm = sht->hmap[br->h[rep[k+MUL_PF_DIST]] & mod] & mod;
             __builtin_prefetch(sht->ev[0] + (uint64_t)hm * evl);
         }
         i = rep[k];
@@ -2463,7 +2496,7 @@ static void insert_missing_multiplied_terms(
                 for (j = 0; ; ++j) {
                     k = (hi_t)((k+j) & mod);
                     if (sht->hmap[k] == 0
-                            && __sync_bool_compare_and_swap(sht->hmap+k, 0, p)) {
+                            && __sync_bool_compare_and_swap(sht->hmap+k, 0, (h & ~mod) | p)) {
                         break;
                     }
                 }
