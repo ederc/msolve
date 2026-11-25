@@ -1113,7 +1113,9 @@ static void reduce_final_basis(
         len_t i;
 
         ht_t *bht   = bs->ht;
-        ht_t *sht   = md->ht;
+        /* when applying a trace the columns are those of bht, see
+         * round_hash_table() */
+        ht_t *sht   = round_hash_table(bs, md);
 
         /* when applying a trace whose final reduction is recorded, see
          * below, its matrix is generated from the trace as in any other
@@ -1194,6 +1196,9 @@ static void reduce_final_basis(
         convert_sparse_matrix_rows_to_basis_elements(
             0, mat, bs, bht, sht, md);
         md->tc_state = 0;
+        if (sht == bht) {
+            reset_matrix_columns(sht);
+        }
 
         bs->ld = bs->lml = mat->np;
         clear_matrix(mat);
@@ -1431,10 +1436,10 @@ static bs_t *run_f4(
 
         print_round_timings(VERBSTREAM, md, rrt, crt);
     }
-    if (bs->ht->cl != NULL) {
-        stop_matrix_columns(bs->ht);
-    }
     if (*errp > 0) {
+        if (bs->ht->cl != NULL) {
+            stop_matrix_columns(bs->ht);
+        }
         free_basis_and_only_local_hash_table_data(&bs);
         /* also release the local meta data (symbolic hash table, pair
          * set, ...) and the matrix: finalize_f4 is not called here */
@@ -1447,6 +1452,9 @@ static bs_t *run_f4(
 
         /* reduce final basis? */
         reduce_final_basis(bs, mat, md);
+        if (bs->ht->cl != NULL) {
+            stop_matrix_columns(bs->ht);
+        }
 
         if (gens != NULL) {
             if (!bs->constant && !verify_basis(bs, mat, md, gens)) {
