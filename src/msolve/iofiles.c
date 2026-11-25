@@ -1056,79 +1056,57 @@ static inline void get_term(const char *line, char **prev_pos,
 
 
 /*assumes that coeffs in file fit in word size */
+/* the terms whose coefficients are zero modulo the characteristic are
+ * left out, *kept is set to the number of terms stored */
 static int get_coefficient_ff_and_term_from_line(char *line, int32_t nterms,
                                           int64_t field_char,
-                                          data_gens_ff_t *gens, int64_t pos){
+                                          data_gens_ff_t *gens, int64_t pos,
+                                          int32_t *kept){
   char *prev_pos = NULL;
   size_t term_size = 50000;
   char *term  = (char *)malloc(term_size * sizeof(char));
   int64_t cf_tmp  = 0; /** temp for coefficient value, possibly coeff is negative. */
+  int32_t w = 0; /* number of terms stored */
 
   prev_pos = line;
-  get_term(line, &prev_pos, &term, &term_size);
-  if(term != NULL){
-    int64_t iv_tmp;
+  for(int64_t j = 0; j < nterms; j++){
+    get_term(line, &prev_pos, &term, &term_size);
+    if (term == NULL) {
+      if (j == 0) {
+        free(term);
+        return 1;
+      }
+      continue;
+    }
     if (is_gf2_ext(field_char)) {
       /* zero coefficients are possible, e.g. for even integers, neogb
        * removes these terms */
-      iv_tmp = coefficient_gf2x(term, field_char);
-      if (iv_tmp < 0) {
+      cf_tmp = coefficient_gf2x(term, field_char);
+      if (cf_tmp < 0) {
         fprintf(stderr, "Error when parsing term %s (coefficient is not an element of GF(%" PRId64 ")).\n", term, field_char);
         free(term);
         return 1;
       }
     } else {
-    iv_tmp  = coefficient_mod_p(term, field_char);
-    if (iv_tmp == 0) {
-      fprintf(stderr, "Error when parsing term %s (coefficient cannot be 0 modulo %" PRId64 ").\n", term, field_char);
-      free(term);
-      return 1;
-    }
+      cf_tmp  = coefficient_mod_p(term, field_char);
+      if (cf_tmp == 0) {
+        continue;
+      }
     }
     if (gens->cfs_64 != NULL) {
-      gens->cfs_64[pos] = iv_tmp;
+      gens->cfs_64[pos+w] = cf_tmp;
     } else {
-      gens->cfs[pos]  = (int32_t)iv_tmp;
+      gens->cfs[pos+w] = (int32_t)cf_tmp;
     }
-    if (store_exponent(term, gens, pos * (int64_t)gens->nvars)) {
+    if (store_exponent(term, gens, (pos + w) * (int64_t)gens->nvars)) {
       free(term);
       return 1;
     }
-    for(int64_t j = 1; j < nterms; j++){
-      get_term(line, &prev_pos, &term, &term_size);
-      if (term != NULL) {
-        if (is_gf2_ext(field_char)) {
-          cf_tmp = coefficient_gf2x(term, field_char);
-          if (cf_tmp < 0) {
-            fprintf(stderr, "Error when parsing term %s (coefficient is not an element of GF(%" PRId64 ")).\n", term, field_char);
-            free(term);
-            return 1;
-          }
-        } else {
-        cf_tmp  = coefficient_mod_p(term, field_char);
-        if (cf_tmp == 0) {
-          fprintf(stderr, "Error when parsing term %s (coefficient cannot be 0 modulo %" PRId64 ").\n", term, field_char);
-          free(term);
-          return 1;
-        }
-        }
-        if (gens->cfs_64 != NULL) {
-          gens->cfs_64[pos+j] = cf_tmp;
-        } else {
-          gens->cfs[pos+j] = (int32_t)cf_tmp;
-        }
-        if (store_exponent(term, gens, (pos + j) * (int64_t)gens->nvars)) {
-          free(term);
-          return 1;
-        }
-      }
-      //      store_exponent(term, basis, ht);
-    }
-    free(term);
-    return 0;
+    w++;
   }
   free(term);
-  return 1;
+  *kept = w;
+  return 0;
 }
 
 static void beginning_strterm_to_mpz(char *str, mpz_t *num, mpz_t *den){
@@ -1259,16 +1237,29 @@ static void get_coeffs_and_exponents_ff32(FILE *fh, nelts_t all_nterms,
             i--;
             continue;
         }
+        int32_t kept = 0;
         if(get_coefficient_ff_and_term_from_line(line, gens->lens[i], gens->field_char,
-                    gens, pos)){
+                    gens, pos, &kept)){
             fprintf(ERRSTREAM, "Error when reading file (exit but things need to be free-ed)\n");
             free(line);
             fclose(fh);
             exit(1);
         }
-        pos += gens->lens[i];
+        gens->lens[i] = kept;
+        pos += kept;
     }
     free(line);
+    /* generators all of whose coefficients are zero modulo the
+     * characteristic are left out */
+    int32_t ng = 0;
+    for (int32_t i = 0; i < *nr_gens; i++) {
+        if (gens->lens[i] > 0) {
+            gens->lens[ng++] = gens->lens[i];
+        }
+    }
+    *nr_gens     = ng;
+    gens->ngens  = ng;
+    gens->nterms = pos;
 }
 
 
