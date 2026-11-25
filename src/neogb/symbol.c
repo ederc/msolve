@@ -1183,6 +1183,22 @@ static uint8_t *compress_row(
  * they are, this bounds the additional memory usage */
 #define TC_RAW_MAX ((unsigned long)64 << 20)
 
+/* TC_RAW_MAX, or the number of bytes given by the environment variable
+ * NEOGB_TC_RAW_MAX, which the tests set to store all matrices compressed */
+static unsigned long tc_raw_max(
+        void
+        )
+{
+    static unsigned long m = 0;
+    static int set = 0;
+    if (!__atomic_load_n(&set, __ATOMIC_ACQUIRE)) {
+        const char *e = getenv("NEOGB_TC_RAW_MAX");
+        m = e != NULL ? strtoul(e, NULL, 10) : TC_RAW_MAX;
+        __atomic_store_n(&set, 1, __ATOMIC_RELEASE);
+    }
+    return m;
+}
+
 /* the length of the row of index i of the cached matrix tc */
 static inline len_t cached_row_length(
         const tc_t * const tc,
@@ -1314,7 +1330,7 @@ static void store_matrix_in_trace_cache(
                 + OFFSET) * sizeof(hm_t);
     }
     tc->raw   = __atomic_add_fetch(&(tr->tcraw), rsz, __ATOMIC_RELAXED)
-        <= TC_RAW_MAX;
+        <= tc_raw_max();
     /* with the exact sparse linear algebra the reducer rows are stored
      * with the positions of their coefficients in the matrix, see tc_t;
      * the sizes of the compressed rows depend on them */
