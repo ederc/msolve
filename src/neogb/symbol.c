@@ -203,6 +203,43 @@ static int hash_cmp(
     return (x > y) - (x < y);
 }
 
+/* Updates which lead terms of the known Groebner basis md->gref are
+ * divisible by the lead term of an element of bs. Returns 1 if all of
+ * them of degree at most d are, then each element of the ideal with a
+ * lead term of degree at most d reduces to zero by bs. *all is set to 1
+ * if all of them are, then bs is a Groebner basis. */
+static int guide_covered(
+        const bs_t * const bs,
+        md_t *md,
+        const deg_t d,
+        int *all
+        )
+{
+    len_t i, k;
+    const ht_t * const bht = bs->ht;
+    int cov = 1;
+    *all = 1;
+    for (i = 0; i < md->ngref; ++i) {
+        if (md->gcov[i] == 0) {
+            for (k = md->gchk; k < bs->ld; ++k) {
+                if (check_monomial_division(md->gref[i],
+                            bs->hm[k][OFFSET], bht)) {
+                    md->gcov[i] = 1;
+                    break;
+                }
+            }
+        }
+        if (md->gcov[i] == 0) {
+            *all = 0;
+            if (bht->hd[md->gref[i]].deg <= d) {
+                cov = 0;
+            }
+        }
+    }
+    md->gchk = bs->ld;
+    return cov;
+}
+
 /* selection of spairs, at the moment only selection
 by minial degree of the spairs is supported
 
@@ -283,19 +320,34 @@ static int32_t select_spairs_by_minimal_degree(
     }
     npd  = i;
     if (md->glcm != NULL) {
-        /* only the pairs with the lcms given are kept, the others are
-         * removed from the pair set */
+        int all = 0;
+        const int cov = guide_covered(bs, md, mdeg, &all);
+        if (all) {
+            /* the basis is a Groebner basis */
+            psl->ld = 0;
+            return 1;
+        }
+        /* the pairs with the lcms of the guide first, the other ones stay
+         * in the pair set for later rounds */
+        spair_t *tmp = (spair_t *)malloc((unsigned long)npd * sizeof(spair_t));
+        len_t nt = 0;
         for (i = 0, j = 0; i < npd; ++i) {
-            const hm_t * const g = bsearch(&(ps[i].lcm), md->glcm,
-                    (unsigned long)md->nglcm, sizeof(hm_t), hash_cmp);
-            if (g != NULL) {
+            if (bsearch(&(ps[i].lcm), md->glcm, (unsigned long)md->nglcm,
+                        sizeof(hm_t), hash_cmp) != NULL) {
                 ps[j++] = ps[i];
+            } else {
+                tmp[nt++] = ps[i];
             }
         }
-        memmove(ps+j, ps+npd, (unsigned long)(psl->ld-npd) * sizeof(spair_t));
-        psl->ld -= npd - j;
-        npd      = j;
-        if (npd == 0) {
+        memcpy(ps+j, tmp, (unsigned long)nt * sizeof(spair_t));
+        free(tmp);
+        if (j > 0) {
+            npd = j;
+        } else if (cov) {
+            /* all elements of the ideal with lead terms of degree up to
+             * mdeg reduce to zero by the basis, so do the S-pairs */
+            memmove(ps, ps+npd, (unsigned long)(psl->ld-npd) * sizeof(spair_t));
+            psl->ld -= npd;
             if (psl->ld == 0) {
                 return 1;
             }

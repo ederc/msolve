@@ -854,18 +854,20 @@ static int same_reduced_basis(const bs_t * const a, const bs_t * const b){
 
 /*
   Learns the trace modulo fc guided by a signature-based run: the
-  signature-based F4 computes the reduced Groebner basis modulo fc and
-  shows which S-pairs do not reduce to zero, F4 then learns its trace
-  selecting only the S-pairs with the lcms of these, so that it reduces
-  few rows to zero. The rows of F4 are elements of the ideal, so if the
-  basis of F4 is the one of the signature-based run, the trace is the one
-  of a computation of the reduced Groebner basis. Otherwise, or if the
-  signature-based run hands over to F4, the trace is learned by F4 as
-  usual. The trace is applied as any trace learned by F4, which is
-  cheaper than the application of the record of the signature-based run.
-  Where the signature-based run is expensive or the selected S-pairs do
-  not give the basis this costs more than learning the trace by F4, so
-  it is optional.
+  signature-based F4 computes the reduced Groebner basis G modulo fc and
+  shows which S-pairs do not reduce to zero. F4 then learns its trace,
+  selecting the S-pairs with the lcms of these first. The other S-pairs of
+  a degree d are dropped once each lead term of G of degree at most d is
+  divisible by a lead term of the basis of F4: the basis of F4 lies in the
+  ideal, so all elements of the ideal with lead terms of degree at most d
+  reduce to zero by it. F4 stops once all lead terms of G are, then its
+  basis is a Groebner basis. Thus F4 reduces few rows to zero. As a check
+  the reduced basis of F4 must be G, otherwise, or if the signature-based
+  run hands over to F4, the trace is learned by F4 as usual. The trace is
+  applied as any trace learned by F4, which is cheaper than the
+  application of the record of the signature-based run. Where the
+  signature-based run is expensive this costs more than learning the
+  trace by F4, so it is optional.
  */
 static bs_t *guided_trace_learning(bs_t *bs_qq, md_t *st, const int32_t fc,
                                    const int info_level, int32_t *errp){
@@ -880,12 +882,24 @@ static bs_t *guided_trace_learning(bs_t *bs_qq, md_t *st, const int32_t fc,
   bs_t *bs = NULL;
   if(*errp == 0 && ref != NULL && !ref->constant){
     st->glcm = sig_record_lead_terms(st->tr->sgr, bs_qq->ht, &(st->nglcm));
+    st->ngref = ref->lml;
+    st->gref  = (hm_t *)malloc((size_t)(ref->lml + 1) * sizeof(hm_t));
+    st->gcov  = (int8_t *)calloc((size_t)ref->lml + 1, sizeof(int8_t));
+    st->gchk  = 0;
+    for(len_t i = 0; i < ref->lml; i++){
+      st->gref[i] = ref->hm[ref->lmps[i]][OFFSET];
+    }
     free_trace(&(st->tr));
     st->trace_level = NO_TRACER;
     bs = core_gba(bs_qq, st, errp, fc);
     free(st->glcm);
+    free(st->gref);
+    free(st->gcov);
     st->glcm  = NULL;
     st->nglcm = 0;
+    st->gref  = NULL;
+    st->ngref = 0;
+    st->gcov  = NULL;
     if(*errp == 0 && bs != NULL && same_reduced_basis(bs, ref)){
       free_basis_without_hash_table(&ref);
       return bs;

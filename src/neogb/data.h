@@ -499,11 +499,17 @@ struct md_t
     int32_t mo; /* monomial ordering: 0=DRL, 1=LEX*/
     int32_t laopt;
     int32_t sig_f4;   /* 1 if the signature-based F4 is tried first */
-    /* if not NULL, F4 only selects the S-pairs whose lcms are among the
-     * nglcm hashes of the basis hash table in glcm, sorted, see
-     * select_spairs_by_minimal_degree() */
+    /* if not NULL, F4 is guided by a known reduced Groebner basis: its
+     * ngref lead terms are in gref, gcov marks the ones divisible by the
+     * lead term of an element of the basis of F4 among the first gchk
+     * ones, the S-pairs with the lcms in glcm (nglcm hashes, sorted) are
+     * selected first, see select_spairs_by_minimal_degree() */
     hm_t *glcm;
     len_t nglcm;
+    hm_t *gref;
+    len_t ngref;
+    int8_t *gcov;
+    len_t gchk;
     int32_t init_hts;
     int32_t nthrds;
     int32_t reset_ht;
