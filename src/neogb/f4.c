@@ -1048,6 +1048,52 @@ static void process_redundant_elements(
     }
 }
 
+/* records the matrix of the final reduction in the trace as the round
+ * td[ltd], see trace_t: the reducer rows found by the symbolic
+ * preprocessing and the rows to be reduced, the minimal basis elements
+ * multiplied by 1 */
+static void record_final_reduction(
+        const mat_t * const mat,
+        const bs_t * const bs,
+        md_t *md
+        )
+{
+    len_t i;
+
+    trace_t *tr = md->tr;
+    ht_t *bht   = bs->ht;
+    if (tr->ltd == tr->std) {
+        tr->std *= 2;
+        tr->td   = realloc(tr->td, (unsigned long)tr->std * sizeof(td_t));
+        memset(tr->td + tr->std/2, 0, (unsigned long)tr->std/2 * sizeof(td_t));
+    }
+    exp_t *z = (exp_t *)calloc((unsigned long)bht->evl, sizeof(exp_t));
+    if (bht->eld == bht->esz-1) {
+        enlarge_hash_table(bht);
+    }
+    const hm_t one = insert_in_hash_table(z, bht);
+    free(z);
+
+    td_t *td = tr->td + tr->ltd;
+    td->rld  = 2 * mat->nru;
+    td->rri  = (len_t *)malloc((unsigned long)(td->rld + 1) * sizeof(len_t));
+    for (i = 0; i < mat->nru; ++i) {
+        td->rri[2*i]   = mat->rr[i][BINDEX];
+        td->rri[2*i+1] = mat->rr[i][MULT];
+    }
+    td->tld  = 2 * mat->nrl;
+    td->tri  = (len_t *)malloc((unsigned long)(td->tld + 1) * sizeof(len_t));
+    for (i = 0; i < mat->nrl; ++i) {
+        td->tri[2*i]   = bs->lmps[i];
+        td->tri[2*i+1] = one;
+    }
+    td->rba  = (rba_t **)calloc((unsigned long)mat->nrl + 1, sizeof(rba_t *));
+    td->nlms = NULL;
+    td->nlm  = 0;
+    td->deg  = 0;
+    tr->fin  = 1;
+}
+
 static void reduce_final_basis(
         bs_t *bs,
         mat_t *mat,
@@ -1067,29 +1113,46 @@ static void reduce_final_basis(
         ht_t *bht   = bs->ht;
         ht_t *sht   = md->ht;
 
-        /* add all non-redundant basis elements as matrix rows, their
-         * terms are inserted into sht in parallel (multiplied by 1) */
-        const len_t lml = bs->lml;
-        mat->tr = (hm_t **)malloc((unsigned long)lml * sizeof(hm_t *));
-        hm_t **polys  = (hm_t **)malloc((unsigned long)lml * sizeof(hm_t *));
-        val_t *hs     = (val_t *)calloc((unsigned long)lml, sizeof(val_t));
-        exp_t *ems    = (exp_t *)calloc(
-                (unsigned long)lml * bht->evl, sizeof(exp_t));
-        for (i = 0; i < lml; ++i) {
-            polys[i] = bs->hm[bs->lmps[i]];
-        }
-        multiplied_polys_to_matrix_rows(mat->tr, lml, hs, ems, polys,
-                sht, bht, md->nthrds);
-        for (i = 0; i < lml; ++i) {
-            sht->hd[mat->tr[i][OFFSET]].idx  = 1;
-        }
-        free(polys);
-        free(hs);
-        free(ems);
-        mat->nr = mat->nrl = mat->sz = bs->lml;
-        mat->nc = 0;
+        /* when applying a trace whose final reduction is recorded, see
+         * below, its matrix is generated from the trace as in any other
+         * round, without symbolic preprocessing, or taken from the
+         * matrices stored in the trace */
+        const int traced = md->trace_level == APPLY_TRACER
+            && md->tr->fin && md->tr->sgr == NULL
+            && md->trace_rd == md->tr->ltd;
+        md->tc_state = 0;
+        if (traced) {
+            generate_matrix_from_trace(mat, bs, md);
+        } else {
+            /* add all non-redundant basis elements as matrix rows, their
+             * terms are inserted into sht in parallel (multiplied by 1) */
+            const len_t lml = bs->lml;
+            mat->tr = (hm_t **)malloc((unsigned long)lml * sizeof(hm_t *));
+            hm_t **polys  = (hm_t **)malloc((unsigned long)lml * sizeof(hm_t *));
+            val_t *hs     = (val_t *)calloc((unsigned long)lml, sizeof(val_t));
+            exp_t *ems    = (exp_t *)calloc(
+                    (unsigned long)lml * bht->evl, sizeof(exp_t));
+            for (i = 0; i < lml; ++i) {
+                polys[i] = bs->hm[bs->lmps[i]];
+            }
+            multiplied_polys_to_matrix_rows(mat->tr, lml, hs, ems, polys,
+                    sht, bht, md->nthrds);
+            for (i = 0; i < lml; ++i) {
+                sht->hd[mat->tr[i][OFFSET]].idx  = 1;
+            }
+            free(polys);
+            free(hs);
+            free(ems);
+            mat->nr = mat->nrl = mat->sz = bs->lml;
+            mat->nc = 0;
 
-        symbolic_preprocessing(mat, bs, md);
+            symbolic_preprocessing(mat, bs, md);
+            /* the applications of the trace of a signature-based run
+             * number the basis elements differently */
+            if (md->trace_level == LEARN_TRACER && md->tr->sgr == NULL) {
+                record_final_reduction(mat, bs, md);
+            }
+        }
         /* over finite fields the reducers are the known pivots on the
          * left side of the matrix as in any other round, the basis
          * elements are the rows to be reduced. They are reduced by the
@@ -1107,11 +1170,17 @@ static void reduce_final_basis(
             fprintf(VERBSTREAM, "reduce final basis ");
             fflush(VERBSTREAM);
         }
-        convert_hashes_to_columns(mat, md, sht);
-        mat->nc = mat->ncl + mat->ncr;
+        if (md->tc_state != 1) {
+            convert_hashes_to_columns(mat, md, sht);
+            mat->nc = mat->ncl + mat->ncr;
 
-        sort_matrix_rows_decreasing(mat->rr, mat->nru);
-        sort_matrix_rows_increasing(mat->tr, mat->nrl);
+            sort_matrix_rows_decreasing(mat->rr, mat->nru);
+            sort_matrix_rows_increasing(mat->tr, mat->nrl);
+            if (md->tc_state == 2) {
+                store_matrix_in_trace_cache(md->tr, md->trace_rd,
+                        mat, sht, md->hcm, bs);
+            }
+        }
 
         exact_linear_algebra(mat, bs, bs, md);
 
@@ -1122,6 +1191,7 @@ static void reduce_final_basis(
 
         convert_sparse_matrix_rows_to_basis_elements(
             0, mat, bs, bht, sht, md);
+        md->tc_state = 0;
 
         bs->ld = bs->lml = mat->np;
         clear_matrix(mat);

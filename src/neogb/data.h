@@ -375,6 +375,9 @@ struct trace_t
     td_t *td;     /* array of trace data for each round of F4 */
     ts_t *ts;     /* array of trace data for each saturation step */
     len_t ltd;    /* load of trace data td */
+    int8_t fin;   /* 1 if td[ltd] holds the final reduction of the basis,
+                   * its rows to be reduced are the minimal basis
+                   * elements, see reduce_final_basis() */
     len_t lts;    /* load of trace data ts */
     len_t std;    /* size allocated for trace data td */
     len_t sts;    /* size allocated for trace data ts */

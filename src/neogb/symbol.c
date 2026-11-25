@@ -1001,7 +1001,7 @@ static void initialize_trace_cache(
 {
     len_t i;
 
-    tr->tc  = (tc_t **)calloc((unsigned long)tr->ltd, sizeof(tc_t *));
+    tr->tc  = (tc_t **)calloc((unsigned long)(tr->ltd + tr->fin), sizeof(tc_t *));
     /* the basis grows by the new leading monomials of each round */
     tr->bsz = md->ngens;
     for (i = 0; i < tr->ltd; ++i) {
@@ -1374,7 +1374,7 @@ static void generate_matrix_from_trace(
      * hash table may differ from the one when the matrices were stored,
      * so we do not use them for the remaining rounds. */
     md->tc_state = 0;
-    if (md->tcok != NULL && md->tcoff == 0 && idx < tr->ltd) {
+    if (md->tcok != NULL && md->tcoff == 0 && idx < tr->ltd + tr->fin) {
         if (basis_supports_agree_with_trace(md, td.rri, td.rld, bs)
                 && basis_supports_agree_with_trace(md, td.tri, td.tld, bs)) {
             const tc_t * const tc = __atomic_load_n(tr->tc + idx,
@@ -1513,6 +1513,10 @@ static int preprocessing(
         }
         symbolic_preprocessing(mat, bs, md);
     } else {
+        /* td[ltd] may hold the final reduction, see trace_t */
+        if (md->trace_rd >= md->tr->ltd) {
+            return 1;
+        }
         generate_matrix_from_trace(mat, bs, md);
     }
     if (mat->nc == 0) {

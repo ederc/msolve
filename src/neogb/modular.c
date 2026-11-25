@@ -70,7 +70,7 @@ void free_trace_cache(
 {
     len_t i;
     if (tr->tc != NULL) {
-        for (i = 0; i < tr->ltd; ++i) {
+        for (i = 0; i < tr->ltd + tr->fin; ++i) {
             if (tr->tc[i] != NULL) {
                 free(tr->tc[i]->rows);
                 free(tr->tc[i]->ro);
@@ -105,7 +105,7 @@ void free_trace(
             free(tr->ts[i].nlms);
             /* free(tr->ts[i].lmh); */
         }
-        for (i = 0; i < tr->ltd; ++i) {
+        for (i = 0; i < tr->ltd + tr->fin; ++i) {
             free(tr->td[i].tri);
             free(tr->td[i].rri);
             for (j = 0; j < tr->td[i].tld/2; ++j) {
