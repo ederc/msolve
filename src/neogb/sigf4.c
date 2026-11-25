@@ -49,6 +49,11 @@
 
 /* handover parameters */
 #define SG_PAIRS        1000  /* least S-pairs of an update to be tested */
+/* a round is stopped once its reductions take more than SG_WORK_GROWTH
+ * times the multiply-adds of the round before and more than SG_WORK_MIN,
+ * see sg_round() */
+#define SG_WORK_GROWTH 16
+#define SG_WORK_MIN ((uint64_t)1 << 27)
 #define SG_EARLY        2     /* gap between signature and lead degree */
 #define SG_GAP          4
 #define SG_EARLY_ROUND  25    /* least new elements of the early round */
@@ -427,6 +432,7 @@ struct sg_t
     int gap_done;
     /* statistics */
     uint64_t nsubs;     /* multiply-adds of the current round */
+    uint64_t psubs;     /* multiply-adds of the previous round */
     len_t nzero;        /* rows reduced to zero in the current round */
     len_t ndiv;         /* new elements whose lead term is divisible
                          * by a lead term from before the round */
@@ -1718,6 +1724,14 @@ static int64_t sg_round(
     len_t nn = 0, nsz = 16;
     sg_row_t *nw = (sg_row_t *)malloc((unsigned long)nsz * sizeof(sg_row_t));
 
+    /* A round whose reductions take many more multiply-adds than the
+     * ones of the round before, see SG_WORK_GROWTH, is stopped and the
+     * run hands over to F4: the elements of the new degree are dense,
+     * which F4 reduces with its dense linear algebra. */
+    const uint64_t wmax = sg->psubs == 0 ? UINT64_MAX
+        : (sg->psubs * SG_WORK_GROWTH > SG_WORK_MIN
+                ? sg->psubs * SG_WORK_GROWTH : SG_WORK_MIN);
+    int stopped = 0;
     sg->nsubs = 0;
     sg->nzero = 0;
     sg_rrd_t *rd = NULL;
@@ -1735,6 +1749,10 @@ static int64_t sg_round(
     uint8_t *used = rd != NULL ? (uint8_t *)calloc((unsigned long)nc + 1, sizeof(uint8_t)) : NULL;
     len_t *kcol   = rd != NULL ? (len_t *)malloc((unsigned long)(nr + 1) * sizeof(len_t)) : NULL;
     for (i = 0; i < nr; ++i) {
+        if (sg->nsubs > wmax) {
+            stopped = 1;
+            break;
+        }
         sg_row_t *row = rows + i;
         hm_t *r = row->r;
         const hm_t lc = r[OFFSET];
@@ -1995,6 +2013,14 @@ static int64_t sg_round(
         row->r = NULL;
     }
 
+    if (stopped) {
+        /* the run hands over, the new elements are not used */
+        for (i = 0; i < nn; ++i) {
+            free(nw[i].r);
+            free((void *)nw[i].cf);
+        }
+        nn = 0;
+    }
     if (rd != NULL) {
         /* the rows setting pivots no reduction used are not recorded */
         len_t m = 0;
@@ -2087,6 +2113,10 @@ static int64_t sg_round(
                 (unsigned long)sg->nsubs, (unsigned)nsr, (unsigned)(nr-nsr),
                 (unsigned long)(sg->nearly-nly0), (unsigned)smon);
         fflush(VERBSTREAM);
+    }
+    sg->psubs = sg->nsubs;
+    if (stopped) {
+        return -3;
     }
     return constant ? -1 : (int64_t)nn;
 }
@@ -2420,6 +2450,13 @@ static int sig_f4(
         if (nn == -2) {
             if (md->info_level > 0) {
                 fprintf(VERBSTREAM, "signature-based F4 hands over to F4 (dense matrix)\n");
+            }
+            ok = 0;
+            break;
+        }
+        if (nn == -3) {
+            if (md->info_level > 0) {
+                fprintf(VERBSTREAM, "signature-based F4 hands over to F4 (work)\n");
             }
             ok = 0;
             break;
