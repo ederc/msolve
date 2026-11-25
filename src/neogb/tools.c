@@ -158,6 +158,10 @@ static hm_t *reducer_rows_to_block(
         mat->rrb = NULL;
         return block;
     }
+    if (mat->rin) {
+        /* the rows lie in the trace, see matrix_from_trace_cache() */
+        return NULL;
+    }
     return copy_rows_to_block(mat->rr, mat->nru);
 }
 

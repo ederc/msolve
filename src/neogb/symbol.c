@@ -1244,23 +1244,34 @@ static void matrix_from_trace_cache(
     mat->rr   = (hm_t **)malloc((unsigned long)nru * sizeof(hm_t *));
     mat->tr   = (hm_t **)malloc((unsigned long)tc->nrl * sizeof(hm_t *));
     mat->rba  = (rba_t **)malloc((unsigned long)tc->nrl * sizeof(rba_t *));
-    /* the reducer rows are handed over to the linear algebra in one block */
-    for (i = 0; i < nru; ++i) {
-        sz += cached_row_length(tc, i)+OFFSET;
-    }
-    mat->rrb  = (hm_t *)malloc(sz * sizeof(hm_t));
-    sz = 0;
-    for (i = 0; i < nru; ++i) {
-        mat->rr[i] = mat->rrb + sz;
-        sz += cached_row_length(tc, i)+OFFSET;
+    /* the linear algebra reads the reducer rows stored uncompressed with
+     * the positions of their coefficients in place, see tc_t, otherwise
+     * they are handed over to it in one block */
+    mat->rcf  = tc->rcf;
+    mat->rin  = tc->rcf != NULL && tc->raw;
+    if (mat->rin) {
+        for (i = 0; i < nru; ++i) {
+            mat->rr[i] = (hm_t *)(tc->rows + tc->ro[i]);
+        }
+    } else {
+        for (i = 0; i < nru; ++i) {
+            sz += cached_row_length(tc, i)+OFFSET;
+        }
+        mat->rrb  = (hm_t *)malloc(sz * sizeof(hm_t));
+        sz = 0;
+        for (i = 0; i < nru; ++i) {
+            mat->rr[i] = mat->rrb + sz;
+            sz += cached_row_length(tc, i)+OFFSET;
+        }
     }
     for (i = 0; i < tc->nrl; ++i) {
         len = cached_row_length(tc, nru+i);
         mat->tr[i]  = (hm_t *)malloc((unsigned long)(len+OFFSET) * sizeof(hm_t));
         mat->rba[i] = td->rba[i];
     }
+    const len_t i0 = mat->rin ? nru : 0;
 #pragma omp parallel for num_threads(nthrds) private(i) schedule(dynamic, 64)
-    for (i = 0; i < nr; ++i) {
+    for (i = i0; i < nr; ++i) {
         if (tc->raw) {
             memcpy(i < nru ? mat->rr[i] : mat->tr[i-nru],
                     tc->rows + tc->ro[i], tc->ro[i+1] - tc->ro[i]);
@@ -1285,7 +1296,8 @@ static void store_matrix_in_trace_cache(
         const mat_t * const mat,
         const ht_t * const sht,
         const hi_t * const hcm,
-        const bs_t * const bs
+        const bs_t * const bs,
+        const md_t * const md
         )
 {
     len_t i;
@@ -1311,13 +1323,25 @@ static void store_matrix_in_trace_cache(
                 : compressed_row_size(row));
     }
     tc->rows  = (uint8_t *)malloc(tc->ro[nr]);
+    /* with the exact sparse linear algebra the reducer rows are stored
+     * with the positions of their coefficients in the matrix, see tc_t */
+    tc->rcf   = NULL;
+    if (md->laopt == 2) {
+        tc->rcf = (hm_t *)malloc((unsigned long)(nru + 1) * sizeof(hm_t));
+    }
     for (i = 0; i < nr; ++i) {
-        const hm_t * const row = i < nru ? mat->rr[i] : mat->tr[i-nru];
+        hm_t * const row = i < nru ? mat->rr[i] : mat->tr[i-nru];
+        const hm_t cf    = row[COEFFS];
+        if (tc->rcf != NULL && i < nru) {
+            tc->rcf[i]  = cf;
+            row[COEFFS] = mat->nrl + i;
+        }
         if (tc->raw) {
             memcpy(tc->rows + tc->ro[i], row, tc->ro[i+1] - tc->ro[i]);
         } else {
             compress_row(tc->rows + tc->ro[i], row);
         }
+        row[COEFFS] = cf;
     }
     const len_t evl = sht->evl;
     tc->ev  = (exp_t *)malloc((unsigned long)mat->ncr * evl * sizeof(exp_t));
@@ -1341,6 +1365,7 @@ static void store_matrix_in_trace_cache(
         free(tc->ro);
         free(tc->ev);
         free(tc->hc);
+        free(tc->rcf);
         free(tc);
     }
 }

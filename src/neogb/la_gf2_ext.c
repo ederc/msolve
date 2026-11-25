@@ -527,7 +527,7 @@ static void exact_sparse_reduced_echelon_form_gf2x(
 
     /* we do not need the old pivots anymore */
     for (i = 0; i < ncl; ++i) {
-        if (kpivs == NULL) {
+        if (kpivs == NULL && !mat->rin) {
             free(pivs[i]);
         }
         pivs[i] = NULL;

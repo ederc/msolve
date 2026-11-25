@@ -256,6 +256,12 @@ struct mat_t
                         /* to coefficient arrays. */
     hm_t *rrb;          /* if not NULL, all reducer rows are stored in */
                         /* this one block */
+    const hm_t *rcf;    /* if not NULL, the reducer rows are those of a
+                         * matrix stored in the trace, they are not
+                         * changed: rcf[i] is the coefficient index of the
+                         * basis element of rr[i], see tc_t */
+    int8_t rin;         /* 1 if the reducer rows lie in the trace, the
+                         * matrix does not own them */
     cf8_t **cf_8;       /* coefficients for finite fields (8 bit) */
     cf16_t **cf_16;     /* coefficients for finite fields (16 bit) */
     cf32_t **cf_32;     /* coefficients for finite fields (32 bit) */
@@ -357,6 +363,12 @@ struct tc_t
                          * raw is 1 they are stored as they are. */
     unsigned long *ro;  /* start of each row in rows */
     int raw;            /* 1 if the rows are not compressed */
+    hm_t *rcf;          /* if not NULL, the reducer rows are stored with
+                         * the positions nrl + i of their coefficients in
+                         * the matrix, as the linear algebra sets them,
+                         * and rcf[i] holds the coefficient index of the
+                         * basis element of the i-th one, so that the
+                         * linear algebra reads them in place */
     exp_t *ev;    /* exponent vectors of the columns ncl,...,nc-1 */
     hi_t *hc;     /* if not NULL, the positions of the columns ncl,...,nc-1
                    * in the hash table of the input basis, which the

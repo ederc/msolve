@@ -1306,8 +1306,11 @@ static void LA_FF(probabilistic_sparse_reduced_echelon_form)(
     }
     j = nrl;
     for (i = 0; i < mat->nru; ++i) {
-        mat->LA_CF[j]      = bs->LA_CF[mat->rr[i][COEFFS]];
-        mat->rr[i][COEFFS] = j;
+        /* reducer rows stored in the trace already hold j, see tc_t */
+        mat->LA_CF[j] = bs->LA_CF[mat->rcf != NULL ? mat->rcf[i] : mat->rr[i][COEFFS]];
+        if (mat->rcf == NULL) {
+            mat->rr[i][COEFFS] = j;
+        }
         ++j;
     }
 
@@ -1605,8 +1608,11 @@ static void LA_FF(exact_sparse_reduced_echelon_form)(
     hm_t **pivs   = (hm_t **)calloc((uint64_t)ncols, sizeof(hm_t *));
     j = nrl;
     for (i = 0; i < mat->nru; ++i) {
-        mat->LA_CF[j]      = bs->LA_CF[mat->rr[i][COEFFS]];
-        mat->rr[i][COEFFS] = j;
+        /* reducer rows stored in the trace already hold j, see tc_t */
+        mat->LA_CF[j] = bs->LA_CF[mat->rcf != NULL ? mat->rcf[i] : mat->rr[i][COEFFS]];
+        if (mat->rcf == NULL) {
+            mat->rr[i][COEFFS] = j;
+        }
         ++j;
     }
     /* copy the known pivot rows into one block in the order of their
@@ -1853,7 +1859,7 @@ static void LA_FF(exact_sparse_reduced_echelon_form)(
     }
 
     if (bad_prime == 1) {
-        for (i = kpivs != NULL ? ncl : 0; i < ncl+ncr; ++i) {
+        for (i = kpivs != NULL || mat->rin ? ncl : 0; i < ncl+ncr; ++i) {
             free(pivs[i]);
             pivs[i] = NULL;
         }
@@ -1876,7 +1882,7 @@ static void LA_FF(exact_sparse_reduced_echelon_form)(
 
     /* we do not need the old pivots anymore */
     for (i = 0; i < ncl; ++i) {
-        if (kpivs == NULL) {
+        if (kpivs == NULL && !mat->rin) {
             free(pivs[i]);
         }
         pivs[i] = NULL;
@@ -2263,8 +2269,11 @@ static LA_CF_T **LA_FF(sparse_AB_CD_linear_algebra)(
             (uint64_t)(nrl + mat->nru) * sizeof(LA_CF_T *));
     j = nrl;
     for (i = 0; i < mat->nru; ++i) {
-        mat->LA_CF[j]      = bs->LA_CF[mat->rr[i][COEFFS]];
-        mat->rr[i][COEFFS] = j;
+        /* reducer rows stored in the trace already hold j, see tc_t */
+        mat->LA_CF[j] = bs->LA_CF[mat->rcf != NULL ? mat->rcf[i] : mat->rr[i][COEFFS]];
+        if (mat->rcf == NULL) {
+            mat->rr[i][COEFFS] = j;
+        }
         ++j;
     }
     /* known pivot rows in one block in the order of their lead terms */

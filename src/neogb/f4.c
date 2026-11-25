@@ -124,6 +124,8 @@ static void clear_matrix(
     mat->rr = NULL;
     free(mat->rrb);
     mat->rrb = NULL;
+    mat->rcf = NULL;
+    mat->rin = 0;
     free(mat->tr);
     mat->tr  = NULL;
     free(mat->cf_8);
@@ -897,7 +899,7 @@ static int32_t compute_new_elements(
         sort_matrix_rows_decreasing(mat->rr, mat->nru);
         if (md->tc_state == 2) {
             store_matrix_in_trace_cache(md->tr, md->trace_rd,
-                    mat, sht, md->hcm, bs);
+                    mat, sht, md->hcm, bs, md);
         }
     }
     linear_algebra(mat, bs, bs, md);
@@ -1178,7 +1180,7 @@ static void reduce_final_basis(
             sort_matrix_rows_increasing(mat->tr, mat->nrl);
             if (md->tc_state == 2) {
                 store_matrix_in_trace_cache(md->tr, md->trace_rd,
-                        mat, sht, md->hcm, bs);
+                        mat, sht, md->hcm, bs, md);
             }
         }
 
