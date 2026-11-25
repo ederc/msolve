@@ -862,7 +862,8 @@ int validate_input_data_64(
         *max_nr_pairsp  =   0;
     }
     if (*la_optionp != 1 && *la_optionp != 2 &&
-            *la_optionp != 42 && *la_optionp != 44 && *la_optionp != 45) {
+            *la_optionp != 42 && *la_optionp != 44 && *la_optionp != 45
+            && *la_optionp != 46) {
         fprintf(ERRSTREAM, "Fixes linear algebra option to exact sparse.\n");
         *la_optionp =   2;
     }
@@ -1155,6 +1156,7 @@ void linear_algebra(
                     return;
                 case 44:
                 case 45:
+                case 46:
                     probabilistic_sparse_linear_algebra_ff_8(mat, tbr, bs, st);
                     return;
                 default:
@@ -1177,6 +1179,7 @@ void linear_algebra(
                     return;
                 case 44:
                 case 45:
+                case 46:
                     probabilistic_sparse_linear_algebra_ff_16(mat, tbr, bs, st);
                     return;
                 default:
@@ -1199,6 +1202,7 @@ void linear_algebra(
                     return;
                 case 44:
                 case 45:
+                case 46:
                     probabilistic_sparse_linear_algebra_ff_64(mat, tbr, bs, st);
                     return;
                 default:
@@ -1222,6 +1226,7 @@ void linear_algebra(
                     return;
                 case 44:
                 case 45:
+                case 46:
                     probabilistic_sparse_linear_algebra_ff_32(mat, tbr, bs, st);
                     return;
                 default:

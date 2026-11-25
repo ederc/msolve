@@ -220,6 +220,9 @@ static inline void display_help(char *str){
   display_option_help_noopt("     proof fails; the result is exact. Faster where\n");
   display_option_help_noopt("     many rows reduce to zero, else up to several\n");
   display_option_help_noopt("     times slower. As 2 over QQ.\n");
+  display_option_help_noopt("46 - as 44, with one thread the combinations are\n");
+  display_option_help_noopt("     formed in blocks of rows that grow while they\n");
+  display_option_help_noopt("     give no new pivots (probabilistic).\n");
   display_option_help('L', "lifting-mulmat", "LIF", "Controls lifting of multiplication matrices over\n");
   display_option_help_noopt("the rationals.\n");
   display_option_help_noopt("0 - no lifting (default).\n");

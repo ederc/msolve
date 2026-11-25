@@ -72,6 +72,14 @@
 #include <arm_neon.h>
 #endif
 
+/* -l 46: the rows of the first block of random linear combinations, and
+ * the pivots after which a grown block stops, see
+ * LA_FF(probabilistic_sparse_reduced_echelon_form) */
+#ifndef LA_PB_BLOCK
+#define LA_PB_BLOCK 64
+#define LA_PB_GROWN 16
+#endif
+
 /* maximal number of rows reduced together by the known pivots, see
  * LA_FF(reduce_dense_rows_by_known_pivots). With 16 and 32 bit entries
  * one column of the interleaved rows fills an AVX-512 vector, resp. an
@@ -968,13 +976,320 @@ static int LA_FF(interreduce_new_pivots_dense)(
     return 1;
 }
 
+/* Reduces random linear combinations of the rows upivs[b0], ...,
+ * upivs[b1-1] by the pivots in pivs and adds the new pivots to pivs, until
+ * zs combinations reduce to zero or all rows of the block gave a pivot.
+ * The coefficients of the new pivots are stored in mat->LA_CF at bctr + b0
+ * for the bctr-th new pivot of the block, or at *slot, which is then
+ * incremented, if slot is not NULL. If maxp > 0 the block stops after
+ * maxp + 1 new pivots and *stopped is set, otherwise it is not changed.
+ * drl and mull are buffers of ncols and b1 - b0 entries, *dmp a buffer for
+ * LA_NR combinations, allocated here if needed. Returns the number of new
+ * pivots if maxp > 0. */
+static len_t LA_FF(probabilistic_reduce_block)(
+        mat_t *mat,
+        const bs_t * const bs,
+        md_t *st,
+        hm_t **pivs,
+        hm_t * const * const upivs,
+        const len_t b0,
+        const len_t b1,
+        int64_t *drl,
+        int64_t *mull,
+        LA_ACC_T **dmp,
+        const int multi_rows,
+        const len_t zs,
+        len_t *slot,
+        const len_t maxp,
+        int *stopped
+        )
+{
+    len_t j, k, l, m;
+    len_t npb = 0;
+
+    const len_t ncols   = mat->nc;
+    const len_t ncl     = mat->ncl;
+    const uint64_t fc   = st->fc;
+    /* Why do we generate the random linear combinations so strangely?
+     * We can have fc > 2^31, so shifting the result of random multiplier
+     * and coefficient may lead to elements of size > 2^63 which cannot
+     * be represented by int64_t anymore. Thus, for 32 bit primes,
+     * LA_RANDOM_MULTIPLIER restricts the multiplier to < 2^15. Then,
+     * after subtracting the multiplied values we have to check if at some
+     * point the result gets negative as int64_t, i.e. if drl[i] >> 63 is 1.
+     * If so, we add a corresponding multiple of fc. Again, if fc > 2^31 we cannot just
+     * add fc * fc, but we have to restrict to fc/2 * fc.
+     * Note: We cannot apply this trick to the reduction itself, there we
+     * cannot restrict the multiplier to be < 2^31, so we have to handle the
+     * fc > 2^31 case differently. */
+#ifdef LA_WIDE
+    const ff64_t f  = ff64_init(fc);
+#else
+    uint64_t tmp  = (uint64_t)fc * fc;
+    while (tmp > pow(2,63)) {
+      tmp -=  (uint64_t)(fc/2) * fc;
+    }
+    const int64_t mod2  = tmp;
+#endif
+    const int32_t nbl   = (int32_t)b1;
+    const int32_t nrbl  = (int32_t)(b1 - b0);
+    (void)ncl;
+
+        hm_t *npiv  = NULL;
+        LA_CF_T *cfs;
+        /* starting column, offset, coefficient array position in tmpcf */
+        hm_t sc, cfp;
+        len_t bctr  = 0;
+        /* the block is done once zs combinations reduced to zero:
+         * then all rows of the block reduce to zero with probability
+         * at least 1 - 2^-31 */
+        len_t nz    = 0;
+        /* the combinations start at the smallest lead term of the
+         * rows of the block. As in the exact linear algebra, they are
+         * only reduced together if the rows fill at least 1/32 of
+         * their columns on average, otherwise the passes over all
+         * columns of the interleaved combinations do not pay off. */
+        hm_t bsc        = ncols;
+        uint64_t blen   = 0;
+        for (m = b0; m < (len_t)nbl; ++m) {
+            if (upivs[m][OFFSET] < bsc) {
+                bsc = upivs[m][OFFSET];
+            }
+            blen  +=  upivs[m][LENGTH];
+        }
+        const int batch = multi_rows
+            && blen * 32 >= (uint64_t)nrbl * (ncols - bsc);
+        /* the first combination is reduced on its own, most blocks
+         * do not add a new pivot */
+        while (bctr < nrbl && (batch == 0 || bctr == 0)) {
+            cfp = slot != NULL ? *slot : bctr + b0;
+            sc  = 0;
+
+            /* fill random value array */
+            for (j = 0; j < nrbl; ++j) {
+                do {
+                    mull[j] = LA_RANDOM_MULTIPLIER(fc);
+                } while (mull[j] == 0);
+            }
+            /* generate one dense row as random linear combination
+             * of the rows of the block */
+            memset(drl, 0, (uint64_t)ncols * sizeof(int64_t));
+
+            for (k = 0, m = b0; m < nbl; ++k, ++m) {
+                npiv  = upivs[m];
+                cfs   = bs->LA_CF[npiv[COEFFS]];
+                const len_t os  = npiv[PRELOOP];
+                const len_t len = npiv[LENGTH];
+                const hm_t * const ds = npiv + OFFSET;
+                sc    = sc < ds[0] ? sc : ds[0];
+#ifdef LA_WIDE
+                (void)os;
+                (void)l;
+                ff64_submul_sparse(drl, ds, cfs, len, (uint64_t)mull[k], &f);
+#else
+                for (l = 0; l < os; ++l) {
+                    drl[ds[l]]  -=  mull[k] * cfs[l];
+                    drl[ds[l]]  +=  (drl[ds[l]] >> 63) & mod2;
+                }
+                for (; l < len; l += UNROLL) {
+                    drl[ds[l]]    -=  mull[k] * cfs[l];
+                    drl[ds[l]]    +=  (drl[ds[l]] >> 63) & mod2;
+                    drl[ds[l+1]]  -=  mull[k] * cfs[l+1];
+                    drl[ds[l+1]]  +=  (drl[ds[l+1]] >> 63) & mod2;
+                    drl[ds[l+2]]  -=  mull[k] * cfs[l+2];
+                    drl[ds[l+2]]  +=  (drl[ds[l+2]] >> 63) & mod2;
+                    drl[ds[l+3]]  -=  mull[k] * cfs[l+3];
+                    drl[ds[l+3]]  +=  (drl[ds[l+3]] >> 63) & mod2;
+                }
+#endif
+            }
+            k     = 0;
+            cfs   = NULL;
+            npiv  = NULL;
+            /* do the reduction */
+            do {
+                free(cfs);
+                cfs = NULL;
+                free(npiv);
+                npiv  = NULL;
+                npiv  = LA_FF(reduce_dense_row_by_known_pivots_sparse)(
+                        drl, mat, bs, pivs, sc, cfp, 0, 0, 0, st);
+                if (!npiv) {
+                    if (++nz >= zs) {
+                        bctr  = nrbl;
+                    }
+                    break;
+                }
+                /* normalize coefficient array
+                * NOTE: this has to be done here, otherwise the reduction may
+                * lead to wrong results in a parallel computation since other
+                * threads might directly use the new pivot once it is synced. */
+                if (mat->LA_CF[npiv[COEFFS]][0] != 1) {
+                    LA_FF(normalize_sparse_matrix_row)(
+                            mat->LA_CF[npiv[COEFFS]], npiv[PRELOOP], npiv[LENGTH], st->fc);
+                }
+                cfs = mat->LA_CF[npiv[COEFFS]];
+                sc  = npiv[OFFSET];
+                k   = __sync_bool_compare_and_swap(&pivs[npiv[OFFSET]], NULL, npiv);
+            } while (!k);
+            if (npiv != NULL) {
+                bctr++;
+                if (slot != NULL) {
+                    (*slot)++;
+                }
+                if (maxp > 0 && ++npb > maxp) {
+                    *stopped  = 1;
+                    bctr      = nrbl;
+                }
+            }
+        }
+        if (batch && bctr < (len_t)nrbl) {
+            if (*dmp == NULL) {
+                *dmp = LA_FF(alloc_rows)(
+                        (uint64_t)ncols * LA_NR);
+            }
+            LA_ACC_T *dm = *dmp;
+#ifndef LA_WIDE
+            const uint64_t pinv = LA_FF(shoup_pinv)(fc);
+            const int lazy      = LA_FF(acc_lazy)(fc);
+#endif
+            while (bctr < (len_t)nrbl) {
+                const len_t nl = (len_t)nrbl - bctr < LA_NR
+                    ? (len_t)nrbl - bctr : LA_NR;
+                /* generate the combinations in the lanes 0,...,nl-1 */
+                for (k = 0, m = b0; m < (len_t)nbl; ++k, ++m) {
+                    const hm_t * const r      = upivs[m];
+                    const LA_CF_T * const cfs = bs->LA_CF[r[COEFFS]];
+                    const hm_t * const ds     = r + OFFSET;
+                    const len_t len           = r[LENGTH];
+#ifdef LA_WIDE
+                    uint64_t mm[LA_NR];
+                    for (j = 0; j < nl; ++j) {
+                        int64_t c;
+                        do {
+                            c = LA_RANDOM_MULTIPLIER(fc);
+                        } while (c == 0);
+                        mm[j] = ff64_mont((uint64_t)c, &f);
+                    }
+                    for (l = 0; l < len; ++l) {
+                        int64_t *t = dm + (uint64_t)LA_NR * ds[l];
+                        for (j = 0; j < nl; ++j) {
+                            t[j] = ff64_submul(t[j], cfs[l], mm[j], &f);
+                        }
+                    }
+#else
+                    /* the lanes nl,...,LA_NR-1 get the multiplier 0 */
+                    LA_ACC_T mc[LA_NR];
+                    for (j = 0; j < LA_NR; ++j) {
+                        mc[j] = 0;
+                    }
+                    for (j = 0; j < nl; ++j) {
+                        int64_t c;
+                        do {
+                            c = LA_RANDOM_MULTIPLIER(fc);
+                        } while (c == 0);
+                        mc[j] = (LA_ACC_T)c;
+                    }
+                    if (lazy) {
+                        LA_FF(submul_interleaved_rows)(
+                                dm, mc, cfs, ds, len, fc, pinv, 1);
+                    } else {
+                        LA_FF(submul_interleaved_rows)(
+                                dm, mc, cfs, ds, len, fc, pinv, 0);
+                    }
+#endif
+                }
+                /* the remainders are taken out of the lanes in one
+                 * pass, they only have entries in the columns of new
+                 * pivots */
+                LA_CF_T *rems[LA_NR];
+                LA_FF(reduce_dense_rows_by_known_pivots)(
+                        dm, rems, NULL, mat, pivs, bsc, fc);
+                len_t lane;
+                for (lane = 0; lane < nl; ++lane) {
+                    if (rems[lane] == NULL) {
+                        /* the combination reduces to zero */
+                        if (++nz >= zs) {
+                            bctr  = nrbl;
+                            break;
+                        }
+                        continue;
+                    }
+                    memset(drl, 0, (uint64_t)ncl * sizeof(int64_t));
+                    for (j = ncl; j < ncols; ++j) {
+                        drl[j] = (int64_t)rems[lane][j-ncl];
+                    }
+                    free(rems[lane]);
+                    rems[lane] = NULL;
+                    const hm_t cfp  = slot != NULL ? *slot : bctr + b0;
+                    hm_t sc         = ncl;
+                    hm_t *npiv      = NULL;
+                    LA_CF_T *cfs    = NULL;
+                    do {
+                        free(cfs);
+                        free(npiv);
+                        npiv  = LA_FF(reduce_dense_row_by_known_pivots_sparse)(
+                                drl, mat, bs, pivs, sc, cfp, 0, 0, 0, st);
+                        cfs   = NULL;
+                        if (!npiv) {
+                            break;
+                        }
+                        /* normalize before other threads may use it */
+                        if (mat->LA_CF[npiv[COEFFS]][0] != 1) {
+                            LA_FF(normalize_sparse_matrix_row)(
+                                    mat->LA_CF[npiv[COEFFS]], npiv[PRELOOP],
+                                    npiv[LENGTH], st->fc);
+                        }
+                        cfs = mat->LA_CF[npiv[COEFFS]];
+                        sc  = npiv[OFFSET];
+                        k   = __sync_bool_compare_and_swap(
+                                &pivs[npiv[OFFSET]], NULL, npiv);
+                    } while (!k);
+                    if (!npiv) {
+                        if (++nz >= zs) {
+                            bctr  = nrbl;
+                            break;
+                        }
+                        continue;
+                    }
+                    bctr++;
+                    if (slot != NULL) {
+                        (*slot)++;
+                    }
+                    if (maxp > 0 && ++npb > maxp) {
+                        *stopped  = 1;
+                        bctr      = nrbl;
+                        lane++;
+                        break;
+                    }
+                }
+                /* the block is done, free the remaining remainders */
+                for (; lane < nl; ++lane) {
+                    free(rems[lane]);
+                }
+            }
+        }
+    return npb;
+}
+
+/* rows by decreasing column of their lead terms */
+static int LA_FF(row_lead_cmp_decreasing)(
+        const void *a,
+        const void *b
+        )
+{
+    const hm_t x = (*(hm_t * const *)a)[OFFSET];
+    const hm_t y = (*(hm_t * const *)b)[OFFSET];
+    return (x < y) - (x > y);
+}
+
 static void LA_FF(probabilistic_sparse_reduced_echelon_form)(
         mat_t *mat,
         const bs_t * const bs,
         md_t *st
         )
 {
-    len_t i = 0, j, k, l, m;
+    len_t i = 0, j, k;
 
     const len_t ncols = mat->nc;
     const len_t nrl   = mat->nrl;
@@ -1000,27 +1315,6 @@ static void LA_FF(probabilistic_sparse_reduced_echelon_form)(
     hm_t **upivs  = mat->tr;
 
     const uint64_t fc   = st->fc;
-    /* Why do we generate the random linear combinations so strangely?
-     * We can have fc > 2^31, so shifting the result of random multiplier
-     * and coefficient may lead to elements of size > 2^63 which cannot
-     * be represented by int64_t anymore. Thus, for 32 bit primes,
-     * LA_RANDOM_MULTIPLIER restricts the multiplier to < 2^15. Then,
-     * after subtracting the multiplied values we have to check if at some
-     * point the result gets negative as int64_t, i.e. if drl[i] >> 63 is 1.
-     * If so, we add a corresponding multiple of fc. Again, if fc > 2^31 we cannot just
-     * add fc * fc, but we have to restrict to fc/2 * fc.
-     * Note: We cannot apply this trick to the reduction itself, there we
-     * cannot restrict the multiplier to be < 2^31, so we have to handle the
-     * fc > 2^31 case differently. */
-#ifdef LA_WIDE
-    const ff64_t f  = ff64_init(fc);
-#else
-    uint64_t tmp  = (uint64_t)fc * fc;
-    while (tmp > pow(2,63)) {
-      tmp -=  (uint64_t)(fc/2) * fc;
-    }
-    const int64_t mod2  = tmp;
-#endif
     /* the least number zs of combinations reducing to zero with
      * (fc-1)^zs >= 2^31 */
     len_t zs = 1;
@@ -1055,241 +1349,60 @@ static void LA_FF(probabilistic_sparse_reduced_echelon_form)(
         drm = (LA_ACC_T **)calloc((uint64_t)st->nthrds, sizeof(LA_ACC_T *));
     }
 
+    if (st->laopt == 46 && st->nthrds == 1) {
+        /* the rows leading farthest right come first, in blocks of
+         * LA_PB_BLOCK rows; a block after one that made no pivot has twice
+         * its rows, a grown block stops after LA_PB_GROWN pivots and its
+         * rows are taken again from its first in a block of LA_PB_BLOCK
+         * rows. Thus rounds where most rows reduce to zero need only a few
+         * combinations. */
+        qsort(upivs, (uint64_t)nrl, sizeof(hm_t *),
+                LA_FF(row_lead_cmp_decreasing));
+        free(mul);
+        mul = (int64_t *)malloc((uint64_t)(nrl > 0 ? nrl : 1) * sizeof(int64_t));
+        len_t slot  = 0;
+        len_t b0    = 0;
+        len_t bsz   = LA_PB_BLOCK;
+        while (b0 < nrl) {
+            const len_t b1  = nrl - b0 > bsz ? b0 + bsz : nrl;
+            int stopped     = 0;
+            const len_t np  = LA_FF(probabilistic_reduce_block)(mat, bs, st,
+                    pivs, upivs, b0, b1, dr, mul,
+                    drm, multi_rows, zs, &slot,
+                    b1 - b0 > LA_PB_BLOCK ? LA_PB_GROWN : nrl + 1, &stopped);
+            if (stopped) {
+                bsz = LA_PB_BLOCK;
+                continue;
+            }
+            for (j = b0; j < b1; ++j) {
+                free(upivs[j]);
+                upivs[j]  = NULL;
+            }
+            bsz = np == 0 ? 2 * (b1 - b0) : LA_PB_BLOCK;
+            b0  = b1;
+        }
+    } else {
     /* mo need to have any sharing dependencies on parallel computation,
      * no data to be synchronized at this step of the linear algebra */
 #pragma omp parallel for num_threads(st->nthrds) \
-    private(i, j, k, l, m) \
+    private(i, j) \
     schedule(dynamic)
     for (i = 0; i < nb; ++i) {
         int64_t *drl  = dr + (omp_get_thread_num() * (uint64_t)(ncols));
         int64_t *mull = mul + (omp_get_thread_num() * (uint64_t)(rpb));
-        const int32_t nbl   = (int32_t) (nrl > (i+1)*rpb ? (i+1)*rpb : nrl);
-        const int32_t nrbl  = (int32_t) (nbl - i*rpb);
-        if (nrbl != 0) {
-            hm_t *npiv  = NULL;
-            LA_CF_T *cfs;
-            /* starting column, offset, coefficient array position in tmpcf */
-            hm_t sc, cfp;
-            len_t bctr  = 0;
-            /* the block is done once zs combinations reduced to zero:
-             * then all rows of the block reduce to zero with probability
-             * at least 1 - 2^-31 */
-            len_t nz    = 0;
-            /* the combinations start at the smallest lead term of the
-             * rows of the block. As in the exact linear algebra, they are
-             * only reduced together if the rows fill at least 1/32 of
-             * their columns on average, otherwise the passes over all
-             * columns of the interleaved combinations do not pay off. */
-            hm_t bsc        = ncols;
-            uint64_t blen   = 0;
-            for (m = i*rpb; m < (len_t)nbl; ++m) {
-                if (upivs[m][OFFSET] < bsc) {
-                    bsc = upivs[m][OFFSET];
-                }
-                blen  +=  upivs[m][LENGTH];
-            }
-            const int batch = multi_rows
-                && blen * 32 >= (uint64_t)nrbl * (ncols - bsc);
-            /* the first combination is reduced on its own, most blocks
-             * do not add a new pivot */
-            while (bctr < nrbl && (batch == 0 || bctr == 0)) {
-                cfp = bctr + i*rpb;
-                sc  = 0;
-
-                /* fill random value array */
-                for (j = 0; j < nrbl; ++j) {
-                    do {
-                        mull[j] = LA_RANDOM_MULTIPLIER(fc);
-                    } while (mull[j] == 0);
-                }
-                /* generate one dense row as random linear combination
-                 * of the rows of the block */
-                memset(drl, 0, (uint64_t)ncols * sizeof(int64_t));
-
-                for (k = 0, m = i*rpb; m < nbl; ++k, ++m) {
-                    npiv  = upivs[m];
-                    cfs   = bs->LA_CF[npiv[COEFFS]];
-                    const len_t os  = npiv[PRELOOP];
-                    const len_t len = npiv[LENGTH];
-                    const hm_t * const ds = npiv + OFFSET;
-                    sc    = sc < ds[0] ? sc : ds[0];
-#ifdef LA_WIDE
-                    (void)os;
-                    (void)l;
-                    ff64_submul_sparse(drl, ds, cfs, len, (uint64_t)mull[k], &f);
-#else
-                    for (l = 0; l < os; ++l) {
-                        drl[ds[l]]  -=  mull[k] * cfs[l];
-                        drl[ds[l]]  +=  (drl[ds[l]] >> 63) & mod2;
-                    }
-                    for (; l < len; l += UNROLL) {
-                        drl[ds[l]]    -=  mull[k] * cfs[l];
-                        drl[ds[l]]    +=  (drl[ds[l]] >> 63) & mod2;
-                        drl[ds[l+1]]  -=  mull[k] * cfs[l+1];
-                        drl[ds[l+1]]  +=  (drl[ds[l+1]] >> 63) & mod2;
-                        drl[ds[l+2]]  -=  mull[k] * cfs[l+2];
-                        drl[ds[l+2]]  +=  (drl[ds[l+2]] >> 63) & mod2;
-                        drl[ds[l+3]]  -=  mull[k] * cfs[l+3];
-                        drl[ds[l+3]]  +=  (drl[ds[l+3]] >> 63) & mod2;
-                    }
-#endif
-                }
-                k     = 0;
-                cfs   = NULL;
-                npiv  = NULL;
-                /* do the reduction */
-                do {
-                    free(cfs);
-                    cfs = NULL;
-                    free(npiv);
-                    npiv  = NULL;
-                    npiv  = LA_FF(reduce_dense_row_by_known_pivots_sparse)(
-                            drl, mat, bs, pivs, sc, cfp, 0, 0, 0, st);
-                    if (!npiv) {
-                        if (++nz >= zs) {
-                            bctr  = nrbl;
-                        }
-                        break;
-                    }
-                    /* normalize coefficient array
-                    * NOTE: this has to be done here, otherwise the reduction may
-                    * lead to wrong results in a parallel computation since other
-                    * threads might directly use the new pivot once it is synced. */
-                    if (mat->LA_CF[npiv[COEFFS]][0] != 1) {
-                        LA_FF(normalize_sparse_matrix_row)(
-                                mat->LA_CF[npiv[COEFFS]], npiv[PRELOOP], npiv[LENGTH], st->fc);
-                    }
-                    cfs = mat->LA_CF[npiv[COEFFS]];
-                    sc  = npiv[OFFSET];
-                    k   = __sync_bool_compare_and_swap(&pivs[npiv[OFFSET]], NULL, npiv);
-                } while (!k);
-                if (npiv != NULL) {
-                    bctr++;
-                }
-            }
-            if (batch && bctr < (len_t)nrbl) {
-                const int tid = omp_get_thread_num();
-                if (drm[tid] == NULL) {
-                    drm[tid] = LA_FF(alloc_rows)(
-                            (uint64_t)ncols * LA_NR);
-                }
-                LA_ACC_T *dm = drm[tid];
-#ifndef LA_WIDE
-                const uint64_t pinv = LA_FF(shoup_pinv)(fc);
-                const int lazy      = LA_FF(acc_lazy)(fc);
-#endif
-                while (bctr < (len_t)nrbl) {
-                    const len_t nl = (len_t)nrbl - bctr < LA_NR
-                        ? (len_t)nrbl - bctr : LA_NR;
-                    /* generate the combinations in the lanes 0,...,nl-1 */
-                    for (k = 0, m = i*rpb; m < (len_t)nbl; ++k, ++m) {
-                        const hm_t * const r      = upivs[m];
-                        const LA_CF_T * const cfs = bs->LA_CF[r[COEFFS]];
-                        const hm_t * const ds     = r + OFFSET;
-                        const len_t len           = r[LENGTH];
-#ifdef LA_WIDE
-                        uint64_t mm[LA_NR];
-                        for (j = 0; j < nl; ++j) {
-                            int64_t c;
-                            do {
-                                c = LA_RANDOM_MULTIPLIER(fc);
-                            } while (c == 0);
-                            mm[j] = ff64_mont((uint64_t)c, &f);
-                        }
-                        for (l = 0; l < len; ++l) {
-                            int64_t *t = dm + (uint64_t)LA_NR * ds[l];
-                            for (j = 0; j < nl; ++j) {
-                                t[j] = ff64_submul(t[j], cfs[l], mm[j], &f);
-                            }
-                        }
-#else
-                        /* the lanes nl,...,LA_NR-1 get the multiplier 0 */
-                        LA_ACC_T mc[LA_NR];
-                        for (j = 0; j < LA_NR; ++j) {
-                            mc[j] = 0;
-                        }
-                        for (j = 0; j < nl; ++j) {
-                            int64_t c;
-                            do {
-                                c = LA_RANDOM_MULTIPLIER(fc);
-                            } while (c == 0);
-                            mc[j] = (LA_ACC_T)c;
-                        }
-                        if (lazy) {
-                            LA_FF(submul_interleaved_rows)(
-                                    dm, mc, cfs, ds, len, fc, pinv, 1);
-                        } else {
-                            LA_FF(submul_interleaved_rows)(
-                                    dm, mc, cfs, ds, len, fc, pinv, 0);
-                        }
-#endif
-                    }
-                    /* the remainders are taken out of the lanes in one
-                     * pass, they only have entries in the columns of new
-                     * pivots */
-                    LA_CF_T *rems[LA_NR];
-                    LA_FF(reduce_dense_rows_by_known_pivots)(
-                            dm, rems, NULL, mat, pivs, bsc, fc);
-                    len_t lane;
-                    for (lane = 0; lane < nl; ++lane) {
-                        if (rems[lane] == NULL) {
-                            /* the combination reduces to zero */
-                            if (++nz >= zs) {
-                                bctr  = nrbl;
-                                break;
-                            }
-                            continue;
-                        }
-                        memset(drl, 0, (uint64_t)ncl * sizeof(int64_t));
-                        for (j = ncl; j < ncols; ++j) {
-                            drl[j] = (int64_t)rems[lane][j-ncl];
-                        }
-                        free(rems[lane]);
-                        rems[lane] = NULL;
-                        const hm_t cfp  = bctr + i*rpb;
-                        hm_t sc         = ncl;
-                        hm_t *npiv      = NULL;
-                        LA_CF_T *cfs    = NULL;
-                        do {
-                            free(cfs);
-                            free(npiv);
-                            npiv  = LA_FF(reduce_dense_row_by_known_pivots_sparse)(
-                                    drl, mat, bs, pivs, sc, cfp, 0, 0, 0, st);
-                            cfs   = NULL;
-                            if (!npiv) {
-                                break;
-                            }
-                            /* normalize before other threads may use it */
-                            if (mat->LA_CF[npiv[COEFFS]][0] != 1) {
-                                LA_FF(normalize_sparse_matrix_row)(
-                                        mat->LA_CF[npiv[COEFFS]], npiv[PRELOOP],
-                                        npiv[LENGTH], st->fc);
-                            }
-                            cfs = mat->LA_CF[npiv[COEFFS]];
-                            sc  = npiv[OFFSET];
-                            k   = __sync_bool_compare_and_swap(
-                                    &pivs[npiv[OFFSET]], NULL, npiv);
-                        } while (!k);
-                        if (!npiv) {
-                            if (++nz >= zs) {
-                                bctr  = nrbl;
-                                break;
-                            }
-                            continue;
-                        }
-                        bctr++;
-                    }
-                    /* the block is done, free the remaining remainders */
-                    for (; lane < nl; ++lane) {
-                        free(rems[lane]);
-                    }
-                }
-            }
+        const len_t nbl = nrl > (i+1)*rpb ? (i+1)*rpb : nrl;
+        if (nbl > i*rpb) {
+            int stopped = 0;
+            LA_FF(probabilistic_reduce_block)(mat, bs, st, pivs, upivs,
+                    i*rpb, nbl, drl, mull,
+                    drm != NULL ? drm + omp_get_thread_num() : NULL,
+                    multi_rows, zs, NULL, 0, &stopped);
             for (j = i*rpb; j < nbl; ++j) {
                 free(upivs[j]);
                 upivs[j]  = NULL;
             }
         }
+    }
     }
     free(mul);
     mul   = NULL;

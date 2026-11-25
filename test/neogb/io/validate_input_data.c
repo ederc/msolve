@@ -14,7 +14,7 @@ int main(void)
     int32_t nr_threads      =   1;
     int32_t max_nr_pairs    =   0;
     int32_t reset_ht        =   2;
-    int32_t la_option       =   46; /* incorrect: should be fixed to 2 */
+    int32_t la_option       =   47; /* incorrect: should be fixed to 2 */
     int32_t use_signatures  =   0;
     int32_t reduce_gb       =   -1; /* incorrect: should be fixed to 0 */
     int32_t truncate_lifting =  -1; /* incorrect: should be fixed to 0 */
