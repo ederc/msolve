@@ -1315,20 +1315,26 @@ static void store_matrix_in_trace_cache(
     }
     tc->raw   = __atomic_add_fetch(&(tr->tcraw), rsz, __ATOMIC_RELAXED)
         <= TC_RAW_MAX;
-    tc->ro[0] = 0;
-    for (i = 0; i < nr; ++i) {
-        const hm_t * const row = i < nru ? mat->rr[i] : mat->tr[i-nru];
-        tc->ro[i+1] = tc->ro[i] + (tc->raw ?
-                (unsigned long)(row[LENGTH]+OFFSET) * sizeof(hm_t)
-                : compressed_row_size(row));
-    }
-    tc->rows  = (uint8_t *)malloc(tc->ro[nr]);
     /* with the exact sparse linear algebra the reducer rows are stored
-     * with the positions of their coefficients in the matrix, see tc_t */
+     * with the positions of their coefficients in the matrix, see tc_t;
+     * the sizes of the compressed rows depend on them */
     tc->rcf   = NULL;
     if (md->laopt == 2) {
         tc->rcf = (hm_t *)malloc((unsigned long)(nru + 1) * sizeof(hm_t));
     }
+    tc->ro[0] = 0;
+    for (i = 0; i < nr; ++i) {
+        hm_t * const row = i < nru ? mat->rr[i] : mat->tr[i-nru];
+        const hm_t cf    = row[COEFFS];
+        if (tc->rcf != NULL && i < nru) {
+            row[COEFFS] = mat->nrl + i;
+        }
+        tc->ro[i+1] = tc->ro[i] + (tc->raw ?
+                (unsigned long)(row[LENGTH]+OFFSET) * sizeof(hm_t)
+                : compressed_row_size(row));
+        row[COEFFS] = cf;
+    }
+    tc->rows  = (uint8_t *)malloc(tc->ro[nr]);
     for (i = 0; i < nr; ++i) {
         hm_t * const row = i < nru ? mat->rr[i] : mat->tr[i-nru];
         const hm_t cf    = row[COEFFS];
