@@ -415,6 +415,10 @@ struct trace_t
                    * echelon form first */
     hm_t *glm;    /* their lead terms then, in the basis hash table */
     len_t gnlm;   /* their number */
+    len_t *gperm; /* if not NULL, the input generators were sorted by
+                   * decreasing lead terms when the trace was learned:
+                   * the i-th one was the gperm[i]-th one before, see
+                   * sort_input_generators() */
     void *sgr;    /* the record of a signature-based run, see sigf4.c */
 };
 

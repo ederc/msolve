@@ -621,6 +621,68 @@ static void restore_generators(
     md->ngens = n;
 }
 
+/* decreasing lead monomials, ties by increasing position */
+static int gens_lead_cmp(
+        const void *a,
+        const void *b,
+        void *htp
+        )
+{
+    /* pointers to the positions of the generators in bs->hm */
+    hm_t * const * const x = *(hm_t * const * const *)a;
+    hm_t * const * const y = *(hm_t * const * const *)b;
+    const int c = monomial_cmp((*y)[OFFSET], (*x)[OFFSET], (const ht_t *)htp);
+    if (c != 0) {
+        return c;
+    }
+    return (x > y) - (x < y);
+}
+
+/* puts the input generators in the order perm: the i-th one is the
+ * perm[i]-th one before */
+static void permute_input_generators(
+        bs_t *bs,
+        const len_t * const perm,
+        const len_t n
+        )
+{
+    len_t i;
+
+    hm_t **h = (hm_t **)malloc((unsigned long)n * sizeof(hm_t *));
+    for (i = 0; i < n; ++i) {
+        h[i] = bs->hm[perm[i]];
+    }
+    memcpy(bs->hm, h, (unsigned long)n * sizeof(hm_t *));
+    free(h);
+}
+
+/* Sorts the input generators by decreasing lead monomials, ties keep
+ * their order, and returns the permutation, see
+ * permute_input_generators(). The update enters them in this order, then
+ * the Gebauer-Moeller criteria remove more pairs, as for the new elements
+ * of a round, which are entered with the largest lead monomial first. */
+static len_t *sort_input_generators(
+        bs_t *bs,
+        const md_t * const md
+        )
+{
+    len_t i;
+    const len_t n = (len_t)md->ngens;
+
+    hm_t ***p = (hm_t ***)malloc((unsigned long)n * sizeof(hm_t **));
+    for (i = 0; i < n; ++i) {
+        p[i] = bs->hm + i;
+    }
+    sort_r(p, (unsigned long)n, sizeof(hm_t **), gens_lead_cmp, bs->ht);
+    len_t *perm = (len_t *)malloc((unsigned long)n * sizeof(len_t));
+    for (i = 0; i < n; ++i) {
+        perm[i] = (len_t)(p[i] - bs->hm);
+    }
+    free(p);
+    permute_input_generators(bs, perm, n);
+    return perm;
+}
+
 static int32_t initialize_f4(
         bs_t **lbsp,
         md_t **lmdp,
@@ -699,6 +761,9 @@ static int32_t initialize_f4(
             }
             bs->ld = md->ngens;
         }
+        if (md->tr->gperm != NULL) {
+            permute_input_generators(bs, md->tr->gperm, (len_t)md->ngens);
+        }
         if (md->tr->sgr != NULL) {
             if (!sig_f4_replay(bs, md, (sg_rec_t *)md->tr->sgr)) {
                 if (md->info_level > 0) {
@@ -748,6 +813,12 @@ static int32_t initialize_f4(
        always check redundancy since input generators may be redundant
        even so they are homogeneous. */
     if (md->trace_level != APPLY_TRACER) {
+        len_t *perm = sort_input_generators(bs, md);
+        if (md->trace_level == LEARN_TRACER) {
+            md->tr->gperm = perm;
+        } else {
+            free(perm);
+        }
         md->np = md->ngens;
         done   = update(bs, md);
     }

@@ -375,6 +375,7 @@ static void remove_pairs_by_new_elements(
         const len_t npivs,
         const len_t bl,
         const len_t * const mby,
+        const len_t * const nby,
         const uint64_t * const vm,
         const bs_t * const bs,
         const ht_t * const bht,
@@ -416,10 +417,10 @@ static void remove_pairs_by_new_elements(
                     const deg_t ld  = total_degree(bht->ev[p[i].lcm], bht);
                     deg_t l1, l2;
                     const deg_t d1  = pair_degree(&l1, g1, n,
-                            g1 < bl ? mby[g1] <= k : bs->red[g1] != 0,
+                            g1 < bl ? mby[g1] <= k : nby[g1-bl] <= k,
                             vm, bs, bht, st);
                     const deg_t d2  = pair_degree(&l2, g2, n,
-                            g2 < bl ? mby[g2] <= k : bs->red[g2] != 0,
+                            g2 < bl ? mby[g2] <= k : nby[g2-bl] <= k,
                             vm, bs, bht, st);
                     if (d1 <= p[i].deg && d2 <= p[i].deg
                             && l1 != ld && l2 != ld) {
@@ -549,6 +550,31 @@ static void insert_and_update_spairs(
             }
         }
     }
+    /* a new element is redundant once a later new element's lead
+     * monomial divides its own, as when the new elements are entered one
+     * after the other: the input generators or the new elements of a
+     * round whose lead monomials have different degrees. nby is as mby
+     * for the new elements. */
+    len_t *nby  = (len_t *)malloc((uint64_t)npivs * sizeof(len_t));
+#pragma omp parallel for num_threads(nthrds) private(k) \
+    reduction(+:nred) schedule(dynamic, 64)
+    for (k = 0; k < npivs; ++k) {
+        nby[k] = bs->red[bl+k] != 0 ? 0 : npivs + 1;
+        if (nby[k] == 0) {
+            continue;
+        }
+        const sdm_t ns  = ~bht->hd[nch[k]].sdm;
+        const deg_t d   = ndeg[k] - bht->hd[nch[k]].deg;
+        for (len_t l = k + 1; l < npivs; ++l) {
+            if (marks[l] && (bht->hd[nch[l]].sdm & ns) == 0
+                    && check_monomial_division(nch[k], nch[l], bht)
+                    && d >= ndeg[l] - bht->hd[nch[l]].deg) {
+                nby[k] = l + 1;
+                nred++;
+                break;
+            }
+        }
+    }
     st->num_redundant += nred;
 
     /* the elements a new element may form a useful pair with: the old
@@ -623,8 +649,7 @@ static void insert_and_update_spairs(
                 c[v] = v == bht->ebl ? 0 : (uint8_t)e[v];
             }
         }
-        cmby[i] = i < nlv ? mby[cand[i]]
-            : (bs->red[cand[i]] != 0 ? 0 : npivs + 1);
+        cmby[i] = i < nlv ? mby[cand[i]] : nby[cand[i]-bl];
         const hm_t lm = bs->hm[cand[i]][OFFSET];
         cvm[i]  = vm[cand[i]];
         csdm[i] = bht->hd[lm].sdm;
@@ -892,7 +917,7 @@ static void insert_and_update_spairs(
         pnm[i]  = ~bht->hd[ps[i].lcm].sdm;
     }
     remove_pairs_by_new_elements(ps, pnm, pl, NULL, 0, npivs, bl, mby,
-            vm, bs, bht, st);
+            nby, vm, bs, bht, st);
     free(pnm);
 
     /* in the Boolean ring each new element f also gets the pairs with the
@@ -949,7 +974,7 @@ static void insert_and_update_spairs(
         qnm[j]  = ~bht->hd[pp[j].lcm].sdm;
     }
     remove_pairs_by_new_elements(pp, qnm, soff[npivs], soff, 1, npivs, bl,
-            mby, vm, bs, bht, st);
+            mby, nby, vm, bs, bht, st);
     free(qnm);
 
     /* remove useless pairs from pairset, old ones first, then the new
@@ -975,6 +1000,11 @@ static void insert_and_update_spairs(
             bs->red[lmps[i]] = 1;
         }
     }
+    for (k = 0; k < npivs; ++k) {
+        if (nby[k] > 0 && nby[k] <= npivs) {
+            bs->red[bl+k] = 1;
+        }
+    }
 
     /* the pairs with redundant elements count as removed */
     st->num_gb_crit +=  pl + (uint64_t)npivs * bl
@@ -989,6 +1019,7 @@ static void insert_and_update_spairs(
     free(off);
     free(soff);
     free(mby);
+    free(nby);
     free(pp);
     free(cand);
     free(cvm);
