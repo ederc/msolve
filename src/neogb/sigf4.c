@@ -49,6 +49,10 @@
 
 /* handover parameters */
 #define SG_PAIRS        1000  /* least S-pairs of an update to be tested */
+/* S-pairs per multiply-add handing over when learning a trace, see
+ * sg_hand_over() */
+#define SG_LEARN_PAIR_WORK_NUM 3
+#define SG_LEARN_PAIR_WORK_DEN 2
 /* a round is stopped once its reductions take more than SG_WORK_GROWTH
  * times the multiply-adds of the round before and more than SG_WORK_MIN,
  * see sg_round() */
@@ -2155,10 +2159,16 @@ static int sg_hand_over(
     }
 
     if (why == NULL && nn > 0) {
-        /* the S-pairs the update would form against the work of the round */
+        /* the S-pairs the update would form against the work of the round;
+         * when a trace is learned, the run is only done once, but its
+         * trace is applied at many primes, so it hands over only for more
+         * S-pairs */
         const uint64_t ob    = sg->ld - nn;
         const uint64_t pairs = (uint64_t)nn * ob + (uint64_t)nn * (nn-1) / 2;
-        if (pairs >= SG_PAIRS && pairs >= sg->nsubs) {
+        const uint64_t work  = md->trace_level == LEARN_TRACER
+            ? SG_LEARN_PAIR_WORK_NUM * sg->nsubs / SG_LEARN_PAIR_WORK_DEN
+            : sg->nsubs;
+        if (pairs >= SG_PAIRS && pairs >= work) {
             why = "pair work";
         }
     }
