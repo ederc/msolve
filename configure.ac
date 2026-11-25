@@ -71,6 +71,16 @@ AC_TYPE_UINT8_T
 
 AX_COUNT_CPUS
 AX_EXT
+
+# On x86 CPUs affected by the Intel JCC erratum (Skylake to Cascade Lake)
+# jumps crossing or ending on a 32 byte boundary are slow; the assembler
+# can align them, which also makes the timings less dependent on the
+# placement of the code. Needs GNU binutils 2.34 or newer.
+AX_CHECK_COMPILE_FLAG([-Wa,-mbranches-within-32B-boundaries],
+    [BRANCH_ALIGN_FLAGS="-Wa,-mbranches-within-32B-boundaries"],
+    [BRANCH_ALIGN_FLAGS=""],
+    [-Werror])
+AC_SUBST([BRANCH_ALIGN_FLAGS])
 AX_GCC_BUILTIN([__builtin_constant_p])
 AX_GCC_BUILTIN([__builtin_clzll])
 AX_GCC_BUILTIN([__builtin_clzl])

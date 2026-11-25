@@ -29,6 +29,12 @@ this.
 
 See the INSTALL file. At the moment, `msolve` does not support 32 bit architectures.
 
+On x86 CPUs `msolve` is compiled with `-Wa,-mbranches-within-32B-boundaries`
+if the assembler supports this option, i.e. with GNU binutils 2.34 or newer.
+It aligns jumps to 32 byte boundaries, which avoids a slowdown of up to
+about 10% on CPUs affected by the Intel JCC erratum (Skylake to Cascade
+Lake). With older binutils `msolve` is built without it.
+
 # Input File Format
 
 More informations are given in the tutorial (see [https://msolve.lip6.fr](https://msolve.lip6.fr))
