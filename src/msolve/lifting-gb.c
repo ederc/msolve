@@ -2198,6 +2198,12 @@ restart:
     bs_t *mbs[MULTI_PRIMES];
     uint64_t mpr[MULTI_PRIMES];
     int mld = 0, mnx = 0;
+    /* the time of such a pass, -1 before the first one, whether passes
+       are not possible, and the primes used so far, those of 61 bits
+       counted twice */
+    double tpass = -1;
+    int multi_off = !msolve_multi_primes;
+    double r31 = 0;
     while(apply){
 
       int nthrds = 1; /* mono-threaded mult-mid comp */
@@ -2206,12 +2212,26 @@ restart:
         wide_walk = probe == 2;
       }
       /* is the basis of the next prime computed already? */
-      const int queued = mnx < mld && !(probe == 2);
-      double tmulti = -1;
+      const int queued = mnx < mld;
+      /* A pass applying the trace at MULTI_PRIMES primes costs about the
+         same for any number of primes needed, so it is only done where
+         it is clearly cheaper per prime than applying the trace at single
+         primes of the size chosen by the probe, and where at least as many
+         primes were used already as the pass costs: the number of primes
+         needed roughly doubles, so then most of the primes of the pass are
+         needed. Before the first pass its time is estimated. */
+      int multi_now = 0;
+      if(!queued && probe >= 3 && !multi_off && tprobe[0] > 0){
+        const double unit = tprobe[1] > 0
+          ? MIN(tprobe[0], tprobe[1] / 2) : tprobe[0];
+        const double tp = tpass >= 0 ? tpass
+          : 0.6 * MULTI_PRIMES * tprobe[0];
+        multi_now = tp < 0.9 * MULTI_PRIMES * unit && tp <= r31 * unit;
+      }
       if(queued){
         /* the prime is the next one of the queue */
       }
-      else if(wide_walk){
+      else if(wide_walk && !multi_now){
         /* walk the primes in [2^61, 2^62), wrapping around at 2^62 */
         prime64 = next_prime_64(prime64);
         if(prime64 >= (uint64_t)1 << 62){
@@ -2257,7 +2277,7 @@ restart:
         prime = msd->lp->p[nthrds /* st->nthrds */ - 1];
         /* the trace is applied at this prime and the next lucky ones in
            one pass if all its matrices are stored */
-        if(probe > 0 && msolve_multi_primes){
+        if(multi_now){
           mpr[0] = prime;
           uint32_t q = prime;
           for(int l = 1; l < MULTI_PRIMES; l++){
@@ -2278,10 +2298,13 @@ restart:
             if(info_level > 1){
               fprintf(VERBSTREAM, "(x%d)", MULTI_PRIMES);
             }
-            tmulti = (realtime() - t0) / MULTI_PRIMES;
+            tpass = realtime() - t0;
             mld = MULTI_PRIMES;
             mnx = 0;
             prime = (uint32_t)mpr[MULTI_PRIMES-1];
+          }
+          else{
+            multi_off = 1;
           }
         }
       }
@@ -2298,9 +2321,10 @@ restart:
       }
 
       const double tapp = realtime();
-      const int pre = mnx < mld && !(probe == 2);
+      const int pre = mnx < mld;
       const uint64_t afc = pre ? mpr[mnx]
-        : (wide_walk ? prime64 : (uint64_t)prime);
+        : (wide_walk && !multi_now ? prime64 : (uint64_t)prime);
+      r31 += afc > UINT32_MAX ? 2 : 1;
       gb_modular_trace_application((*modgbsp), msd->mgb,
                                    msd->num_gb,
                                    msd->leadmons_ori,
@@ -2316,8 +2340,7 @@ restart:
       }
       if(probe < 3){
         if(probe > 0){
-          /* for primes applied together the time per prime */
-          tprobe[probe-1] = tmulti >= 0 ? tmulti : realtime() - tapp;
+          tprobe[probe-1] = realtime() - tapp;
         }
         if(msd->bad_primes[0] != 0){
           /* the time of a bad prime says nothing, keep ~31-bit primes */
