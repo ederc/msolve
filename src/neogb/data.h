@@ -169,6 +169,12 @@ struct ht_t
     ht_t *spare;  /* list of freed copies of this hash table which are
                    * reused by copy_hash_table, linked via next */
     ht_t *next;   /* next copy in the list orig->spare */
+    hi_t *cl;     /* if not NULL, the terms of the matrix rows generated
+                   * in this table are its columns, cl holds the cld
+                   * entries of the current matrix in the order they are
+                   * met, their idx is nonzero, see add_matrix_columns() */
+    hl_t cld;     /* load of cl */
+    hl_t clsz;    /* size of cl */
 };
 
 /* S-pair types */
@@ -220,6 +226,8 @@ struct bs_t
                        elements in basis */
     ht_t *ht;       /* hash table for basis elements */
     int8_t *red;    /* tracks redundancy of basis elements */
+    int8_t ght;     /* 1 if ht is the hash table of the basis this one is
+                       copied from, see copy_basis_mod_p() */
     hm_t **hm;      /* hashed monomials representing exponents */
     sm_t *sm;       /* signatures for F5-style computations */
     si_t *si;       /* signatures index for F5-style computations */
@@ -350,6 +358,9 @@ struct tc_t
     unsigned long *ro;  /* start of each row in rows */
     int raw;            /* 1 if the rows are not compressed */
     exp_t *ev;    /* exponent vectors of the columns ncl,...,nc-1 */
+    hi_t *hc;     /* if not NULL, the positions of the columns ncl,...,nc-1
+                   * in the hash table of the input basis, which the
+                   * applications of the trace share */
     len_t nru;    /* number of reducer rows */
     len_t nrl;    /* number of to be reduced rows */
     len_t ncl;    /* number of known pivot columns */
@@ -529,6 +540,8 @@ struct md_t
     int32_t ff_bits;
     int32_t nf;
     int32_t f4_qq_round;
+    int32_t share_ht; /* 1 if the applications of a trace work on the hash
+                       * table of the input basis, one after the other */
     int32_t use_signatures; /* module monomial ordering:
                                0 = off,
                                1=SCHREYER,

@@ -472,17 +472,19 @@ static void convert_hashes_to_columns(
     hm_t **rrows    = mat->rr;
     hm_t **trows    = mat->tr;
 
-    /* all elements in the sht hash table represent
-     * exactly one column of the matrix */
-    hcm = realloc(hcm, (uint64_t)(esld-1) * sizeof(hi_t));
+    /* all elements in the sht hash table represent exactly one column of
+     * the matrix, unless sht collects the columns in sht->cl */
+    const hl_t ncols = sht->cl != NULL ? sht->cld : esld - 1;
+    hcm = realloc(hcm, (uint64_t)ncols * sizeof(hi_t));
     if (hcm == NULL) {
         fprintf(ERRSTREAM, "Allocating memory for hash-column lookup table failed,\n");
         fprintf(ERRSTREAM, "segmentation fault will follow.\n");
     }
-    for (k = 0, j = 0, i = 1; i < esld; ++i) {
+    for (k = 0, j = 0; j < ncols; ++j) {
+        i   = sht->cl != NULL ? sht->cl[j] : j + 1;
         hi  = hds[i].idx;
 
-        hcm[j++]  = i;
+        hcm[j]  = i;
         if (hi == 2) {
             k++;
         }
@@ -499,13 +501,13 @@ static void convert_hashes_to_columns(
     } */
 
     mat->ncl  = k;
-    mat->ncr  = (len_t)esld - 1 - mat->ncl;
+    mat->ncr  = (len_t)ncols - mat->ncl;
     mat->nc   = mat->ncl + mat->ncr;
 
     st->num_rowsred +=  mat->nrl;
 
     /* store the other direction (hash -> column) */
-    const hi_t ld = (hi_t)(esld - 1);
+    const hi_t ld = (hi_t)ncols;
     for (k = 0; k < ld; ++k) {
         hds[hcm[k]].idx  = (hi_t)k;
     }
@@ -838,24 +840,33 @@ static void convert_sparse_matrix_rows_to_basis_elements(
     deg_t pairs_deg = 0;
     if (st->tc_state == 1) {
         /* the matrix is taken from the trace, the exponent vectors
-         * of its columns are stored there */
+         * of its columns are stored there, and their positions in bht
+         * if the applications of the trace share bht */
         const tc_t * const tc = st->tr->tc[st->trace_rd];
-        while (bht->esz - bht->eld < mat->ncr) {
-            enlarge_hash_table(bht);
-        }
         hcm = realloc(hcm, (unsigned long)mat->nc * sizeof(hi_t));
-        const exp_t **evs = (const exp_t **)malloc(
-                (unsigned long)mat->ncr * sizeof(exp_t *));
-        for (i = 0; i < mat->ncr; ++i) {
-            evs[i] = tc->ev + (unsigned long)i * bht->evl;
+        if (tc->hc != NULL && bs->ght) {
+            memcpy(hcm + mat->ncl, tc->hc,
+                    (unsigned long)mat->ncr * sizeof(hi_t));
+        } else {
+            while (bht->esz - bht->eld < mat->ncr) {
+                enlarge_hash_table(bht);
+            }
+            const exp_t **evs = (const exp_t **)malloc(
+                    (unsigned long)mat->ncr * sizeof(exp_t *));
+            for (i = 0; i < mat->ncr; ++i) {
+                evs[i] = tc->ev + (unsigned long)i * bht->evl;
+            }
+            insert_in_hash_table_parallel(hcm+mat->ncl, evs, mat->ncr,
+                    bht, st->nthrds);
+            free(evs);
         }
-        insert_in_hash_table_parallel(hcm+mat->ncl, evs, mat->ncr,
-                bht, st->nthrds);
-        free(evs);
         st->hcm = hcm;
     } else {
         pairs_deg = sht->hd[hcm[0]].deg;
-        switch_hcm_data_to_basis_hash_table(hcm, bht, mat, sht, st->nthrds);
+        /* if the columns are in bht, hcm already maps to bht */
+        if (sht != bht) {
+            switch_hcm_data_to_basis_hash_table(hcm, bht, mat, sht, st->nthrds);
+        }
     }
 #pragma omp parallel for num_threads(st->nthrds) \
     private(i, j, k)

@@ -58,7 +58,7 @@ ht_t *initialize_basis_hash_table(
 
     const len_t nv  = st->nvars;
 
-    ht_t *ht  = (ht_t *)malloc(sizeof(ht_t));
+    ht_t *ht  = (ht_t *)calloc(1, sizeof(ht_t));
     ht->nv    = nv;
     ht->mo    = st->mo;
     ht->boolean = st->boolean;
@@ -166,6 +166,10 @@ static void free_local_hash_table_data(
     }
     free(ht->bvm);
     ht->bvm = NULL;
+    free(ht->cl);
+    ht->cl   = NULL;
+    ht->cld  = 0;
+    ht->clsz = 0;
 }
 
 /* frees the copies of ht kept for reuse */
@@ -225,6 +229,10 @@ ht_t *copy_hash_table(
             ht->dv      = bht->dv;
             ht->bvl     = 0;
             ht->bvsz    = 0;
+            free(ht->cl);
+            ht->cl      = NULL;
+            ht->cld     = 0;
+            ht->clsz    = 0;
             return ht;
         }
         /* bht has been enlarged since */
@@ -232,7 +240,7 @@ ht_t *copy_hash_table(
         free(ht);
     }
 
-    ht  = (ht_t *)malloc(sizeof(ht_t));
+    ht  = (ht_t *)calloc(1, sizeof(ht_t));
 
     ht->nv    = bht->nv;
     ht->mo    = bht->mo;
@@ -295,7 +303,7 @@ ht_t *initialize_secondary_hash_table(
 {
     hl_t j;
 
-    ht_t *ht  = (ht_t *)malloc(sizeof(ht_t));
+    ht_t *ht  = (ht_t *)calloc(1, sizeof(ht_t));
     ht->nv    = bht->nv;
     ht->mo    = bht->mo;
     ht->boolean = bht->boolean;
@@ -1468,8 +1476,10 @@ static inline hi_t find_multiplied_in_hash_table(
 }
 
 /* returns the index of the product of a and b in ht, inserting it if
- * needed; the caller has to ensure that ht has enough space */
-static inline hi_t insert_multiplied_in_hash_table(
+ * needed; the caller has to ensure that ht has enough space. It is in the
+ * innermost loop of the generation of the matrix rows, so it is always
+ * inlined. */
+static inline __attribute__((always_inline)) hi_t insert_multiplied_in_hash_table(
     const val_t h,
     const exp_t * const ea,
     const exp_t * const eb,
@@ -1597,6 +1607,46 @@ static inline void insert_multiplied_poly_in_hash_table(
                 eb + (uint64_t)b[l] * evl1, ht2);
     }
 #endif
+}
+
+/* as insert_multiplied_poly_in_hash_table(), the terms are added to the
+ * columns of the current matrix in ht2->cl */
+static void insert_multiplied_poly_in_hash_table_columns(
+    hm_t *row,
+    const val_t h1,
+    const exp_t * const ea,
+    const hm_t * const b,
+    const ht_t * const ht1,
+    ht_t *ht2
+    )
+{
+    len_t l;
+
+    const len_t len         = b[LENGTH]+OFFSET;
+    const hd_t * const hd1  = ht1->hd;
+    /* the exponent vectors are stored in one block */
+    const exp_t * const eb  = ht1->ev[0];
+    const len_t evl1        = ht1->evl;
+    const deg_t dm          = ea[0] + (ht1->ebl > 0 ? ea[ht1->ebl] : 0);
+
+    while (ht2->clsz - ht2->cld < b[LENGTH]) {
+        ht2->clsz *= 2;
+        ht2->cl = realloc(ht2->cl, (unsigned long)ht2->clsz * sizeof(hi_t));
+    }
+    hl_t cld = ht2->cld;
+    for (l = OFFSET; l < len; ++l) {
+        prefetch_multiplied_terms(h1, b, l, len, hd1, ht2);
+        check_product_total(dm, hd1[b[l]].deg, ea,
+                eb + (uint64_t)b[l] * evl1, ht1);
+        const hi_t m = insert_multiplied_in_hash_table(h1 + hd1[b[l]].val,
+                ea, eb + (uint64_t)b[l] * evl1, ht2);
+        row[l] = m;
+        if (ht2->hd[m].idx == 0) {
+            ht2->hd[m].idx  = 1;
+            ht2->cl[cld++]  = m;
+        }
+    }
+    ht2->cld = cld;
 }
 
 static inline void reinsert_in_hash_table(
@@ -2323,6 +2373,92 @@ static void boolean_multiplied_polys_to_matrix_rows(
     free(nmiss);
 }
 
+/* the hash table the rows of the matrix of a round of F4 are inserted in:
+ * the basis hash table if it collects the columns, else md->ht */
+static inline ht_t *round_hash_table(
+    const bs_t * const bs,
+    const md_t * const md
+    )
+{
+    return bs->ht->cl != NULL ? bs->ht : md->ht;
+}
+
+/* the matrices of the rounds of F4 get their columns from ht: the terms of
+ * their rows are inserted in ht and kept there for later rounds, the
+ * columns of the current matrix are collected in ht->cl */
+static void start_matrix_columns(
+    ht_t *ht
+    )
+{
+    ht->clsz  = 1024;
+    ht->cl    = (hi_t *)malloc((unsigned long)ht->clsz * sizeof(hi_t));
+    ht->cld   = 0;
+}
+
+static void reset_matrix_columns(
+    ht_t *ht
+    );
+
+static void stop_matrix_columns(
+    ht_t *ht
+    )
+{
+    /* a round may stop early, e.g. for a bad prime */
+    reset_matrix_columns(ht);
+    free(ht->cl);
+    ht->cl    = NULL;
+    ht->cld   = 0;
+    ht->clsz  = 0;
+}
+
+/* resets the idx of the columns of the current matrix, ht has no columns
+ * afterwards */
+static void reset_matrix_columns(
+    ht_t *ht
+    )
+{
+    hl_t i;
+    for (i = 0; i < ht->cld; ++i) {
+        ht->hd[ht->cl[i]].idx = 0;
+    }
+    ht->cld = 0;
+}
+
+/* adds the terms of rows[0], ..., rows[nr-1] that are no columns of the
+ * current matrix yet to ht->cl and sets their idx to 1 */
+static void add_matrix_columns(
+    ht_t *ht,
+    hm_t * const * const rows,
+    const len_t nr
+    )
+{
+    len_t i, l;
+
+    if (ht->cl == NULL) {
+        return;
+    }
+    hd_t *hd  = ht->hd;
+    hl_t cld  = ht->cld;
+    for (i = 0; i < nr; ++i) {
+        const hm_t * const row  = rows[i];
+        const len_t len         = row[LENGTH] + OFFSET;
+        if (ht->clsz - cld < row[LENGTH]) {
+            while (ht->clsz - cld < row[LENGTH]) {
+                ht->clsz *= 2;
+            }
+            ht->cl  = realloc(ht->cl, (unsigned long)ht->clsz * sizeof(hi_t));
+        }
+        for (l = OFFSET; l < len; ++l) {
+            const hi_t m = row[l];
+            if (hd[m].idx == 0) {
+                hd[m].idx     = 1;
+                ht->cl[cld++] = m;
+            }
+        }
+    }
+    ht->cld = cld;
+}
+
 static inline hm_t *multiplied_poly_to_matrix_row(
     ht_t *sht,
     const ht_t *bht,
@@ -2347,7 +2483,11 @@ static inline hm_t *multiplied_poly_to_matrix_row(
   while (sht->eld+poly[LENGTH] >= sht->esz) {
     enlarge_hash_table(sht);
   }
-  insert_multiplied_poly_in_hash_table(row, hm, em, poly, bht, sht);
+  if (sht->cl != NULL) {
+      insert_multiplied_poly_in_hash_table_columns(row, hm, em, poly, bht, sht);
+  } else {
+      insert_multiplied_poly_in_hash_table(row, hm, em, poly, bht, sht);
+  }
 
   return row;
 }
@@ -2534,9 +2674,10 @@ static void multiplied_polys_to_matrix_rows(
     }
 
     const len_t evl = bht->evl;
-    const hd_t * const hdb    = bht->hd;
+    /* sht may be bht, then enlarging sht moves the data of bht */
+    const hd_t *hdb   = bht->hd;
     /* the exponent vectors are stored in one block */
-    const exp_t * const evb   = bht->ev[0];
+    const exp_t *evb  = bht->ev[0];
 
     for (i = 0; i < nr; ++i) {
         const hm_t *poly  = polys[i];
@@ -2551,8 +2692,13 @@ static void multiplied_polys_to_matrix_rows(
             while (sht->eld + polys[i][LENGTH] >= sht->esz) {
                 enlarge_hash_table(sht);
             }
-            insert_multiplied_poly_in_hash_table(
-                    rows[i], hs[i], ems + (uint64_t)i * evl, polys[i], bht, sht);
+            if (sht->cl != NULL) {
+                insert_multiplied_poly_in_hash_table_columns(rows[i], hs[i],
+                        ems + (uint64_t)i * evl, polys[i], bht, sht);
+            } else {
+                insert_multiplied_poly_in_hash_table(rows[i], hs[i],
+                        ems + (uint64_t)i * evl, polys[i], bht, sht);
+            }
         }
         return;
     }
@@ -2595,6 +2741,8 @@ static void multiplied_polys_to_matrix_rows(
         while (sht->eld + nm >= sht->esz) {
             enlarge_hash_table(sht);
         }
+        hdb = bht->hd;
+        evb = bht->ev[0];
         if (nm > 4096) {
             insert_missing_multiplied_terms(rows+lo, hi-lo, hs+lo,
                     ems + (uint64_t)lo * evl, polys+lo, nmiss+lo, nm,
@@ -2624,4 +2772,5 @@ static void multiplied_polys_to_matrix_rows(
         csz = 2 * csz;
     }
     free(nmiss);
+    add_matrix_columns(sht, rows, nr);
 }

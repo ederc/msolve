@@ -258,7 +258,7 @@ static int32_t select_spairs_by_minimal_degree(
     exp_t *elcm, *eb;
     ht_t *bht   = bs->ht;
     ps_t *psl   = md->ps;
-    ht_t *sht   = md->ht;
+    ht_t *sht   = round_hash_table(bs, md);
 
     /* timings */
     double ct0, ct1, rt0, rt1;
@@ -826,15 +826,18 @@ static void symbolic_preprocessing(
     /* at the moment we have as many reducers as we have different lcms */
     len_t nrr = mat->nc;
 
-    ht_t *sht = md->ht;
+    ht_t *sht = round_hash_table(bs, md);
     ht_t *bht = bs->ht;
 
     const len_t evl   = bht->evl;
     const len_t onrr  = mat->nc;
+    /* the columns are the entries of sht or, if sht collects the columns
+     * of the matrix, those in sht->cl */
+    const int ncl     = sht->cl != NULL;
     /* for the columns already present we have to check whether they are
      * already handled (e.g. lcms of the selected pairs), the columns added
      * here are always new */
-    const hl_t oesld  = sht->eld;
+    const hl_t oesld  = ncl ? sht->cld : sht->eld;
     while (mat->sz <= nrr + oesld) {
         mat->sz *=  2;
         mat->rr =   realloc(mat->rr, (unsigned long)mat->sz * sizeof(hm_t *));
@@ -865,9 +868,9 @@ static void symbolic_preprocessing(
     red_idx_t ri;
     initialize_reducer_index(&ri, bs);
 
-    hl_t lo = 1;
-    while (lo < sht->eld) {
-        const hl_t hi = sht->eld;
+    hl_t lo = ncl ? 0 : 1;
+    while (lo < (ncl ? sht->cld : sht->eld)) {
+        const hl_t hi = ncl ? sht->cld : sht->eld;
         if (sz < hi - lo) {
             sz    = hi - lo;
             cols  = realloc(cols, (unsigned long)sz * sizeof(hm_t));
@@ -877,11 +880,22 @@ static void symbolic_preprocessing(
             ems   = realloc(ems, (unsigned long)sz * evl * sizeof(exp_t));
         }
         len_t nc = 0;
-        for (i = lo; i < hi; ++i) {
-            if (i >= oesld || !sht->hd[i].idx) {
-                sht->hd[i].idx = 1;
-                mat->nc++;
-                cols[nc++] = i;
+        if (ncl) {
+            /* the columns of the lcms have idx 2 */
+            for (i = lo; i < hi; ++i) {
+                const hi_t m = sht->cl[i];
+                if (sht->hd[m].idx != 2) {
+                    mat->nc++;
+                    cols[nc++] = m;
+                }
+            }
+        } else {
+            for (i = lo; i < hi; ++i) {
+                if (i >= oesld || !sht->hd[i].idx) {
+                    sht->hd[i].idx = 1;
+                    mat->nc++;
+                    cols[nc++] = i;
+                }
             }
         }
 #pragma omp parallel for num_threads(md->nthrds) \
@@ -1013,9 +1027,11 @@ static void start_trace_cache(
         return;
     }
     /* the stored data refers to the basis hash table at the start of the
-     * application, it is not valid if this table has changed */
+     * application, it is not valid if this table has changed, unless the
+     * applications share the table: its entries are only added, never
+     * moved */
     hl_t eld = __sync_val_compare_and_swap(&(tr->tceld), 0, bs->ht->eld);
-    if (eld != 0 && eld != bs->ht->eld) {
+    if (!bs->ght && eld != 0 && eld != bs->ht->eld) {
         return;
     }
     md->tcoff = 0;
@@ -1268,7 +1284,8 @@ static void store_matrix_in_trace_cache(
         const len_t idx,
         const mat_t * const mat,
         const ht_t * const sht,
-        const hi_t * const hcm
+        const hi_t * const hcm,
+        const bs_t * const bs
         )
 {
     len_t i;
@@ -1308,6 +1325,12 @@ static void store_matrix_in_trace_cache(
         memcpy(tc->ev + (unsigned long)i * evl, sht->ev[hcm[mat->ncl+i]],
                 (unsigned long)evl * sizeof(exp_t));
     }
+    /* the columns are in the hash table the applications share */
+    tc->hc  = NULL;
+    if (sht == bs->ht && bs->ght) {
+        tc->hc = (hi_t *)malloc((unsigned long)mat->ncr * sizeof(hi_t));
+        memcpy(tc->hc, hcm + mat->ncl, (unsigned long)mat->ncr * sizeof(hi_t));
+    }
     tc->nru = mat->nru;
     tc->nrl = mat->nrl;
     tc->ncl = mat->ncl;
@@ -1317,6 +1340,7 @@ static void store_matrix_in_trace_cache(
         free(tc->rows);
         free(tc->ro);
         free(tc->ev);
+        free(tc->hc);
         free(tc);
     }
 }
@@ -1341,7 +1365,7 @@ static void generate_matrix_from_trace(
 
     td_t td     = md->tr->td[idx];
     ht_t *bht   = bs->ht;
-    ht_t *sht   = md->ht;
+    ht_t *sht   = round_hash_table(bs, md);
     trace_t *tr = md->tr;
 
     /* Can we take the matrix stored in the trace (only if the application
@@ -1375,12 +1399,16 @@ static void generate_matrix_from_trace(
     mat->rba      = (rba_t **)malloc((unsigned long)td.tld * sizeof(rba_t *));
     rba_t **rba   = mat->rba;
 
+    /* the multipliers are copied: if sht is bht, inserting the rows may
+     * enlarge bht and move its exponent vectors */
+    emul  = (exp_t *)malloc((unsigned long)bht->evl * sizeof(exp_t));
+
     /* reducer rows, i.e. AB part */
     i   = 0;
     nr  = 0;
     while (i < td.rld) {
         b     = bs->hm[td.rri[i++]];
-        emul  = bht->ev[td.rri[i]];
+        memcpy(emul, bht->ev[td.rri[i]], (unsigned long)bht->evl * sizeof(exp_t));
         h     = bht->hd[td.rri[i++]].val;
 
 
@@ -1394,7 +1422,7 @@ static void generate_matrix_from_trace(
     nr  = 0;
     while (i < td.tld) {
         b     = bs->hm[td.tri[i++]];
-        emul  = bht->ev[td.tri[i]];
+        memcpy(emul, bht->ev[td.tri[i]], (unsigned long)bht->evl * sizeof(exp_t));
         h     = bht->hd[td.tri[i]].val;
         trows[nr] = multiplied_poly_to_matrix_row(sht, bht, h, emul, b);
         /* At the moment rba is unused */
@@ -1402,11 +1430,12 @@ static void generate_matrix_from_trace(
         i++;
         nr++;
     }
+    free(emul);
     /* meta data for matrix */
     mat->nru  = td.rld/2;
     mat->nrl  = td.tld/2;
     mat->nr   = mat->sz = mat->nru + mat->nrl;
-    mat->nc   = sht->eld-1;
+    mat->nc   = sht->cl != NULL ? sht->cld : sht->eld-1;
 
     /* statistics */
     md->max_sht_size  = md->max_sht_size > sht->esz ?

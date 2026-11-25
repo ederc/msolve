@@ -751,6 +751,14 @@ static int32_t initialize_f4(
         md->np = md->ngens;
         done   = update(bs, md);
     }
+    /* when applying a trace, the rounds insert the terms of their
+     * matrices in the basis hash table, which the applications share, so
+     * that the next applications find them there, and the new basis
+     * elements need not be inserted, see round_hash_table(). Otherwise a
+     * hash table per round, which holds only its columns, is faster. */
+    if (md->trace_level == APPLY_TRACER && bs->ght && !bs->ht->boolean) {
+        start_matrix_columns(bs->ht);
+    }
 
     *lbsp  = bs;
     *matp  = mat;
@@ -811,14 +819,14 @@ static int32_t compute_new_elements(
     len_t i;
 
     ht_t *ht  = bs->ht;
-    ht_t *sht = md->ht;
+    ht_t *sht = round_hash_table(bs, md);
 
     if (md->tc_state != 1) {
         convert_hashes_to_columns(mat, md, sht);
         sort_matrix_rows_decreasing(mat->rr, mat->nru);
         if (md->tc_state == 2) {
             store_matrix_in_trace_cache(md->tr, md->trace_rd,
-                    mat, sht, md->hcm);
+                    mat, sht, md->hcm, bs);
         }
     }
     linear_algebra(mat, bs, bs, md);
@@ -844,7 +852,11 @@ static int32_t compute_new_elements(
                 -1, mat, bs, ht, sht, md);
     }
     md->tc_state = 0;
-    clean_hash_table(sht);
+    if (sht == ht) {
+        reset_matrix_columns(sht);
+    } else {
+        clean_hash_table(sht);
+    }
     /* all rows in mat are now polynomials in the basis,
      * so we do not need the rows anymore */
     clear_matrix(mat);
@@ -1275,6 +1287,9 @@ static bs_t *run_f4(
         }
 
         print_round_timings(VERBSTREAM, md, rrt, crt);
+    }
+    if (bs->ht->cl != NULL) {
+        stop_matrix_columns(bs->ht);
     }
     if (*errp > 0) {
         free_basis_and_only_local_hash_table_data(&bs);

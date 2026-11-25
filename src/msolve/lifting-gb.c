@@ -1054,6 +1054,9 @@ static void gb_modular_trace_application(gb_modpoly_t modgbs,
   double rt = realtime();
   st->info_level  = 0;
   st->f4_qq_round = 2;
+  /* the primes are handled one after the other, so they all work on the
+   * hash table of bs_qq, which already holds nearly all monomials */
+  st->share_ht = 1;
   /* tracing phase */
 
   /* F4 and FGLM are run using a single thread */

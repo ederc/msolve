@@ -92,7 +92,9 @@ void free_basis_and_only_local_hash_table_data(
         bs_t **bsp
         )
 {
-    free_hash_table(&((*bsp)->ht));
+    if (!(*bsp)->ght) {
+        free_hash_table(&((*bsp)->ht));
+    }
     free_basis_without_hash_table(bsp);
 }
 
@@ -446,10 +448,11 @@ bs_t *copy_basis_mod_p(
     bs->lml         = gbs->lml;
     bs->sz          = gbs->sz;
     bs->constant    = gbs->constant;
-    if (st->f4_qq_round != 1) {
+    if (st->f4_qq_round != 1 && !st->share_ht) {
         bs->ht = copy_hash_table(gbs->ht);
     } else {
-        bs->ht = gbs->ht;
+        bs->ht  = gbs->ht;
+        bs->ght = 1;
     }
     bs->hm          = (hm_t **)malloc((unsigned long)bs->sz * sizeof(hm_t *));
     bs->lm          = (sdm_t *)malloc((unsigned long)bs->sz * sizeof(sdm_t));

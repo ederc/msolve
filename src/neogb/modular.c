@@ -75,6 +75,7 @@ void free_trace_cache(
                 free(tr->tc[i]->rows);
                 free(tr->tc[i]->ro);
                 free(tr->tc[i]->ev);
+                free(tr->tc[i]->hc);
                 free(tr->tc[i]);
             }
         }
