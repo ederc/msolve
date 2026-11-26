@@ -1739,47 +1739,128 @@ static int64_t sg_round(
     }
 
     /* symbolic preprocessing: each monomial is visited once, the
-     * reducers add new monomials at the end of the symbolic hash table */
+     * reducers add new monomials at the end of the symbolic hash table.
+     * The monomials are handled in waves: the reducers of the monomials
+     * not handled yet are searched in parallel, then their rows are
+     * generated in parallel, adding the monomials of the next wave. */
     for (i = 0; i < nr; ++i) {
         sht->hd[rows[i].r[OFFSET]].idx = 1;
     }
-    hl_t mi;
-    for (mi = 1; mi < sht->eld; ++mi) {
-        if (sht->hd[mi].idx == 2) {
+    hl_t lo = 1;
+    len_t wsz = 0;
+    hi_t *wm   = NULL;  /* the monomials of the wave */
+    len_t *wr  = NULL;  /* their reducers in ro, plus one, 0 if none */
+    while (lo < sht->eld) {
+        const hl_t hi = sht->eld;
+        if (wsz < hi - lo) {
+            wsz = hi - lo;
+            wm  = realloc(wm, (unsigned long)wsz * sizeof(hi_t));
+            wr  = realloc(wr, (unsigned long)wsz * sizeof(len_t));
+        }
+        len_t nw = 0;
+        hl_t mi;
+        for (mi = lo; mi < hi; ++mi) {
+            if (sht->hd[mi].idx != 2) {
+                sht->hd[mi].idx = 2;
+                wm[nw++] = (hi_t)mi;
+            }
+        }
+        lo = hi;
+#pragma omp parallel for num_threads(md->nthrds) \
+        private(j) schedule(dynamic, 64) if (md->nthrds > 1 && nw > 256)
+        for (j = 0; j < nw; ++j) {
+            const hi_t m = wm[j];
+            const len_t f = search_reducer(&ri, sht->hd[m].sdm, sht->ev[m]);
+            wr[j] = 0;
+            if (f > 0) {
+                /* the reducer is only of use if its signature is less
+                 * than the largest signature of a row to be reduced
+                 * (eder-2017 §7.2, Algorithm RB: the reduction stays
+                 * below the largest signature of the round) */
+                const sg_el_t *e = sg->e + ro[f-1];
+                const exp_t * const el  = bht->ev[e->p[OFFSET]];
+                const exp_t * const em  = sht->ev[m];
+                const exp_t * const esm = bht->ev[e->sm];
+                exp_t s[evl];
+                len_t l;
+                for (l = 0; l < evl; ++l) {
+                    s[l] = em[l] - el[l] + esm[l];
+                }
+                int c = sg_cmp_exp(s, rst->ev[msc], evl);
+                if (c == 0) {
+                    c = e->ix == mix ? 0 : (e->ix > mix ? 1 : -1);
+                }
+                wr[j] = c < 0 ? f : 0;
+            }
+        }
+        len_t nn = 0;
+        for (j = 0; j < nw; ++j) {
+            nn += wr[j] != 0;
+        }
+        if (nn == 0) {
             continue;
         }
-        sht->hd[mi].idx = 2;
-        const len_t f = search_reducer(&ri, sht->hd[mi].sdm, sht->ev[mi]);
-        if (f > 0) {
-            k = f - 1;
-            const sg_el_t *e = sg->e + ro[k];
-            const exp_t * const el = bht->ev[e->p[OFFSET]];
-            const exp_t * const em = sht->ev[mi];
-            /* the reducer is only of use if its signature is less than
-             * the largest signature of a row to be reduced (eder-2017
-             * §7.2, Algorithm RB: the reduction stays below the largest
-             * signature of the round) */
-            exp_t q[evl], s[evl];
-            const exp_t * const esm = bht->ev[e->sm];
-            for (j = 0; j < evl; ++j) {
-                q[j] = em[j] - el[j];
-                s[j] = q[j] + esm[j];
-            }
-            int c = sg_cmp_exp(s, rst->ev[msc], evl);
-            if (c == 0) {
-                c = e->ix == mix ? 0 : (e->ix > mix ? 1 : -1);
-            }
-            if (c < 0) {
-                if (nr >= rsz) {
-                    rsz  = 2 * rsz;
-                    rows = realloc(rows, (unsigned long)rsz * sizeof(sg_row_t));
-                }
-                rows[nr] = sg_multiple(sg, e, q, 1, ro[k]);
-                rows[nr].id = nr;
-                nr++;
-            }
+        while (nr + nn > rsz) {
+            rsz  = 2 * rsz;
+            rows = realloc(rows, (unsigned long)rsz * sizeof(sg_row_t));
         }
+        hm_t **wrows  = (hm_t **)malloc((unsigned long)nn * sizeof(hm_t *));
+        hm_t **polys  = (hm_t **)malloc((unsigned long)nn * sizeof(hm_t *));
+        val_t *hs     = (val_t *)malloc((unsigned long)nn * sizeof(val_t));
+        exp_t *ems    = (exp_t *)malloc((unsigned long)nn * evl * sizeof(exp_t));
+        len_t *ws     = (len_t *)malloc((unsigned long)nn * sizeof(len_t));
+        len_t n = 0;
+        for (j = 0; j < nw; ++j) {
+            if (wr[j] == 0) {
+                continue;
+            }
+            const sg_el_t *e = sg->e + ro[wr[j]-1];
+            const exp_t * const el = bht->ev[e->p[OFFSET]];
+            const exp_t * const em = sht->ev[wm[j]];
+            exp_t *q = ems + (unsigned long)n * evl;
+            val_t h = 0;
+            for (k = 0; k < evl; ++k) {
+                q[k] = em[k] - el[k];
+                h   += bht->rn[k] * q[k];
+            }
+            if ((uint64_t)q[0] + bht->ev[e->sc][0] > EXP_MAX) {
+                exponent_overflow();
+            }
+            hs[n]    = h;
+            polys[n] = e->p;
+            ws[n]    = wr[j] - 1;
+            n++;
+        }
+        multiplied_polys_to_matrix_rows(wrows, n, hs, ems, polys, sht, bht,
+                md->nthrds);
+        for (j = 0; j < n; ++j) {
+            const sg_el_t *e = sg->e + ro[ws[j]];
+            const exp_t * const q   = ems + (unsigned long)j * evl;
+            const exp_t * const esm = bht->ev[e->sm];
+            exp_t s[evl];
+            for (k = 0; k < evl; ++k) {
+                s[k] = q[k] + esm[k];
+            }
+            sg_row_t *row = rows + nr;
+            row->r       = wrows[j];
+            row->cf      = e->cf;
+            row->ix      = e->ix;
+            row->reducer = 1;
+            row->gen     = 0;
+            row->src     = ro[ws[j]];
+            row->mul     = sg->rec != NULL ? sg_insert(q, bht) : 0;
+            row->sm      = sg_insert(s, rst);
+            row->id      = nr;
+            nr++;
+        }
+        free(wrows);
+        free(polys);
+        free(hs);
+        free(ems);
+        free(ws);
     }
+    free(wm);
+    free(wr);
     free(ro);
     free_reducer_index(&ri);
 
