@@ -1585,6 +1585,93 @@ static int sg_zero_test(
 #define SG_BAND 8
 #define SG_NONE ((len_t)-1)
 
+/* subtracts the multiples m[b] of the pivot row (pr, pf) of length pl from
+ * the interleaved dense rows of the band in bd, nz of the multiples are
+ * nonzero, one of them m[one]; returns the number of multiply-adds */
+static inline uint64_t sg_band_sub(
+        uint64_t *bd,
+        const hm_t * const pr,
+        const cf32_t * const pf,
+        const len_t pl,
+        const uint32_t * const m,
+        const len_t nz,
+        const len_t one,
+        const uint64_t big,
+        const int small
+        )
+{
+    len_t j;
+    /* boyer-2016 §4.2: where only one row of the band holds an
+     * entry, a specialized operation reduces that row alone, and
+     * the row operations run only on the nonzero multipliers */
+    if (nz == 1) {
+        if (small) {
+            for (j = 1; j < pl; ++j) {
+                bd[(unsigned long)pr[j] * SG_BAND + one] +=
+                    (uint64_t)m[one] * pf[j];
+            }
+        } else {
+            for (j = 1; j < pl; ++j) {
+                uint64_t * const y = bd + (unsigned long)pr[j] * SG_BAND + one;
+                const uint64_t t = *y + (uint64_t)m[one] * pf[j];
+                *y = t - (t >= big ? big : 0);
+            }
+        }
+        return pl;
+    } else {
+#if defined(__AVX512F__) && SG_BAND == 8
+        /* one 64-bit lane for each row of the band, the products
+         * of the low 32 bits of the lanes */
+        const __m512i mv = _mm512_cvtepu32_epi64(
+                _mm256_loadu_si256((const __m256i *)m));
+        if (small) {
+            for (j = 1; j < pl; ++j) {
+                uint64_t * const y = bd + (unsigned long)pr[j] * SG_BAND;
+                const __m512i f = _mm512_set1_epi64((long long)pf[j]);
+                _mm512_storeu_si512((void *)y, _mm512_add_epi64(
+                            _mm512_loadu_si512((const void *)y),
+                            _mm512_mul_epu32(mv, f)));
+            }
+        } else {
+            const __m512i bv = _mm512_set1_epi64((long long)big);
+            for (j = 1; j < pl; ++j) {
+                uint64_t * const y = bd + (unsigned long)pr[j] * SG_BAND;
+                const __m512i f = _mm512_set1_epi64((long long)pf[j]);
+                const __m512i t = _mm512_add_epi64(
+                        _mm512_loadu_si512((const void *)y),
+                        _mm512_mul_epu32(mv, f));
+                const __mmask8 o = _mm512_cmpge_epu64_mask(t, bv);
+                _mm512_storeu_si512((void *)y,
+                        _mm512_mask_sub_epi64(t, o, t, bv));
+            }
+        }
+#else
+        len_t b;
+        if (small) {
+            for (j = 1; j < pl; ++j) {
+                uint64_t * const y = bd + (unsigned long)pr[j] * SG_BAND;
+                const uint32_t f   = pf[j];
+#pragma omp simd
+                for (b = 0; b < SG_BAND; ++b) {
+                    y[b] += (uint64_t)m[b] * f;
+                }
+            }
+        } else {
+            for (j = 1; j < pl; ++j) {
+                uint64_t * const y = bd + (unsigned long)pr[j] * SG_BAND;
+                const uint32_t f   = pf[j];
+#pragma omp simd
+                for (b = 0; b < SG_BAND; ++b) {
+                    const uint64_t t = y[b] + (uint64_t)m[b] * f;
+                    y[b] = t - (t >= big ? big : 0);
+                }
+            }
+        }
+#endif
+        return (uint64_t)pl * nz;
+    }
+}
+
 /* Reduces the nb <= SG_BAND rows rows[g[0]], ..., rows[g[nb-1]] together, as
  * one after the other would be reduced: each by the pivots and by the rows
  * of the band before it. The dense rows are interleaved, bd holds the
@@ -1659,74 +1746,7 @@ static void sg_band_reduce(
             const hm_t * const pr   = pc[k] + OFFSET;
             const cf32_t * const pf = pcf[k];
             const len_t pl          = pc[k][LENGTH];
-            /* boyer-2016 §4.2: where only one row of the band holds an
-             * entry, a specialized operation reduces that row alone, and
-             * the row operations run only on the nonzero multipliers */
-            if (nz == 1) {
-                if (small) {
-                    for (j = 1; j < pl; ++j) {
-                        bd[(unsigned long)pr[j] * SG_BAND + one] +=
-                            (uint64_t)m[one] * pf[j];
-                    }
-                } else {
-                    for (j = 1; j < pl; ++j) {
-                        uint64_t * const y = bd + (unsigned long)pr[j] * SG_BAND + one;
-                        const uint64_t t = *y + (uint64_t)m[one] * pf[j];
-                        *y = t - (t >= big ? big : 0);
-                    }
-                }
-                *nsubs += pl;
-            } else {
-#if defined(__AVX512F__) && SG_BAND == 8
-                /* one 64-bit lane for each row of the band, the products
-                 * of the low 32 bits of the lanes */
-                const __m512i mv = _mm512_cvtepu32_epi64(
-                        _mm256_loadu_si256((const __m256i *)m));
-                if (small) {
-                    for (j = 1; j < pl; ++j) {
-                        uint64_t * const y = bd + (unsigned long)pr[j] * SG_BAND;
-                        const __m512i f = _mm512_set1_epi64((long long)pf[j]);
-                        _mm512_storeu_si512((void *)y, _mm512_add_epi64(
-                                    _mm512_loadu_si512((const void *)y),
-                                    _mm512_mul_epu32(mv, f)));
-                    }
-                } else {
-                    const __m512i bv = _mm512_set1_epi64((long long)big);
-                    for (j = 1; j < pl; ++j) {
-                        uint64_t * const y = bd + (unsigned long)pr[j] * SG_BAND;
-                        const __m512i f = _mm512_set1_epi64((long long)pf[j]);
-                        const __m512i t = _mm512_add_epi64(
-                                _mm512_loadu_si512((const void *)y),
-                                _mm512_mul_epu32(mv, f));
-                        const __mmask8 o = _mm512_cmpge_epu64_mask(t, bv);
-                        _mm512_storeu_si512((void *)y,
-                                _mm512_mask_sub_epi64(t, o, t, bv));
-                    }
-                }
-#else
-                if (small) {
-                    for (j = 1; j < pl; ++j) {
-                        uint64_t * const y = bd + (unsigned long)pr[j] * SG_BAND;
-                        const uint32_t f   = pf[j];
-#pragma omp simd
-                        for (b = 0; b < SG_BAND; ++b) {
-                            y[b] += (uint64_t)m[b] * f;
-                        }
-                    }
-                } else {
-                    for (j = 1; j < pl; ++j) {
-                        uint64_t * const y = bd + (unsigned long)pr[j] * SG_BAND;
-                        const uint32_t f   = pf[j];
-#pragma omp simd
-                        for (b = 0; b < SG_BAND; ++b) {
-                            const uint64_t t = y[b] + (uint64_t)m[b] * f;
-                            y[b] = t - (t >= big ? big : 0);
-                        }
-                    }
-                }
-#endif
-                *nsubs += (uint64_t)pl * nz;
-            }
+            *nsubs += sg_band_sub(bd, pr, pf, pl, m, nz, one, big, small);
             if (used != NULL) {
                 used[k] = 1;
             }
@@ -1819,61 +1839,105 @@ static int sg_reduce_by_reducers(
         }
     }
     volatile uint64_t done = *nsubs;
+    /* the rows are reduced in bands of SG_BAND consecutive rows as in
+     * sg_band_reduce(), so that a pivot row is read once for the band;
+     * a pivot after a row of the band is not applied to it */
+    const len_t ng = (nt + SG_BAND - 1) / SG_BAND;
 #pragma omp parallel num_threads(nthrds)
     {
-        uint64_t *dr = (uint64_t *)calloc((unsigned long)nc + 1, sizeof(uint64_t));
-        hm_t *nrow   = (hm_t *)malloc((unsigned long)(nc + OFFSET) * sizeof(hm_t));
-        cf32_t *ncf  = (cf32_t *)malloc((unsigned long)(nc + 1) * sizeof(cf32_t));
+        const size_t bsz = (size_t)(nc + 1) * SG_BAND * sizeof(uint64_t);
+        uint64_t *bd = NULL;
+        if (posix_memalign((void **)&bd, 64, bsz) == 0) {
+            memset(bd, 0, bsz);
+        } else {
+            bd = (uint64_t *)calloc(bsz, 1);
+        }
+        hm_t *ncol[SG_BAND];
+        cf32_t *nval[SG_BAND];
+        len_t b;
+        for (b = 0; b < SG_BAND; ++b) {
+            ncol[b] = (hm_t *)malloc((unsigned long)(nc + 1) * sizeof(hm_t));
+            nval[b] = (cf32_t *)malloc((unsigned long)(nc + 1) * sizeof(cf32_t));
+        }
         len_t t, j, k;
 #pragma omp for schedule(dynamic, 1)
-        for (t = 0; t < nt; ++t) {
+        for (t = 0; t < ng; ++t) {
             if (done > wmax) {
                 continue;
             }
-            const len_t ri = tbr[t];
-            sg_row_t *row  = rows + ri;
-            const hm_t * const r = row->r;
-            const len_t len = r[LENGTH];
-            for (j = 0; j < len; ++j) {
-                dr[r[OFFSET+j]] = row->cf[j];
+            const len_t g0 = t * SG_BAND;
+            const len_t nb = nt - g0 < SG_BAND ? nt - g0 : SG_BAND;
+            len_t ri[SG_BAND], nl[SG_BAND];
+            hm_t from = nc;
+            for (b = 0; b < nb; ++b) {
+                ri[b] = tbr[g0+b];
+                const sg_row_t * const row = rows + ri[b];
+                const hm_t * const r = row->r + OFFSET;
+                const len_t len = row->r[LENGTH];
+                for (j = 0; j < len; ++j) {
+                    bd[(unsigned long)r[j] * SG_BAND + b] = row->cf[j];
+                }
+                if (len > 0 && r[0] < from) {
+                    from = r[0];
+                }
+                nl[b] = 0;
             }
             uint64_t subs = 0;
-            len_t nl = 0;
-            for (k = r[OFFSET]; k < nc; ++k) {
-                if (dr[k] == 0) {
+            for (k = from; k < nc; ++k) {
+                uint64_t * const x = bd + (unsigned long)k * SG_BAND;
+                uint64_t any = 0;
+                for (b = 0; b < SG_BAND; ++b) {
+                    any |= x[b];
+                }
+                if (any == 0) {
                     continue;
                 }
-                const uint64_t v = dr[k] % p;
-                dr[k] = 0;
-                if (v == 0) {
+                uint32_t m[SG_BAND];
+                len_t nz = 0, one = 0;
+                for (b = 0; b < SG_BAND; ++b) {
+                    const uint64_t v = x[b] % p;
+                    x[b] = 0;
+                    m[b] = 0;
+                    if (v == 0) {
+                        continue;
+                    }
+                    if (pr[k] == NULL || ppos[k] > ri[b]) {
+                        ncol[b][nl[b]]   = k;
+                        nval[b][nl[b]++] = (cf32_t)v;
+                        continue;
+                    }
+                    m[b] = (uint32_t)(p - v);
+                    ++nz;
+                    one = b;
+                }
+                if (nz == 0) {
                     continue;
                 }
-                if (pr[k] == NULL || ppos[k] > ri) {
-                    nrow[OFFSET+nl] = k;
-                    ncf[nl++]       = (cf32_t)v;
-                    continue;
-                }
-                const len_t pl = pr[k][LENGTH];
-                sg_sub_row(dr, pr[k] + OFFSET, pv[k], pl, p - v, big, small);
+                subs += sg_band_sub(bd, pr[k] + OFFSET, pv[k], pr[k][LENGTH],
+                        m, nz, one, big, small);
                 if (used != NULL) {
                     used[k] = 1;
                 }
-                subs += pl;
             }
-            hm_t *h    = (hm_t *)malloc((unsigned long)(nl + OFFSET) * sizeof(hm_t));
-            cf32_t *c  = (cf32_t *)malloc((unsigned long)(nl + 1) * sizeof(cf32_t));
-            memcpy(h + OFFSET, nrow + OFFSET, (unsigned long)nl * sizeof(hm_t));
-            memcpy(c, ncf, (unsigned long)nl * sizeof(cf32_t));
-            h[LENGTH]  = nl;
-            h[PRELOOP] = nl % UNROLL;
-            row->pr = h;
-            row->pv = c;
+            for (b = 0; b < nb; ++b) {
+                sg_row_t *row = rows + ri[b];
+                hm_t *h    = (hm_t *)malloc((unsigned long)(nl[b] + OFFSET) * sizeof(hm_t));
+                cf32_t *c  = (cf32_t *)malloc((unsigned long)(nl[b] + 1) * sizeof(cf32_t));
+                memcpy(h + OFFSET, ncol[b], (unsigned long)nl[b] * sizeof(hm_t));
+                memcpy(c, nval[b], (unsigned long)nl[b] * sizeof(cf32_t));
+                h[LENGTH]  = nl[b];
+                h[PRELOOP] = nl[b] % UNROLL;
+                row->pr = h;
+                row->pv = c;
+            }
 #pragma omp atomic
             done += subs;
         }
-        free(dr);
-        free(nrow);
-        free(ncf);
+        free(bd);
+        for (b = 0; b < SG_BAND; ++b) {
+            free(ncol[b]);
+            free(nval[b]);
+        }
     }
     *nsubs = done;
     free(pr);
