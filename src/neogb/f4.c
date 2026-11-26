@@ -1860,10 +1860,14 @@ static bs_t *core_f4_elim_via_drl(
         gmd->drl_bs = initialize_drl_basis(gbs, gmd->drl_md, gmd->nev);
     }
     md_t *dmd = gmd->drl_md;
-    /* these may be changed by the multi-modular computation */
+    /* these may be changed by the multi-modular computation, which may
+     * also apply the tracers at several primes in parallel, each with its
+     * own copies of the hash tables */
     dmd->f4_qq_round = gmd->f4_qq_round;
     dmd->info_level  = gmd->info_level;
     dmd->nthrds      = gmd->nthrds;
+    dmd->share_ht    = gmd->share_ht;
+    dmd->deadline    = gmd->deadline;
 
     if (gmd->info_level > 0) {
         fprintf(VERBSTREAM, "\nGroebner basis w.r.t. DRL first, ");
@@ -1895,6 +1899,8 @@ static bs_t *core_f4_elim_via_drl(
         emd->f4_qq_round = gmd->f4_qq_round;
         emd->info_level  = gmd->info_level;
         emd->nthrds      = gmd->nthrds;
+        emd->share_ht    = gmd->share_ht;
+        emd->deadline    = gmd->deadline;
     } else {
         emd = initialize_drl_meta_data(gmd);
         emd->nev       = gmd->nev;

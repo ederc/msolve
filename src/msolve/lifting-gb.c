@@ -2542,10 +2542,8 @@ restart:
     /* whether the primes are applied in parallel batches; the probes and
        the applications at single primes use all threads in the linear
        algebra, which is faster for few large matrices, see the first
-       batch below. With eliminated variables the bases w.r.t. DRL and
-       the tracer of the elimination step are kept in st for the next
-       primes, which is not done for several primes at once. */
-    int par_batch = par > 1 && st->nev == 0;
+       batch below. */
+    int par_batch = par > 1;
     int batches = 0;
     /* the time of the first application, with all threads */
     double tfirst = 0;
