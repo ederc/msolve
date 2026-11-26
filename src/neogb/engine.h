@@ -67,6 +67,12 @@ int core_f4_multi(
         bs_t **out
         );
 
+/* 1 if core_f4_multi() only reads the hash table of gbs, so that it can
+ * be run at several sets of primes at the same time, see multi.c */
+int core_f4_multi_read_only(
+        const md_t * const gmd
+        );
+
 int64_t export_results_from_gba(
     /* return values */
     int32_t *bld,   /* basis load */

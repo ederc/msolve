@@ -893,6 +893,10 @@ int32_t msolve_guided_learning = 0;
 /* whether traces over the rationals are applied at several primes at
    once */
 int32_t msolve_multi_primes = 1;
+/* the largest time of an application at a ~31-bit prime with one thread
+   for which the trace is applied at MULTI_PRIMES primes per thread with
+   several threads, see core_groebner_qq() */
+#define MPAR_MAX_TIME 0.25
 
 /* returns 1 if the reduced Groebner bases a and b over the same prime
    field, with the same basis hash table, are equal */
@@ -2547,7 +2551,7 @@ restart:
     int batches = 0;
     /* the time of the first application, with all threads */
     double tfirst = 0;
-    const int qsz = par > MULTI_PRIMES ? par : MULTI_PRIMES;
+    const int qsz = par > 1 ? par * MULTI_PRIMES : MULTI_PRIMES;
     bs_t **mbs    = (bs_t **)calloc((size_t)qsz, sizeof(bs_t *));
     uint64_t *mpr = (uint64_t *)calloc((size_t)qsz, sizeof(uint64_t));
     int mld = 0, mnx = 0;
@@ -2557,6 +2561,13 @@ restart:
     double tpass = -1;
     /* with several threads, the primes are applied in parallel instead */
     int multi_off = !msolve_multi_primes || par > 1;
+    /* with several threads, passes at MULTI_PRIMES primes for each
+       thread, see below: whether they are not possible, the time of such
+       a parallel pass, -1 before the first one, and the time of the last
+       batch of single primes per ~31-bit prime of each thread, 0 before
+       the first one */
+    int mpar_off = !msolve_multi_primes || par == 1;
+    double tppass = -1, ubatch = 0;
     double r31 = 0;
     /* the time spent applying a trace of a signature-based run, and
        whether it was replaced by a trace learned by F4 */
@@ -2612,7 +2623,66 @@ restart:
          && getenv("NEOGB_MULTI_FORCE") != NULL){
         multi_now = 1;
       }
-      if(!queued && par_batch && probe == 1){
+      /* Once the trace learned by F4 is applied without new monomials,
+         each thread applies it at MULTI_PRIMES primes in one pass, see
+         core_f4_multi(). With all threads at work such a pass takes from
+         about four to more than fourteen times a batch of single primes,
+         more for larger traces whose matrices in MULTI_PRIMES lanes do not
+         fit into the caches. So the passes are only tried for small
+         traces, after at least half as many primes as a pass gives, and
+         kept while they are clearly cheaper per prime and while at least
+         as much time was spent on the primes used already. */
+      int mpar_now = 0;
+      if(!queued && par_batch && probe >= 3 && !mpar_off && tprobe[0] > 0
+         && tprobe[0] <= MPAR_MAX_TIME && core_f4_multi_read_only(st)){
+        const double unit = ubatch > 0 ? ubatch : (tprobe[1] > 0
+          ? MIN(tprobe[0], tprobe[1] * 30 / wbits) : tprobe[0]);
+        mpar_now = (r31 >= par * MULTI_PRIMES / 2 && (tppass < 0
+             || (tppass < 0.75 * MULTI_PRIMES * unit
+                 && tppass <= r31 * unit / par)))
+          || getenv("NEOGB_MULTI_FORCE") != NULL;
+      }
+      if(mpar_now){
+        const int np = par * MULTI_PRIMES;
+        for(int l = 0; l < np; l++){
+          prime = next_prime(prime);
+          if(prime >= lprime){
+            prime = next_prime(1<<30);
+          }
+          while(is_lucky_prime_ui(prime, bs) || prime==primeinit){
+            prime = next_prime(prime);
+            if(prime >= lprime){
+              prime = next_prime(1<<30);
+            }
+          }
+          mpr[l] = prime;
+        }
+        int ok = 1;
+        const double t0 = realtime();
+#pragma omp parallel for num_threads(par) schedule(static, 1) reduction(min:ok)
+        for(int l = 0; l < par; l++){
+          ok = core_f4_multi(bs, st, mpr + l * MULTI_PRIMES, MULTI_PRIMES,
+                             mbs + l * MULTI_PRIMES);
+        }
+        if(ok){
+          tppass = realtime() - t0;
+          if(info_level > 1){
+            fprintf(VERBSTREAM, "(x%dx%d)", par, MULTI_PRIMES);
+          }
+          mld = np;
+          mnx = 0;
+        }
+        else{
+          /* no thread applied the trace, the conditions are the same
+             for all of them; the last prime is applied alone below */
+          mpar_off = 1;
+          mpar_now = 0;
+        }
+      }
+      if(mpar_now){
+        /* the bases of the pass are queued */
+      }
+      else if(!queued && par_batch && probe == 1){
         /* the probes in parallel: the trace is applied at par-1 ~31-bit
            primes and at one wide prime, one thread each, the mean
            times of the good ones decide the size of the next primes */
@@ -2743,6 +2813,7 @@ restart:
         apply_in_parallel(bs, st, mpr, par, mbs, NULL, 0, NULL, 0);
         st->nthrds = par;
         const double tb = realtime() - t0;
+        ubatch = wide_walk ? tb * 30 / wbits : tb;
         if(!relearned){
           tsig += tb;
         }

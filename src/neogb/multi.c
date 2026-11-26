@@ -831,6 +831,28 @@ static int ml_sig_rounds(
     return ml->act != 0;
 }
 
+/* A trace of F4 is applied without new monomials in the hash table
+ * once the positions of the columns of all its matrices in it are known,
+ * as after an application on that hash table, see ml_round(). A trace of
+ * a signature-based run reduces the input generators first, which works
+ * on that hash table, too. */
+int core_f4_multi_read_only(
+        const md_t * const gmd
+        )
+{
+    const trace_t * const tr = gmd->tr;
+    if (tr == NULL || tr->sgr != NULL || tr->tc == NULL) {
+        return 0;
+    }
+    for (len_t r = 0; r <= tr->ltd; ++r) {
+        const tc_t * const tc = __atomic_load_n(tr->tc + r, __ATOMIC_ACQUIRE);
+        if (tc == NULL || tc->hc == NULL) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 /* Applies the trace gmd->tr at the primes p[0], ..., p[n-1] < 2^31,
  * n <= ML, in one pass, see above. All matrices of the trace must be
  * stored, as after its first application. out[l] gets the reduced basis
