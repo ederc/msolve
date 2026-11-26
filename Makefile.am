@@ -38,6 +38,7 @@ checkdiff       = \
 			  test/diff/diff_gb-lifting-qq.sh \
 			  test/diff/diff_trace-cache-compressed-qq.sh \
 			  test/diff/diff_multi-primes-qq.sh \
+			  test/diff/diff_threads-qq.sh \
 			  test/diff/diff_guided-learning-qq.sh \
 			  test/diff/diff_zero-coefficients-p7.sh \
 			  test/diff/diff_eco10-31.sh \

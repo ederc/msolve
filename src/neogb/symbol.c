@@ -1128,10 +1128,10 @@ static void start_trace_cache(
     }
     /* the stored data refers to the basis hash table at the start of the
      * application, it is not valid if this table has changed, unless the
-     * applications share the table: its entries are only added, never
-     * moved */
+     * applications share the table or a copy of it: its entries are only
+     * added, never moved */
     hl_t eld = __sync_val_compare_and_swap(&(tr->tceld), 0, bs->ht->eld);
-    if (!bs->ght && eld != 0 && eld != bs->ht->eld) {
+    if (!bs->ght && !bs->hcp && eld != 0 && eld != bs->ht->eld) {
         return;
     }
     md->tcoff = 0;

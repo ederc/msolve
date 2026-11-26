@@ -449,7 +449,8 @@ bs_t *copy_basis_mod_p(
     bs->sz          = gbs->sz;
     bs->constant    = gbs->constant;
     if (st->f4_qq_round != 1 && !st->share_ht) {
-        bs->ht = copy_hash_table(gbs->ht);
+        bs->ht  = copy_hash_table(gbs->ht);
+        bs->hcp = 1;
     } else {
         bs->ht  = gbs->ht;
         bs->ght = 1;

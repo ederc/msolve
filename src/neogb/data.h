@@ -228,6 +228,8 @@ struct bs_t
     int8_t *red;    /* tracks redundancy of basis elements */
     int8_t ght;     /* 1 if ht is the hash table of the basis this one is
                        copied from, see copy_basis_mod_p() */
+    int8_t hcp;     /* 1 if ht is a copy of that hash table: the entries
+                       it had keep their positions */
     hm_t **hm;      /* hashed monomials representing exponents */
     sm_t *sm;       /* signatures for F5-style computations */
     si_t *si;       /* signatures index for F5-style computations */

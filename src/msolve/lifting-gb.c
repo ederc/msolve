@@ -139,6 +139,7 @@ typedef struct{
   mpz_t *crt3;
   mpz_t *num3;
   mpz_t *den3;
+  int nthrds; /* threads lifting the polynomials */
 } data_lift_struct;
 
 typedef data_lift_struct data_lift_t[1];
@@ -148,6 +149,7 @@ static inline void data_lift_init(data_lift_t dl,
                                   int32_t npol,
                                   int32_t *steps, int32_t nsteps){
   dl->npol = npol;
+  dl->nthrds = 1;
   dl->rr = 1;
   dl->lstart = 0;
   dl->nsteps = nsteps;
@@ -936,6 +938,28 @@ static bs_t *guided_trace_learning(bs_t *bs_qq, md_t *st, const int32_t fc,
 }
 
 /*
+  Applies the trace at the n primes p in parallel, one thread for each,
+  each with its own copy of the hash table of bs_qq. The bases go to out,
+  NULL for a bad prime.
+ */
+static void apply_in_parallel(bs_t *bs_qq, md_t *st, const uint64_t *p,
+                              const int n, bs_t **out){
+  st->info_level  = 0;
+  st->f4_qq_round = 2;
+  st->share_ht    = 0;
+#pragma omp parallel for num_threads(n) schedule(dynamic, 1)
+  for(int l = 0; l < n; l++){
+    int32_t err = 0;
+    bs_t *b = core_gba(bs_qq, st, &err, p[l]);
+    if(err && b != NULL){
+      free_basis_and_only_local_hash_table_data(&b);
+    }
+    out[l] = err ? NULL : b;
+  }
+  st->share_ht = 1;
+}
+
+/*
   The trace of a signature-based run is applied at each prime more slowly
   than a trace learned by F4, but is learned faster. Where many primes are
   needed, see SIG_RELEARN, a trace is learned by F4 at the prime fc and
@@ -1485,33 +1509,226 @@ static inline int crt_ratrecon_lift_modgbs(gb_modpoly_t modgbs, data_lift_t dl,
   The primes are the ones of mod_p, i.e. all but the learning one and the
   last one, which is left for the verification of the lifted polynomials.
  */
+/* the scratch data of a thread lifting polynomials, see
+   lift_poly_mr() */
+typedef struct{
+  mpz_t x, P, rden, d;
+  rrec_data_t rd;
+  uint64_t *dmod, *dmods, *res;
+  uint32_t *ep;
+  mpz_t *eden;
+  uint32_t nealloc;
+  fmpz_t y;
+  fmpz_comb_temp_t comb_temp;
+  int comb;
+  double tcrt, trrec;
+} mr_scratch_t;
+
+static void mr_scratch_init(mr_scratch_t *sc, const uint32_t np,
+                            const uint32_t maxlen, const int comb_init,
+                            fmpz_comb_t comb){
+  mpz_inits(sc->x, sc->P, sc->rden, sc->d, NULL);
+  initialize_rrec_data(sc->rd);
+  sc->dmod  = (uint64_t *)malloc(sizeof(uint64_t) * 2 * (np + 1));
+  sc->dmods = sc->dmod + np + 1;
+  sc->ep    = (uint32_t *)malloc(sizeof(uint32_t) * (maxlen + 1));
+  sc->eden    = NULL;
+  sc->nealloc = 0;
+  sc->comb    = comb_init;
+  sc->res     = NULL;
+  if(comb_init){
+    sc->res = (uint64_t *)malloc(sizeof(uint64_t) * np);
+    fmpz_comb_temp_init(sc->comb_temp, comb);
+    fmpz_init(sc->y);
+  }
+  sc->tcrt  = 0;
+  sc->trrec = 0;
+}
+
+static void mr_scratch_clear(mr_scratch_t *sc){
+  for(uint32_t e = 0; e < sc->nealloc; e++){
+    mpz_clear(sc->eden[e]);
+  }
+  free(sc->eden);
+  free(sc->ep);
+  free(sc->dmod);
+  if(sc->comb){
+    fmpz_clear(sc->y);
+    fmpz_comb_temp_clear(sc->comb_temp);
+    free(sc->res);
+  }
+  free_rrec_data(sc->rd);
+  mpz_clears(sc->x, sc->P, sc->rden, sc->d, NULL);
+}
+
+/* lifts the polynomial k, see crt_ratrecon_lift_modgbs_mr(); returns 0 if
+   one of its coefficients is not lifted */
+static int lift_poly_mr(gb_modpoly_t modgbs, data_lift_t dl, const int32_t k,
+                        mpz_t mod_p, const uint32_t np, const mp_limb_t *pr,
+                        const uint64_t *pinv, const uint64_t *pinvs,
+                        const uint32_t npp, mpz_t *pp, fmpz_comb_t comb,
+                        const mpz_t one, mr_scratch_t *sc){
+  modpolys_t *pol = modgbs->modpolys + k;
+  mpz_t *x = &(sc->x), *P = &(sc->P);
+  uint64_t *dmod = sc->dmod, *dmods = sc->dmods;
+  uint32_t *ep = sc->ep;
+  double rt = realtime();
+  /* the lcm of the witness denominators is the first guess */
+  mpz_set(sc->d, dl->cden[k]);
+  for(uint32_t i = 0; i < np; i++){
+    dmod[i] = mpz_fdiv_ui(sc->d, pr[i]);
+    dmods[i] = shoup_mu(pr[i], dmod[i]);
+  }
+  set_recdata_guess(sc->rd, mod_p, sc->d);
+  uint32_t ne = 0;
+  if(sc->nealloc == 0){
+    sc->eden = (mpz_t *)malloc(sizeof(mpz_t) * 4);
+    for(uint32_t e = 0; e < 4; e++){
+      mpz_init(sc->eden[e]);
+    }
+    sc->nealloc = 4;
+  }
+  mpz_set(sc->eden[ne++], sc->d);
+  for(int32_t l = 0; l < pol[0]->len; l++){
+    uint32_t i = np;
+    if(sc->comb){
+      /* x from all primes by a product tree, in balanced form */
+      for(uint32_t j = 0; j < np; j++){
+        const uint64_t c = modgbs->wide ?
+          MODCF64(pol[0], l, j + 1) : (uint64_t)MODCF(pol[0], l, j + 1);
+        sc->res[j] = shoup_mod_mul(dmod[j], dmods[j], c, pr[j]);
+      }
+      fmpz_multi_CRT_ui(sc->y, sc->res, comb, sc->comb_temp, 1);
+      fmpz_get_mpz(*x, sc->y);
+      if(mpz_cmpabs(*x, sc->rd->N) <= 0){
+        i = 0;
+      }
+    }
+    else{
+      mpz_set_ui(*x, 0);
+      /* sign of the run of digits ending x (0: digits 0, 1: digits
+         p_i - 1) and its number of bits */
+      int sgn = -1, bits = 0;
+      for(i = 0; i < np; i++){
+        const uint64_t p = pr[i];
+        const uint64_t c = modgbs->wide ?
+          MODCF64(pol[0], l, i + 1) : (uint64_t)MODCF(pol[0], l, i + 1);
+        const uint64_t r = shoup_mod_mul(dmod[i], dmods[i], c, p);
+        const uint64_t xm = mpz_fdiv_ui(*x, p);
+        uint64_t v = r >= xm ? r - xm : r + (p - xm);
+        v = shoup_mod_mul(pinv[i], pinvs[i], v, p);
+        if(i > 0 && (v == 0 || v == p - 1)){
+          const int s = v != 0;
+          bits = s == sgn ? bits + (p >> 32 ? 61 : 30) : (p >> 32 ? 61 : 30);
+          sgn = s;
+        }
+        else{
+          sgn = -1;
+        }
+        if(i < npp - 1){
+          if(v != 0){
+            mpz_addmul_ui(*x, pp[i], v);
+          }
+        }
+        else{
+          if(i == npp - 1){
+            mpz_set(*P, pp[i]);
+          }
+          if(v != 0){
+            mpz_addmul_ui(*x, *P, v);
+          }
+          mpz_mul_ui(*P, *P, p);
+        }
+        if(sgn >= 0 && bits >= 60){
+          /* the digits from the start of the run on are p_j - 1:
+             x is the current value minus p_0 ... p_i */
+          if(sgn == 1){
+            mpz_sub(*x, *x, i < npp - 1 ? pp[i + 1] : *P);
+          }
+          break;
+        }
+      }
+    }
+    if(i < np){
+      mpz_swap(pol[0]->cf_qq[l], *x);
+      ep[l] = ne - 1;
+      continue;
+    }
+    /* x is the residue of c * d modulo mod_p */
+    double rt2 = realtime();
+    if(!lift_ratreconwden(pol[0]->cf_qq[l], sc->rden, *x, mod_p, one, sc->rd)){
+      sc->trrec += realtime() - rt2;
+      sc->tcrt  += realtime() - rt - (realtime() - rt2);
+      return 0;
+    }
+    if(mpz_cmp_ui(sc->rden, 1)){
+      mpz_mul(sc->d, sc->d, sc->rden);
+      for(uint32_t i = 0; i < np; i++){
+        dmod[i] = mpz_fdiv_ui(sc->d, pr[i]);
+        dmods[i] = shoup_mu(pr[i], dmod[i]);
+      }
+      set_recdata_guess(sc->rd, mod_p, sc->d);
+      if(ne == sc->nealloc){
+        sc->eden = (mpz_t *)realloc(sc->eden, sizeof(mpz_t) * 2 * sc->nealloc);
+        for(uint32_t e = sc->nealloc; e < 2 * sc->nealloc; e++){
+          mpz_init(sc->eden[e]);
+        }
+        sc->nealloc *= 2;
+      }
+      mpz_set(sc->eden[ne++], sc->d);
+    }
+    ep[l] = ne - 1;
+    sc->trrec += realtime() - rt2;
+    rt += realtime() - rt2;
+  }
+  sc->tcrt += realtime() - rt;
+  mpz_set(pol[0]->lm, sc->d);
+  if(ne > 1){
+    /* numerators w.r.t. the final denominator */
+    for(uint32_t e = 0; e < ne - 1; e++){
+      mpz_divexact(sc->eden[e], sc->d, sc->eden[e]);
+    }
+    for(int32_t l = 0; l < pol[0]->len; l++){
+      if(ep[l] < ne - 1){
+        mpz_mul(pol[0]->cf_qq[l], pol[0]->cf_qq[l], sc->eden[ep[l]]);
+      }
+    }
+  }
+  return 1;
+}
+
 static inline int crt_ratrecon_lift_modgbs_mr(gb_modpoly_t modgbs, data_lift_t dl,
                                               int32_t start, int32_t end,
                                               mpz_t mod_p, rrec_data_t rd1,
                                               double *st_crt, double *st_rrec){
 
+  (void)rd1;
   modpolys_t *polys = modgbs->modpolys;
   /* the primes of the slots 1, ..., np */
   const uint32_t np = modgbs->nprimes - 2;
   const mp_limb_t *pr = modgbs->primes + 1;
 
+  /* the polynomials are lifted up to the first one whose witness
+     coefficient is not lifted */
+  int32_t stop = end;
   uint32_t maxlen = 0;
   for(int32_t k = start; k < end; k++){
+    if(dl->check1[k] < 1 && polys[k]->len > 0){
+      stop = k;
+      break;
+    }
     if(dl->check1[k] > 1 && polys[k]->len > maxlen){
       maxlen = polys[k]->len;
     }
   }
-  mpz_t x, P, rden, one;
-  mpz_inits(x, P, rden, one, NULL);
+  mpz_t P, one;
+  mpz_inits(P, one, NULL);
   mpz_set_ui(one, 1);
   mpz_set_ui(P, 1);
-  /* pinv[i] is the inverse of p_0 ... p_{i-1} modulo p_i, dmod[i] the
-     residue of d modulo p_i, both with their Shoup pre-inverses in pinvs
-     and dmods */
-  uint64_t *pinv = (uint64_t *)malloc(sizeof(uint64_t) * 4 * (np + 1));
+  /* pinv[i] is the inverse of p_0 ... p_{i-1} modulo p_i, with its Shoup
+     pre-inverse in pinvs */
+  uint64_t *pinv = (uint64_t *)malloc(sizeof(uint64_t) * 2 * (np + 1));
   uint64_t *pinvs = pinv + np + 1;
-  uint64_t *dmod = pinvs + np + 1;
-  uint64_t *dmods = dmod + np + 1;
   /* the products p_0 ... p_{i-1} are kept for the first primes */
   const uint32_t npp = np < MR_PRODUCTS ? np + 1 : MR_PRODUCTS;
   mpz_t *pp = (mpz_t *)malloc(sizeof(mpz_t) * npp);
@@ -1529,189 +1746,109 @@ static inline int crt_ratrecon_lift_modgbs_mr(gb_modpoly_t modgbs, data_lift_t d
   /* for many primes the quadratic cost of the digits exceeds the one of
      a product tree */
   const int comb_init = np >= MR_COMB;
-  uint64_t *res = NULL;
   fmpz_comb_t comb;
-  fmpz_comb_temp_t comb_temp;
-  fmpz_t y;
   if(comb_init){
-    res = (uint64_t *)malloc(sizeof(uint64_t) * np);
     fmpz_comb_init(comb, (mp_limb_t *)pr, np);
-    fmpz_comb_temp_init(comb_temp, comb);
-    fmpz_init(y);
   }
-  /* the denominators by which the coefficients have been lifted: the
-     coefficient of index l is cf_qq[l] / eden[ep[l]] */
-  uint32_t *ep = (uint32_t *)malloc(sizeof(uint32_t) * (maxlen + 1));
-  uint32_t nealloc = 0;
-  mpz_t *eden = NULL;
 
-  int32_t ret = end;
-  double rt;
-
-  for(int32_t k = start; k < end; k++){
-    if(dl->check1[k] > 1 && polys[k]->len > 0){
-      modpolys_t *pol = polys + k;
-      rt = realtime();
-      /* the lcm of the witness denominators is the first guess */
-      mpz_set(dl->tmp, dl->cden[k]);
-      for(uint32_t i = 0; i < np; i++){
-        dmod[i] = mpz_fdiv_ui(dl->tmp, pr[i]);
-        dmods[i] = shoup_mu(pr[i], dmod[i]);
+  /* the polynomials are lifted in parallel; the first one not lifted
+     ends the lifting as if they were lifted one after the other */
+  const double rt = realtime();
+  double tcrt = 0, trrec = 0;
+  /* the first polynomial not lifted so far: the ones after it are not
+     lifted any more */
+  int32_t fail = stop;
+  /* the first polynomial to lift is lifted alone: often it is not lifted
+     yet, then the others are not lifted either */
+  int32_t first = start;
+  {
+    mr_scratch_t sc;
+    mr_scratch_init(&sc, np, maxlen, comb_init, comb);
+    for(; first < stop; first++){
+      if(polys[first]->len == 0){
+        dl->check2[first] += 1;
       }
-      set_recdata_guess(rd1, mod_p, dl->tmp);
-      uint32_t ne = 0;
-      if(nealloc == 0){
-        eden = (mpz_t *)malloc(sizeof(mpz_t) * 4);
-        for(uint32_t e = 0; e < 4; e++){
-          mpz_init(eden[e]);
-        }
-        nealloc = 4;
-      }
-      mpz_set(eden[ne++], dl->tmp);
-      int ok = 1;
-      for(int32_t l = 0; l < pol[0]->len; l++){
-        uint32_t i = np;
-        if(comb_init){
-          /* x from all primes by a product tree, in balanced form */
-          for(uint32_t j = 0; j < np; j++){
-            const uint64_t c = modgbs->wide ?
-              MODCF64(pol[0], l, j + 1) : (uint64_t)MODCF(pol[0], l, j + 1);
-            res[j] = shoup_mod_mul(dmod[j], dmods[j], c, pr[j]);
-          }
-          fmpz_multi_CRT_ui(y, res, comb, comb_temp, 1);
-          fmpz_get_mpz(x, y);
-          if(mpz_cmpabs(x, rd1->N) <= 0){
-            i = 0;
-          }
+      else if(dl->check1[first] > 1){
+        if(lift_poly_mr(modgbs, dl, first, mod_p, np, pr, pinv, pinvs, npp,
+                        pp, comb, one, &sc)){
+          dl->check2[first] += 1;
         }
         else{
-          mpz_set_ui(x, 0);
-          /* sign of the run of digits ending x (0: digits 0, 1: digits
-             p_i - 1) and its number of bits */
-          int sgn = -1, bits = 0;
-          for(i = 0; i < np; i++){
-            const uint64_t p = pr[i];
-            const uint64_t c = modgbs->wide ?
-              MODCF64(pol[0], l, i + 1) : (uint64_t)MODCF(pol[0], l, i + 1);
-            const uint64_t r = shoup_mod_mul(dmod[i], dmods[i], c, p);
-            const uint64_t xm = mpz_fdiv_ui(x, p);
-            uint64_t v = r >= xm ? r - xm : r + (p - xm);
-            v = shoup_mod_mul(pinv[i], pinvs[i], v, p);
-            if(i > 0 && (v == 0 || v == p - 1)){
-              const int s = v != 0;
-              bits = s == sgn ? bits + (p >> 32 ? 61 : 30) : (p >> 32 ? 61 : 30);
-              sgn = s;
-            }
-            else{
-              sgn = -1;
-            }
-            if(i < npp - 1){
-              if(v != 0){
-                mpz_addmul_ui(x, pp[i], v);
-              }
-            }
-            else{
-              if(i == npp - 1){
-                mpz_set(P, pp[i]);
-              }
-              if(v != 0){
-                mpz_addmul_ui(x, P, v);
-              }
-              mpz_mul_ui(P, P, p);
-            }
-            if(sgn >= 0 && bits >= 60){
-              /* the digits from the start of the run on are p_j - 1:
-                 x is the current value minus p_0 ... p_i */
-              if(sgn == 1){
-                mpz_sub(x, x, i < npp - 1 ? pp[i + 1] : P);
-              }
-              break;
-            }
-          }
+          fail = first;
         }
-        if(i < np){
-          mpz_swap(pol[0]->cf_qq[l], x);
-          ep[l] = ne - 1;
-          continue;
-        }
-        /* x is the residue of c * d modulo mod_p */
-        double rt2 = realtime();
-        if(!lift_ratreconwden(pol[0]->cf_qq[l], rden, x, mod_p, one, rd1)){
-          *st_rrec += realtime() - rt2;
-          /* the witnesses of this poly are still valid: their common
-             denominator remains the best guess for reconstructing them */
-          mpz_set(dl->gden, dl->cden[k]);
-          for(int32_t i = k; i < modgbs->ld; i++){
-            dl->check2[i] = 0;
-          }
-          ok = 0;
-          break;
-        }
-        if(mpz_cmp_ui(rden, 1)){
-          mpz_mul(dl->tmp, dl->tmp, rden);
-          for(uint32_t i = 0; i < np; i++){
-            dmod[i] = mpz_fdiv_ui(dl->tmp, pr[i]);
-            dmods[i] = shoup_mu(pr[i], dmod[i]);
-          }
-          set_recdata_guess(rd1, mod_p, dl->tmp);
-          if(ne == nealloc){
-            eden = (mpz_t *)realloc(eden, sizeof(mpz_t) * 2 * nealloc);
-            for(uint32_t e = nealloc; e < 2 * nealloc; e++){
-              mpz_init(eden[e]);
-            }
-            nealloc *= 2;
-          }
-          mpz_set(eden[ne++], dl->tmp);
-        }
-        ep[l] = ne - 1;
-        *st_rrec += realtime() - rt2;
-        rt += realtime() - rt2;
-      }
-      *st_crt += realtime() - rt;
-      if(!ok){
-        ret = k;
+        first++;
         break;
       }
-      mpz_set(pol[0]->lm, dl->tmp);
-      if(ne > 1){
-        /* numerators w.r.t. the final denominator */
-        for(uint32_t e = 0; e < ne - 1; e++){
-          mpz_divexact(eden[e], dl->tmp, eden[e]);
+    }
+    tcrt  += sc.tcrt;
+    trrec += sc.trrec;
+    mr_scratch_clear(&sc);
+  }
+  if(fail < stop){
+    first = stop;
+  }
+  const int nthr = dl->nthrds > 1 && stop - first >= 2 * dl->nthrds
+    ? dl->nthrds : 1;
+#pragma omp parallel num_threads(nthr) reduction(+:tcrt, trrec) if(first < stop)
+  {
+    mr_scratch_t sc;
+    mr_scratch_init(&sc, np, maxlen, comb_init, comb);
+#pragma omp for schedule(dynamic, 1)
+    for(int32_t k = first; k < stop; k++){
+      int32_t f;
+#pragma omp atomic read
+      f = fail;
+      if(k > f){
+        continue;
+      }
+      if(polys[k]->len == 0){
+        dl->check2[k] += 1;
+      }
+      else if(dl->check1[k] > 1){
+        if(lift_poly_mr(modgbs, dl, k, mod_p, np, pr, pinv, pinvs, npp,
+                        pp, comb, one, &sc)){
+          dl->check2[k] += 1;
         }
-        for(int32_t l = 0; l < pol[0]->len; l++){
-          if(ep[l] < ne - 1){
-            mpz_mul(pol[0]->cf_qq[l], pol[0]->cf_qq[l], eden[ep[l]]);
+        else{
+#pragma omp critical(mr_fail)
+          {
+            if(k < fail){
+              fail = k;
+            }
           }
         }
       }
-      dl->check2[k] += 1;
     }
-    if(dl->check1[k] < 1 && polys[k]->len > 0){
-      ret = k;
-      break;
+    tcrt  += sc.tcrt;
+    trrec += sc.trrec;
+    mr_scratch_clear(&sc);
+  }
+  /* the wall time, split as the time of the threads */
+  const double tw = realtime() - rt;
+  if(tcrt + trrec > 0){
+    *st_crt  += tw * tcrt / (tcrt + trrec);
+    *st_rrec += tw * trrec / (tcrt + trrec);
+  }
+  int32_t ret = stop;
+  if(fail < stop){
+    /* the witnesses of this poly are still valid: their common
+       denominator remains the best guess for reconstructing them */
+    mpz_set(dl->gden, dl->cden[fail]);
+    for(int32_t i = fail; i < modgbs->ld; i++){
+      dl->check2[i] = 0;
     }
-    if(polys[k]->len == 0){
-        dl->check2[k] += 1;
-    }
+    ret = fail;
   }
 
-  for(uint32_t e = 0; e < nealloc; e++){
-    mpz_clear(eden[e]);
-  }
-  free(eden);
-  free(ep);
   if(comb_init){
-    fmpz_clear(y);
-    fmpz_comb_temp_clear(comb_temp);
     fmpz_comb_clear(comb);
-    free(res);
   }
   for(uint32_t i = 0; i < npp; i++){
     mpz_clear(pp[i]);
   }
   free(pp);
   free(pinv);
-  mpz_clears(x, P, rden, one, NULL);
+  mpz_clears(P, one, NULL);
 
   return ret;
 }
@@ -2255,14 +2392,28 @@ restart:
     }
     /* the bases of the next primes, computed together in one application
        of the trace, see core_f4_multi() */
-    bs_t *mbs[MULTI_PRIMES];
-    uint64_t mpr[MULTI_PRIMES];
+    /* With several threads the trace is applied at as many primes at
+       once, each thread applying it at one prime with its own copy of
+       the hash table; the linear algebra of one prime is too small for
+       many threads. These bases are queued, too. */
+    const int par = st->nthrds;
+    dlift->nthrds = par;
+    /* whether the primes are applied in parallel batches; the probes and
+       the applications at single primes use all threads in the linear
+       algebra, which is faster for few large matrices, see the first
+       batch below */
+    int par_batch = par > 1;
+    int batches = 0;
+    const int qsz = par > MULTI_PRIMES ? par : MULTI_PRIMES;
+    bs_t **mbs    = (bs_t **)calloc((size_t)qsz, sizeof(bs_t *));
+    uint64_t *mpr = (uint64_t *)calloc((size_t)qsz, sizeof(uint64_t));
     int mld = 0, mnx = 0;
     /* the time of such a pass, -1 before the first one, whether passes
        are not possible, and the primes used so far, those of 61 bits
        counted twice */
     double tpass = -1;
-    int multi_off = !msolve_multi_primes;
+    /* with several threads, the primes are applied in parallel instead */
+    int multi_off = !msolve_multi_primes || par > 1;
     double r31 = 0;
     /* the time spent applying a trace of a signature-based run, and
        whether it was replaced by a trace learned by F4 */
@@ -2313,7 +2464,54 @@ restart:
          && getenv("NEOGB_MULTI_FORCE") != NULL){
         multi_now = 1;
       }
-      if(queued){
+      if(!queued && !multi_now && par_batch && probe >= 3){
+        /* the next par primes of the walk, the trace applied at them in
+           parallel */
+        for(int l = 0; l < par; l++){
+          if(wide_walk){
+            prime64 = next_prime_64(prime64);
+            if(prime64 >= (uint64_t)1 << 62){
+              prime64 = next_prime_64((uint64_t)1 << 61);
+            }
+            while(is_lucky_prime_u64(prime64, bs)){
+              prime64 = next_prime_64(prime64);
+              if(prime64 >= (uint64_t)1 << 62){
+                prime64 = next_prime_64((uint64_t)1 << 61);
+              }
+            }
+            mpr[l] = prime64;
+          }
+          else{
+            prime = next_prime(prime);
+            if(prime >= lprime){
+              prime = next_prime(1<<30);
+            }
+            while(is_lucky_prime_ui(prime, bs) || prime==primeinit){
+              prime = next_prime(prime);
+              if(prime >= lprime){
+                prime = next_prime(1<<30);
+              }
+            }
+            mpr[l] = prime;
+          }
+        }
+        const double t0 = realtime();
+        st->nthrds = 1;
+        apply_in_parallel(bs, st, mpr, par, mbs);
+        st->nthrds = par;
+        const double tb = realtime() - t0;
+        if(!relearned){
+          tsig += tb;
+        }
+        /* after the first batch: per prime it must be faster than an
+           application at a single prime with all threads */
+        if(batches++ == 0 && tb / par >= (wide_walk ? tprobe[1] : tprobe[0])){
+          par_batch = 0;
+        }
+        mld = par;
+        mnx = 0;
+      }
+      else if(queued){
         /* the prime is the next one of the queue */
       }
       else if(wide_walk && !multi_now){
@@ -2521,6 +2719,8 @@ restart:
             free_basis_and_only_local_hash_table_data(&mbs[mnx]);
           }
         }
+        free(mbs);
+        free(mpr);
         /* return core_groebner_qq(modgbsp, bs, msd, st, errp, fc, print_gb); */
         goto restart;
 
@@ -2577,6 +2777,8 @@ restart:
         free_basis_and_only_local_hash_table_data(&mbs[mnx]);
       }
     }
+    free(mbs);
+    free(mpr);
     if (info_level){
       fprintf(VERBSTREAM, " \n-------------------------------------------------\
 -----------------------------------------------------\n");
