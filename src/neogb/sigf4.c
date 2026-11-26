@@ -1153,6 +1153,36 @@ static int sg_col_cmp(
     return monomial_cmp_drl(mb, ma, (const ht_t *)htp);
 }
 
+/* the index of the lead terms of the elements in the order ro for
+ * search_reducer(), see initialize_reducer_index() */
+static void sg_reducer_index(
+        red_idx_t *ri,
+        const sg_t * const sg,
+        const len_t * const ro
+        )
+{
+    len_t i;
+    const ht_t * const bht = sg->bht;
+    const len_t n   = sg->ld;
+    const len_t evl = bht->evl;
+    ri->n   = n;
+    ri->evl = evl;
+    ri->ebl = bht->ebl;
+    ri->sdm = (sdm_t *)malloc((unsigned long)(n + 1) * sizeof(sdm_t));
+    ri->vm  = (uint64_t *)malloc((unsigned long)(n + 1) * sizeof(uint64_t));
+    ri->pos = (len_t *)malloc((unsigned long)(n + 1) * sizeof(len_t));
+    ri->ev  = (exp_t *)malloc((unsigned long)(n + 1) * evl * sizeof(exp_t));
+    for (i = 0; i < n; ++i) {
+        const hm_t lm = sg->e[ro[i]].p[OFFSET];
+        const exp_t * const e = bht->ev[lm];
+        ri->pos[i] = i;
+        ri->sdm[i] = bht->hd[lm].sdm;
+        ri->vm[i]  = reducer_variable_mask(e, evl, ri->ebl);
+        memcpy(ri->ev + (unsigned long)i * evl, e,
+                (unsigned long)evl * sizeof(exp_t));
+    }
+}
+
 /* sorts the columns hcm[0], ..., hcm[n-1] by decreasing monomials, many
  * of them by keys, see sort_columns_by_keys() */
 static void sg_sort_columns(
@@ -1480,6 +1510,33 @@ static void sg_band_reduce(
                 }
                 *nsubs += pl;
             } else {
+#if defined(__AVX512F__) && SG_BAND == 8
+                /* one 64-bit lane for each row of the band, the products
+                 * of the low 32 bits of the lanes */
+                const __m512i mv = _mm512_cvtepu32_epi64(
+                        _mm256_loadu_si256((const __m256i *)m));
+                if (small) {
+                    for (j = 1; j < pl; ++j) {
+                        uint64_t * const y = bd + (unsigned long)pr[j] * SG_BAND;
+                        const __m512i f = _mm512_set1_epi64((long long)pf[j]);
+                        _mm512_storeu_si512((void *)y, _mm512_add_epi64(
+                                    _mm512_loadu_si512((const void *)y),
+                                    _mm512_mul_epu32(mv, f)));
+                    }
+                } else {
+                    const __m512i bv = _mm512_set1_epi64((long long)big);
+                    for (j = 1; j < pl; ++j) {
+                        uint64_t * const y = bd + (unsigned long)pr[j] * SG_BAND;
+                        const __m512i f = _mm512_set1_epi64((long long)pf[j]);
+                        const __m512i t = _mm512_add_epi64(
+                                _mm512_loadu_si512((const void *)y),
+                                _mm512_mul_epu32(mv, f));
+                        const __mmask8 o = _mm512_cmpge_epu64_mask(t, bv);
+                        _mm512_storeu_si512((void *)y,
+                                _mm512_mask_sub_epi64(t, o, t, bv));
+                    }
+                }
+#else
                 if (small) {
                     for (j = 1; j < pl; ++j) {
                         uint64_t * const y = bd + (unsigned long)pr[j] * SG_BAND;
@@ -1500,6 +1557,7 @@ static void sg_band_reduce(
                         }
                     }
                 }
+#endif
                 *nsubs += (uint64_t)pl * nz;
             }
             if (used != NULL) {
@@ -1580,13 +1638,10 @@ static int64_t sg_round(
         ro[i] = i;
     }
     sort_r(ro, (unsigned long)sg->ld, sizeof(len_t), sg_reducer_cmp, sg);
-    sdm_t *rsdm = (sdm_t *)malloc((unsigned long)(sg->ld+1) * sizeof(sdm_t));
-    deg_t *rdeg = (deg_t *)malloc((unsigned long)(sg->ld+1) * sizeof(deg_t));
-    for (i = 0; i < sg->ld; ++i) {
-        const hm_t lm = sg->e[ro[i]].p[OFFSET];
-        rsdm[i] = bht->hd[lm].sdm;
-        rdeg[i] = bht->hd[lm].deg;
-    }
+    /* the lead terms in this order, the first divisor of a monomial found
+     * is the one of least sig-lead ratio */
+    red_idx_t ri;
+    sg_reducer_index(&ri, sg, ro);
 
     /* rows of the selected signatures, by rewriting */
     len_t nr = 0, rsz = 2 * ns + 16;
@@ -1643,18 +1698,10 @@ static int64_t sg_round(
          * multiple of smaller signature top-reduces it, the signature
          * is consumed without a row. */
         {
-            const sdm_t nl = ~generate_short_divmask(best, bht);
-            const sg_el_t *d = NULL;
-            for (k = 0; k < sg->ld; ++k) {
-                if ((rsdm[k] & nl) || rdeg[k] > best[0]) {
-                    continue;
-                }
-                if (sg_divides_exp(bht->ev[sg->e[ro[k]].p[OFFSET]], best, evl)) {
-                    d = sg->e + ro[k];
-                    break;
-                }
-            }
+            const len_t f = search_reducer(&ri,
+                    generate_short_divmask(best, bht), best);
             /* d exists always: the lead of the rewriter divides L */
+            const sg_el_t *d = sg->e + ro[f-1];
             if (sg_cmp_ratio(d, rw, sg) >= 0) {
                 sg->nearly++;
                 continue;
@@ -1687,8 +1734,7 @@ static int64_t sg_round(
     if (nr == 0) {
         free(rows);
         free(ro);
-        free(rsdm);
-        free(rdeg);
+        free_reducer_index(&ri);
         return 0;
     }
 
@@ -1703,18 +1749,12 @@ static int64_t sg_round(
             continue;
         }
         sht->hd[mi].idx = 2;
-        const sdm_t nm = ~sht->hd[mi].sdm;
-        const deg_t md_ = sht->hd[mi].deg;
-        for (k = 0; k < sg->ld; ++k) {
-            if ((rsdm[k] & nm) || rdeg[k] > md_) {
-                continue;
-            }
+        const len_t f = search_reducer(&ri, sht->hd[mi].sdm, sht->ev[mi]);
+        if (f > 0) {
+            k = f - 1;
             const sg_el_t *e = sg->e + ro[k];
             const exp_t * const el = bht->ev[e->p[OFFSET]];
             const exp_t * const em = sht->ev[mi];
-            if (!sg_divides_exp(el, em, evl)) {
-                continue;
-            }
             /* the reducer is only of use if its signature is less than
              * the largest signature of a row to be reduced (eder-2017
              * §7.2, Algorithm RB: the reduction stays below the largest
@@ -1729,22 +1769,19 @@ static int64_t sg_round(
             if (c == 0) {
                 c = e->ix == mix ? 0 : (e->ix > mix ? 1 : -1);
             }
-            if (c >= 0) {
-                break;
+            if (c < 0) {
+                if (nr >= rsz) {
+                    rsz  = 2 * rsz;
+                    rows = realloc(rows, (unsigned long)rsz * sizeof(sg_row_t));
+                }
+                rows[nr] = sg_multiple(sg, e, q, 1, ro[k]);
+                rows[nr].id = nr;
+                nr++;
             }
-            if (nr >= rsz) {
-                rsz  = 2 * rsz;
-                rows = realloc(rows, (unsigned long)rsz * sizeof(sg_row_t));
-            }
-            rows[nr] = sg_multiple(sg, e, q, 1, ro[k]);
-            rows[nr].id = nr;
-            nr++;
-            break;
         }
     }
     free(ro);
-    free(rsdm);
-    free(rdeg);
+    free_reducer_index(&ri);
 
     /* columns by decreasing monomials */
     const len_t nc = (len_t)(sht->eld - 1);
