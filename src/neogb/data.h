@@ -563,6 +563,12 @@ struct md_t
     int32_t f4_qq_round;
     int32_t share_ht; /* 1 if the applications of a trace work on the hash
                        * table of the input basis, one after the other */
+    volatile double *deadline; /* if not NULL and deadline[0] > 0, an
+                                * application of a trace stops with an
+                                * error before a round after the time
+                                * deadline[0], see realtime(), unless
+                                * its remaining time is estimated below
+                                * deadline[1], see apply_given_up() */
     int32_t use_signatures; /* module monomial ordering:
                                0 = off,
                                1=SCHREYER,

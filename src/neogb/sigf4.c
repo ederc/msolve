@@ -3082,6 +3082,21 @@ static int name(                                                        \
     nel = ng;                                                           \
                                                                         \
     for (r = 0; r < rec->nrd && ok; ++r) {                              \
+        if (md->deadline != NULL && md->deadline[0] > 0) {           \
+            /* the share of the rows done so far */                     \
+            uint64_t wd = 0, wa = 0;                                    \
+            len_t r2;                                                   \
+            for (r2 = 0; r2 < rec->nrd; ++r2) {                         \
+                wa += rec->rd[r2].n;                                    \
+                wd += r2 < r ? rec->rd[r2].n : 0;                       \
+            }                                                           \
+            if (apply_given_up(md, realtime(), rt,                      \
+                        wa > 0 ? (double)wd / (double)wa : 0)) {        \
+                /* the application is given up, see md_t->deadline */  \
+                ok = 0;                                                 \
+                break;                                                  \
+            }                                                           \
+        }                                                               \
         const sg_rrd_t * const rd = rec->rd + r;                        \
         const len_t nr = rd->n;                                         \
         if (nr == 0) {                                                  \
@@ -3360,6 +3375,27 @@ static int name(                                                        \
     free(ecf);                                                          \
     md->sig_f4_rtime = realtime() - rt;                                 \
     return ok;                                                          \
+}
+
+/* whether an application of a trace which started at the time start and
+ * has done the share done of its work is given up at the time now, see
+ * md_t->deadline: after the deadline, unless the remaining time, as
+ * estimated from the time so far, is below deadline[1] */
+static int apply_given_up(
+        const md_t * const md,
+        const double now,
+        const double start,
+        const double done
+        )
+{
+    if (md->deadline == NULL || md->deadline[0] <= 0
+            || now <= md->deadline[0]) {
+        return 0;
+    }
+    if (done <= 0) {
+        return 1;
+    }
+    return (now - start) * (1 - done) / done >= md->deadline[1];
 }
 
 /* the classic replay for p < 2^32: byte-identical to the behavior

@@ -33,6 +33,10 @@
 /* a trace of a signature-based run is replaced by a trace learned by F4
    once its applications took SIG_RELEARN times its learning */
 #define SIG_RELEARN 2
+/* ~61-bit primes are taken if the trace is applied at one in less than
+   SIG_PROBE_WIDE times the time at a ~31-bit prime: they give about
+   twice the bits */
+#define SIG_PROBE_WIDE 1.9
 
 /* lifting of the polynomials whose witness coefficients are lifted, see
    the option --gb-lifting: 0 by multi-modular CRT and rational
@@ -941,23 +945,64 @@ static bs_t *guided_trace_learning(bs_t *bs_qq, md_t *st, const int32_t fc,
 /*
   Applies the trace at the n primes p in parallel, one thread for each,
   each with its own copy of the hash table of bs_qq. The bases go to out,
-  NULL for a bad prime.
+  NULL for a bad prime, the times of the applications to t if it is not
+  NULL. If h > 0, the first h primes are ~31-bit and the others ~61-bit
+  ones: once the applications at the ~31-bit primes are done, those at
+  the others are given up where they take SIG_PROBE_WIDE times their
+  mean time and their remaining time is estimated to take longer than
+  an application at a ~31-bit prime, then the ~31-bit primes are taken,
+  see core_groebner_qq(), and gu[l] is set for such a prime. Returns the
+  number of them.
  */
-static void apply_in_parallel(bs_t *bs_qq, md_t *st, const uint64_t *p,
-                              const int n, bs_t **out){
+static int apply_in_parallel(bs_t *bs_qq, md_t *st, const uint64_t *p,
+                             const int n, bs_t **out, double *t,
+                             const int h, int *gu){
   st->info_level  = 0;
   st->f4_qq_round = 2;
   st->share_ht    = 0;
-#pragma omp parallel for num_threads(n) schedule(dynamic, 1)
+  /* the deadline of the applications at the other primes and the mean
+     time at the ~31-bit primes, see md_t->deadline */
+  volatile double deadline[2] = {0, 0};
+  double sum = 0;
+  int done = 0, good = 0, ngu = 0;
+  st->deadline = h > 0 ? deadline : NULL;
+  const double t0 = realtime();
+#pragma omp parallel for num_threads(n) schedule(dynamic, 1) reduction(+:ngu)
   for(int l = 0; l < n; l++){
+    const double tl = realtime();
     int32_t err = 0;
     bs_t *b = core_gba(bs_qq, st, &err, p[l]);
+    const double te = realtime();
+    if(t != NULL){
+      t[l] = te - tl;
+    }
     if(err && b != NULL){
       free_basis_and_only_local_hash_table_data(&b);
     }
     out[l] = err ? NULL : b;
+    if(h > 0 && l < h){
+#pragma omp critical(probe_deadline)
+      {
+        if(!err){
+          sum += te - tl;
+          good++;
+        }
+        /* all ~31-bit primes are done: the bound for the others, from
+           the start of the batch */
+        if(++done == h && good > 0){
+          deadline[1] = sum / good;
+          deadline[0] = t0 + SIG_PROBE_WIDE * deadline[1];
+        }
+      }
+    }
+    if(h > 0 && l >= h && err && deadline[0] > 0 && te > deadline[0]){
+      gu[l] = 1;
+      ngu++;
+    }
   }
+  st->deadline = NULL;
   st->share_ht = 1;
+  return ngu;
 }
 
 /*
@@ -2515,7 +2560,101 @@ restart:
          && getenv("NEOGB_MULTI_FORCE") != NULL){
         multi_now = 1;
       }
-      if(!queued && !multi_now && par_batch && probe >= 3){
+      if(!queued && par_batch && probe == 1){
+        /* the probes in parallel: the trace is applied at par-1 ~31-bit
+           primes and at one ~61-bit prime, one thread each, the mean
+           times of the good ones decide the size of the next primes */
+        const int h = par - 1;
+        for(int l = 0; l < par; l++){
+          if(l >= h){
+            prime64 = next_prime_64(prime64);
+            if(prime64 >= (uint64_t)1 << 62){
+              prime64 = next_prime_64((uint64_t)1 << 61);
+            }
+            while(is_lucky_prime_u64(prime64, bs)){
+              prime64 = next_prime_64(prime64);
+              if(prime64 >= (uint64_t)1 << 62){
+                prime64 = next_prime_64((uint64_t)1 << 61);
+              }
+            }
+            mpr[l] = prime64;
+          }
+          else{
+            prime = next_prime(prime);
+            if(prime >= lprime){
+              prime = next_prime(1<<30);
+            }
+            while(is_lucky_prime_ui(prime, bs) || prime==primeinit){
+              prime = next_prime(prime);
+              if(prime >= lprime){
+                prime = next_prime(1<<30);
+              }
+            }
+            mpr[l] = prime;
+          }
+        }
+        double *tl = (double *)calloc((size_t)par, sizeof(double));
+        int *gu    = (int *)calloc((size_t)par, sizeof(int));
+        const double t0 = realtime();
+        st->nthrds = 1;
+        const int ngu = apply_in_parallel(bs, st, mpr, par, mbs, tl, h, gu);
+        st->nthrds = par;
+        const double tb = realtime() - t0;
+        if(!relearned){
+          tsig += tb;
+        }
+        int n31 = 0, n61 = 0;
+        tprobe[0] = tprobe[1] = 0;
+        for(int l = 0; l < par; l++){
+          if(mbs[l] != NULL){
+            if(l < h){
+              tprobe[0] += tl[l];
+              n31++;
+            }
+            else{
+              tprobe[1] += tl[l];
+              n61++;
+            }
+          }
+        }
+        free(tl);
+        tprobe[0] = n31 > 0 ? tprobe[0] / n31 : 0;
+        tprobe[1] = n61 > 0 ? tprobe[1] / n61 : 0;
+        /* bad primes say nothing about the times, then ~31-bit primes
+           are kept as for the probes one after the other; the
+           applications at ~61-bit primes given up took too long */
+        wide_walk = n31 > 0 && n61 > 0 && ngu == 0
+          && tprobe[1] < SIG_PROBE_WIDE * tprobe[0];
+        if(info_level > 1){
+          if(ngu > 0){
+            fprintf(VERBSTREAM, "(31-bit primes: %.3f s at 31 bits, 61 bits given up, %d threads)",
+                    tprobe[0], par);
+          }
+          else{
+            fprintf(VERBSTREAM, "(%s-bit primes: %.3f s at 31 bits, %.3f s at 61 bits, %d threads)",
+                    wide_walk ? "61" : "31", tprobe[0], tprobe[1], par);
+          }
+        }
+        /* the primes given up are no bad primes, they leave the queue */
+        int q = 0;
+        for(int l = 0; l < par; l++){
+          if(!gu[l]){
+            mbs[q] = mbs[l];
+            mpr[q] = mpr[l];
+            q++;
+          }
+        }
+        free(gu);
+        probe = 3;
+        batches++;
+        /* as for the first batch, see below */
+        if(tb / par >= tfirst){
+          par_batch = 0;
+        }
+        mld = q;
+        mnx = 0;
+      }
+      else if(!queued && !multi_now && par_batch && probe >= 3){
         /* the next par primes of the walk, the trace applied at them in
            parallel */
         for(int l = 0; l < par; l++){
@@ -2548,7 +2687,7 @@ restart:
         }
         const double t0 = realtime();
         st->nthrds = 1;
-        apply_in_parallel(bs, st, mpr, par, mbs);
+        apply_in_parallel(bs, st, mpr, par, mbs, NULL, 0, NULL);
         st->nthrds = par;
         const double tb = realtime() - t0;
         if(!relearned){
@@ -2556,7 +2695,7 @@ restart:
         }
         /* after the first batch: per prime it must be faster than an
            application at a single prime with all threads */
-        if(batches++ == 0 && tb / par >= (wide_walk ? tprobe[1] : tprobe[0])){
+        if(batches++ == 0 && tb / par >= tfirst){
           par_batch = 0;
         }
         mld = par;
@@ -2682,13 +2821,16 @@ restart:
         if(probe > 0){
           tprobe[probe-1] = realtime() - tapp;
         }
+        else{
+          tfirst = realtime() - tapp;
+        }
         if(msd->bad_primes[0] != 0){
           /* the time of a bad prime says nothing, keep ~31-bit primes */
           probe = 3;
           wide_walk = 0;
         }
         else if(++probe == 3){
-          wide_walk = tprobe[1] < 1.9 * tprobe[0];
+          wide_walk = tprobe[1] < SIG_PROBE_WIDE * tprobe[0];
           if(info_level > 1){
             fprintf(VERBSTREAM, "(%s-bit primes: %.3f s at 31 bits, %.3f s at 61 bits)",
                     wide_walk ? "61" : "31", tprobe[0], tprobe[1]);

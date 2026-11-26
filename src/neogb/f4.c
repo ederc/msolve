@@ -1425,6 +1425,23 @@ static bs_t *run_f4(
     while (!done) {
         rrt = realtime();
         crt = cputime();
+        if (md->trace_level == APPLY_TRACER && md->deadline != NULL
+                && md->deadline[0] > 0) {
+            /* the share of the rows of the rounds done so far */
+            uint64_t wd = 0, wa = 0;
+            len_t r;
+            for (r = 0; r < md->tr->ltd; ++r) {
+                const uint64_t w = md->tr->td[r].rld / 2 + md->tr->td[r].tld / 2;
+                wa += w;
+                wd += r < md->trace_rd ? w : 0;
+            }
+            if (apply_given_up(md, rrt, rt,
+                        wa > 0 ? (double)wd / (double)wa : 0)) {
+                /* the application is given up, see md_t->deadline */
+                *errp = 4;
+                break;
+            }
+        }
         md->max_bht_size = md->max_bht_size > bs->ht->esz ?
             md->max_bht_size : bs->ht->esz;
 
