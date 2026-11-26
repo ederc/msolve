@@ -2774,6 +2774,120 @@ static cf64_t **sg_input_coeffs_64(
     return gcf;
 }
 
+/* The rows of a round of a record giving new elements are reduced in
+ * bands of up to SG_BAND rows, see sg_band_reduce(), where the rows of
+ * the round have SG_BAND_MIN entries and more in the mean, as in
+ * sg_round(). A band are consecutive such rows, up to the next row
+ * setting a pivot. The remainders of the rows of the current band, from
+ * its row i0 on, are kept for the rows in turn. */
+#define SG_BAND_MIN 64
+
+typedef struct
+{
+    int on;
+    len_t i0;
+    len_t nb;
+    uint64_t *bd;
+    hm_t *bc[SG_BAND];
+    cf32_t *bv[SG_BAND];
+    len_t bn[SG_BAND];
+} sg_band_t;
+
+static void sg_band_start(
+        sg_band_t *bs,
+        const sg_rrd_t * const rd,
+        hm_t **rows,
+        const len_t nc
+        )
+{
+    len_t i, b;
+    uint64_t ents = 0;
+    for (i = 0; i < rd->n; ++i) {
+        ents += rows[i][LENGTH];
+    }
+    bs->on = ents >= SG_BAND_MIN * (uint64_t)rd->n;
+    bs->nb = 0;
+    bs->i0 = 0;
+    bs->bd = NULL;
+    for (b = 0; b < SG_BAND; ++b) {
+        bs->bc[b] = NULL;
+        bs->bv[b] = NULL;
+    }
+    if (bs->on) {
+        const size_t bsz = (size_t)(nc + 1) * SG_BAND * sizeof(uint64_t);
+        if (posix_memalign((void **)&(bs->bd), 64, bsz) == 0) {
+            memset(bs->bd, 0, bsz);
+        } else {
+            bs->bd = (uint64_t *)calloc(bsz, 1);
+        }
+        for (b = 0; b < SG_BAND; ++b) {
+            bs->bc[b] = (hm_t *)malloc((unsigned long)(nc + 1) * sizeof(hm_t));
+            bs->bv[b] = (cf32_t *)malloc((unsigned long)(nc + 1) * sizeof(cf32_t));
+        }
+    }
+}
+
+static void sg_band_stop(
+        sg_band_t *bs
+        )
+{
+    len_t b;
+    free(bs->bd);
+    for (b = 0; b < SG_BAND; ++b) {
+        free(bs->bc[b]);
+        free(bs->bv[b]);
+    }
+}
+
+/* the remainder of the row i giving a new element in (nrow, ncf), with
+ * its length returned, from a band; SG_NONE where the row is not reduced
+ * in a band */
+static len_t sg_band_take(
+        sg_band_t *bs,
+        const len_t i,
+        const sg_rrd_t * const rd,
+        hm_t **rows,
+        const cf32_t * const *rcf,
+        hm_t **pc,
+        cf32_t **pcf,
+        const len_t nc,
+        const uint64_t p,
+        const uint64_t big,
+        const int small,
+        hm_t *nrow,
+        cf32_t *ncf
+        )
+{
+    if (!bs->on) {
+        return SG_NONE;
+    }
+    if (bs->nb == 0 || i < bs->i0 || i >= bs->i0 + bs->nb) {
+        /* a new band from row i on */
+        len_t g[SG_BAND], nb = 0, l;
+        sg_row_t br[SG_BAND];
+        for (l = i; l < rd->n && nb < SG_BAND && rd->kind[l] == 1; ++l) {
+            br[nb].r  = rows[l];
+            br[nb].cf = rcf[l];
+            g[nb]     = nb;
+            nb++;
+        }
+        if (nb < 2) {
+            bs->nb = 0;
+            return SG_NONE;
+        }
+        uint64_t nsubs = 0;
+        sg_band_reduce(g, nb, br, pc, pcf, bs->bd, nc, p, big, small,
+                NULL, bs->bc, bs->bv, bs->bn, &nsubs);
+        bs->i0 = i;
+        bs->nb = nb;
+    }
+    const len_t b  = i - bs->i0;
+    const len_t nl = bs->bn[b];
+    memcpy(nrow, bs->bc[b], (unsigned long)nl * sizeof(hm_t));
+    memcpy(ncf, bs->bv[b], (unsigned long)nl * sizeof(cf32_t));
+    return nl;
+}
+
 /* coefficient-width variants of the replay operations */
 
 #define SG_INPUT_COEFFS_32(bs, gi, ng, md) \
@@ -2824,11 +2938,20 @@ static cf64_t **sg_input_coeffs_64(
 #define SG_BIG_SMALL_DECL_64(p) \
     const preinv_t big = preinv_64(p)
 
+/* the rows giving new elements reduced in bands, only by the 32-bit
+ * instantiation */
+#define SG_BAND_TAKE_32(bs, i, rd, rows, rcf, pc, pcf, nc, p, big, small, \
+        nrow, ncf)                                                      \
+    sg_band_take((bs), (i), (rd), (rows), (const cf32_t * const *)(rcf), \
+            (pc), (pcf), (nc), (p), (big), (small), (nrow), (ncf))
+#define SG_BAND_TAKE_64(bs, i, rd, rows, rcf, pc, pcf, nc, p, big, small, \
+        nrow, ncf) SG_NONE
+
 /* the replay core shared by both coefficient widths: cf_t is the
  * coefficient type, the variant macros adapt input coefficient
  * extraction, dense-row invariant, pivot subtraction and monicization */
 #define SG_REPLAY(name, cf_t, INPUT_COEFFS, TAKE, SUBROW, INV, MUL_INV, \
-        INV_PRE, BIG_SMALL_DECL)                                        \
+        INV_PRE, BIG_SMALL_DECL, BANDED, BAND_TAKE)                     \
 static int name(                                                        \
         bs_t *bs,                                                       \
         md_t *md,                                                       \
@@ -2945,6 +3068,11 @@ static int name(                                                        \
         uint64_t *mk    = NULL;                                         \
         uint64_t passed = 0, written = 0;                               \
         len_t counted   = 0;                                            \
+        sg_band_t bst;                                                  \
+        bst.on = 0;                                                     \
+        if (BANDED) {                                                   \
+            sg_band_start(&bst, rd, rows, nc);                          \
+        }                                                               \
         for (i = 0; i < nr && ok; ++i) {                                \
             hm_t *row     = rows[i];                                    \
             const hm_t lc = row[OFFSET];                                \
@@ -2957,8 +3085,14 @@ static int name(                                                        \
                 pcf[lc] = (cf_t *)rcf[i];                               \
                 continue;                                               \
             }                                                           \
+            len_t nl = SG_NONE;                                         \
+            if (BANDED) {                                               \
+                nl = BAND_TAKE(&bst, i, rd, rows, rcf, pc, pcf, nc, p,  \
+                        big, small, nrow, ncf);                         \
+            }                                                           \
+            if (nl == SG_NONE) {                                        \
             const len_t len = row[LENGTH];                              \
-            len_t nl = 0;                                               \
+            nl = 0;                                                     \
             uint64_t wr = len;                                          \
             if (counted >= 4 && passed > 2 * written) {                 \
                 /* the marked scan, see sg_round() */                   \
@@ -3025,6 +3159,7 @@ static int name(                                                        \
             if (++counted % 64 == 0) {                                  \
                 passed  /= 2;                                           \
                 written /= 2;                                           \
+            }                                                           \
             }                                                           \
             /* the remainder must be nonzero with the recorded lead term */ \
             if (nl == 0 || nn >= rd->nn || (cached                      \
@@ -3112,6 +3247,9 @@ static int name(                                                        \
         free(nw);                                                       \
         free(nwc);                                                      \
         free(mk);                                                       \
+        if (BANDED) {                                                   \
+            sg_band_stop(&bst);                                         \
+        }                                                               \
         if (!cached) {                                                  \
             clean_hash_table(sht);                                      \
         }                                                               \
@@ -3148,7 +3286,7 @@ static int name(                                                        \
 SG_REPLAY(sig_f4_replay_32, cf32_t,
         SG_INPUT_COEFFS_32, SG_TAKE_32, SG_SUBROW_32,
         SG_INV_32, SG_MUL_INV_32, SG_INV_PRE_32,
-        SG_BIG_SMALL_DECL_32)
+        SG_BIG_SMALL_DECL_32, 1, SG_BAND_TAKE_32)
 
 /* the wide replay for primes in [2^32, 2^62): coefficients in cf_64
  * arrays, dense rows in the redundant [0, 2p) representation, the Shoup
@@ -3157,7 +3295,7 @@ SG_REPLAY(sig_f4_replay_32, cf32_t,
 SG_REPLAY(sig_f4_replay_64, cf64_t,
         SG_INPUT_COEFFS_64, SG_TAKE_64, SG_SUBROW_64,
         SG_INV_64, SG_MUL_INV_64, SG_INV_PRE_64,
-        SG_BIG_SMALL_DECL_64)
+        SG_BIG_SMALL_DECL_64, 0, SG_BAND_TAKE_64)
 
 /* dispatches on the field width of the run */
 static int sig_f4_replay(
