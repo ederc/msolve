@@ -1053,6 +1053,80 @@ static int apply_in_parallel(bs_t *bs_qq, md_t *st, const uint64_t *p,
 }
 
 /*
+  The trial of the passes at MULTI_PRIMES primes with several threads, see
+  core_groebner_qq(): one of the nthrds threads applies the trace at the
+  primes p[0], ..., p[MULTI_PRIMES-1] in one pass, see core_f4_multi(),
+  the others apply it at the next primes of p one after the other, as in
+  apply_in_parallel(), taking new ones as long as the pass runs, at most
+  n primes in all. So the pass is timed under the same load as the
+  batches of single primes. The bases go to out, the time of the pass to
+  tp, -1 if it is not possible, then the bases of the single primes and
+  their primes are moved to the front of out and p. The mean time of
+  the single primes goes to ts. Returns the number of bases in out.
+ */
+static int trial_pass(bs_t *bs_qq, md_t *st, uint64_t *p, const int n,
+                      const int nthrds, bs_t **out, double *tp, double *ts){
+  st->info_level  = 0;
+  st->f4_qq_round = 2;
+  st->share_ht    = 0;
+  int ok = 0, pdone = 0, next = MULTI_PRIMES, ns = 0;
+  double sum = 0, tpass = -1;
+  const double t0 = realtime();
+#pragma omp parallel num_threads(nthrds)
+  {
+    if(omp_get_thread_num() == 0){
+      const int r = core_f4_multi(bs_qq, st, p, MULTI_PRIMES, out);
+      const double te = realtime();
+#pragma omp critical(trial_pass)
+      {
+        ok    = r;
+        tpass = te - t0;
+        pdone = 1;
+      }
+    }
+    else{
+      for(;;){
+        int l = -1;
+#pragma omp critical(trial_pass)
+        {
+          if(next < n && (next < MULTI_PRIMES + nthrds - 1 || !pdone)){
+            l = next++;
+          }
+        }
+        if(l < 0){
+          break;
+        }
+        const double tl = realtime();
+        int32_t err = 0;
+        bs_t *b = core_gba(bs_qq, st, &err, p[l]);
+        const double te = realtime();
+        if(err && b != NULL){
+          free_basis_and_only_local_hash_table_data(&b);
+        }
+        out[l] = err ? NULL : b;
+#pragma omp critical(trial_pass)
+        {
+          if(!err){
+            sum += te - tl;
+            ns++;
+          }
+        }
+      }
+    }
+  }
+  st->share_ht = 1;
+  *ts = ns > 0 ? sum / ns : 0;
+  if(!ok){
+    *tp = -1;
+    memmove(out, out + MULTI_PRIMES, (size_t)(next - MULTI_PRIMES) * sizeof(bs_t *));
+    memmove(p, p + MULTI_PRIMES, (size_t)(next - MULTI_PRIMES) * sizeof(uint64_t));
+    return next - MULTI_PRIMES;
+  }
+  *tp = tpass;
+  return next;
+}
+
+/*
   The trace of a signature-based run is applied at each prime more slowly
   than a trace learned by F4, but is learned faster. Where many primes are
   needed, see SIG_RELEARN, a trace is learned by F4 at the prime fc and
@@ -2626,21 +2700,29 @@ restart:
       /* Once the trace learned by F4 is applied without new monomials,
          each thread applies it at MULTI_PRIMES primes in one pass, see
          core_f4_multi(). With all threads at work such a pass takes from
-         about four to more than fourteen times a batch of single primes,
-         more for larger traces whose matrices in MULTI_PRIMES lanes do not
-         fit into the caches. So the passes are only tried for small
-         traces, after at least half as many primes as a pass gives, and
-         kept while they are clearly cheaper per prime and while at least
-         as much time was spent on the primes used already. */
+         about four to more than fourteen times an application at a single
+         prime, more for larger traces whose matrices in MULTI_PRIMES lanes
+         do not fit into the caches. So the passes are only tried for small
+         traces, first by one thread while the others apply the trace at
+         single primes, see trial_pass(). This trial gives about as many
+         primes as the pass takes times an application at a single prime,
+         so it is only done once at least as many primes were used as the
+         passes taken give. They are taken if the pass of the trial is
+         clearly cheaper per prime, after at least half as many primes as
+         the passes give, and kept while they are cheaper per prime and
+         while at least as much time was spent on the primes used
+         already. */
       int mpar_now = 0;
+      const int force = getenv("NEOGB_MULTI_FORCE") != NULL;
       if(!queued && par_batch && probe >= 3 && !mpar_off && tprobe[0] > 0
-         && tprobe[0] <= MPAR_MAX_TIME && core_f4_multi_read_only(st)){
+         && (tprobe[0] <= MPAR_MAX_TIME || force)
+         && core_f4_multi_read_only(st)){
         const double unit = ubatch > 0 ? ubatch : (tprobe[1] > 0
           ? MIN(tprobe[0], tprobe[1] * 30 / wbits) : tprobe[0]);
-        mpar_now = (r31 >= par * MULTI_PRIMES / 2 && (tppass < 0
-             || (tppass < 0.75 * MULTI_PRIMES * unit
-                 && tppass <= r31 * unit / par)))
-          || getenv("NEOGB_MULTI_FORCE") != NULL;
+        mpar_now = force || (tppass < 0 ? r31 >= 0.75 * MULTI_PRIMES * par
+          : (r31 >= par * MULTI_PRIMES / 2
+             && tppass < 0.75 * MULTI_PRIMES * unit
+             && tppass <= r31 * unit / par));
       }
       if(mpar_now){
         const int np = par * MULTI_PRIMES;
@@ -2657,26 +2739,49 @@ restart:
           }
           mpr[l] = prime;
         }
-        int ok = 1;
-        const double t0 = realtime();
-#pragma omp parallel for num_threads(par) schedule(static, 1) reduction(min:ok)
-        for(int l = 0; l < par; l++){
-          ok = core_f4_multi(bs, st, mpr + l * MULTI_PRIMES, MULTI_PRIMES,
-                             mbs + l * MULTI_PRIMES);
-        }
-        if(ok){
-          tppass = realtime() - t0;
-          if(info_level > 1){
-            fprintf(VERBSTREAM, "(x%dx%d)", par, MULTI_PRIMES);
+        if(tppass < 0 && !force){
+          double tp, ts;
+          st->nthrds = 1;
+          const int na = trial_pass(bs, st, mpr, np, par, mbs, &tp, &ts);
+          st->nthrds = par;
+          if(info_level > 1 && tp >= 0){
+            fprintf(VERBSTREAM, "(x1x%d)", MULTI_PRIMES);
           }
-          mld = np;
+          /* the times under the same load; the passes are taken where
+             they save at least 40% per prime, as the trial gives more
+             primes than may be needed */
+          tppass = tp;
+          if(ts > 0){
+            ubatch = ts;
+          }
+          if(tp < 0 || ts <= 0 || tp >= 0.6 * MULTI_PRIMES * ts){
+            mpar_off = 1;
+          }
+          mld = na;
           mnx = 0;
         }
         else{
-          /* no thread applied the trace, the conditions are the same
-             for all of them; the last prime is applied alone below */
-          mpar_off = 1;
-          mpar_now = 0;
+          int ok = 1;
+          const double t0 = realtime();
+#pragma omp parallel for num_threads(par) schedule(static, 1) reduction(min:ok)
+          for(int l = 0; l < par; l++){
+            ok = core_f4_multi(bs, st, mpr + l * MULTI_PRIMES, MULTI_PRIMES,
+                               mbs + l * MULTI_PRIMES);
+          }
+          if(ok){
+            tppass = realtime() - t0;
+            if(info_level > 1){
+              fprintf(VERBSTREAM, "(x%dx%d)", par, MULTI_PRIMES);
+            }
+            mld = np;
+            mnx = 0;
+          }
+          else{
+            /* no thread applied the trace, the conditions are the same
+               for all of them; the last prime is applied alone below */
+            mpar_off = 1;
+            mpar_now = 0;
+          }
         }
       }
       if(mpar_now){
