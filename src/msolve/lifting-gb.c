@@ -27,6 +27,12 @@
 /* witnesses are reconstructed every rr primes, rr being the largest
    power of 2 <= nprimes / RR_PERIOD_DIV */
 #define RR_PERIOD_DIV 128
+/* the time of CRT in the lifting of the coefficients is taken for one
+   coefficient in LIFT_TIME_STEP */
+#define LIFT_TIME_STEP 64
+/* a trace of a signature-based run is replaced by a trace learned by F4
+   once its applications took SIG_RELEARN times its learning */
+#define SIG_RELEARN 2
 
 /* lifting of the polynomials whose witness coefficients are lifted, see
    the option --gb-lifting: 0 by multi-modular CRT and rational
@@ -929,6 +935,53 @@ static bs_t *guided_trace_learning(bs_t *bs_qq, md_t *st, const int32_t fc,
   return core_gba(bs_qq, st, errp, fc);
 }
 
+/*
+  The trace of a signature-based run is applied at each prime more slowly
+  than a trace learned by F4, but is learned faster. Where many primes are
+  needed, see SIG_RELEARN, a trace is learned by F4 at the prime fc and
+  replaces it from then on. The new trace is taken only if the leading
+  monomials of its basis are those of the basis learned first, nlm
+  exponent vectors of nv variables in lmo. Returns 1 if it is taken.
+ */
+static int relearn_by_f4(bs_t *bs_qq, md_t *st, const uint32_t fc,
+                         const int32_t *lmo, const int32_t nlm){
+  trace_t *old = st->tr;
+  const int32_t osig  = neogb_sig_f4;
+  const int ofr       = st->f4_qq_round;
+  const int32_t oinfo = st->info_level;
+  st->tr          = NULL;
+  st->trace_level = NO_TRACER;
+  st->f4_qq_round = 1;
+  st->info_level  = 0;
+  neogb_sig_f4    = 0;
+  int32_t err = 0;
+  bs_t *bs = core_gba(bs_qq, st, &err, fc);
+  neogb_sig_f4    = osig;
+  st->f4_qq_round = ofr;
+  st->info_level  = oinfo;
+  int ok = err == 0 && bs != NULL && st->tr != NULL && st->tr->sgr == NULL
+    && (int32_t)bs->lml == nlm;
+  if(ok){
+    int32_t *lm = get_lm_from_bs(bs, bs->ht);
+    ok = memcmp(lm, lmo, (size_t)nlm * bs->ht->nv * sizeof(int32_t)) == 0;
+    free(lm);
+  }
+  if(bs != NULL){
+    free_basis_without_hash_table(&bs);
+  }
+  if(ok){
+    free_trace(&old);
+  }
+  else{
+    if(st->tr != NULL){
+      free_trace(&(st->tr));
+    }
+    st->tr = old;
+  }
+  st->trace_level = APPLY_TRACER;
+  return ok;
+}
+
 static int32_t gb_modular_trace_learning(gb_modpoly_t modgbs,
                                            int32_t *mgb,
                                            int32_t *num_gb,
@@ -1319,7 +1372,7 @@ static inline int crt_ratrecon_lift_modgbs(gb_modpoly_t modgbs, data_lift_t dl,
   set_recdata(rd2, mod_p);
 
   int32_t ret = end;
-  double rt;
+  double rt = 0;
 
   for(int32_t k = start; k < end; k++){
     if(dl->check1[k] > 1 && polys[k]->len > 0){
@@ -1329,8 +1382,17 @@ static inline int crt_ratrecon_lift_modgbs(gb_modpoly_t modgbs, data_lift_t dl,
       mpz_set(dl->tmp, dl->cden[k]);
       set_recdata_guess(rd1, mod_p, dl->tmp);
       int ok = 1;
-      for(int32_t l = 0; l < polys[k]->len; l++){
-        rt = realtime();
+      /* reading the clock for each coefficient costs as much as a good
+       * part of their lifting: the time of the polynomial is split
+       * between CRT and rational reconstruction by the time of CRT for
+       * every LIFT_TIME_STEP-th coefficient */
+      double tcrt = 0;
+      int32_t ncrt = 0, l;
+      const double rp = realtime();
+      for(l = 0; l < polys[k]->len; l++){
+        if(l % LIFT_TIME_STEP == 0){
+          rt = realtime();
+        }
         for(uint32_t i = 0; i < modgbs->nprimes-1; i++){
           modgbs->cf_64[i] = modgbs->wide ?
             (mp_limb_t)MODCF64(polys[k], l, i) :
@@ -1339,18 +1401,18 @@ static inline int crt_ratrecon_lift_modgbs(gb_modpoly_t modgbs, data_lift_t dl,
         fmpz_multi_CRT_ui(y, modgbs->cf_64,
                           comb, comb_temp, 1);
         fmpz_get_mpz(zz, y);
-        *st_crt += realtime() - rt;
-        rt = realtime();
+        if(l % LIFT_TIME_STEP == 0){
+          tcrt += realtime() - rt;
+          ncrt++;
+        }
         if(lift_ratreconwden(polys[k]->cf_qq[l], rden, zz, mod_p, dl->tmp, rd1)){
           mpz_mul(dens[l], rden, dl->tmp);
           if(mpz_cmp_ui(rden, 1)){
             mpz_mul(dl->tmp, dl->tmp, rden);
             set_recdata_guess(rd1, mod_p, dl->tmp);
           }
-          *st_rrec += realtime() - rt;
         }
         else{
-          *st_rrec += realtime() - rt;
           /* the witnesses of this poly are still valid: their common
              denominator remains the best guess for reconstructing them */
           mpz_set(dl->gden, dl->cden[k]);
@@ -1360,6 +1422,12 @@ static inline int crt_ratrecon_lift_modgbs(gb_modpoly_t modgbs, data_lift_t dl,
           ok = 0;
           break;
         }
+      }
+      {
+        const double tp = realtime() - rp;
+        const double tc = ncrt > 0 ? tcrt * (l + (l < polys[k]->len)) / ncrt : 0;
+        *st_crt  += tc < tp ? tc : tp;
+        *st_rrec += tc < tp ? tp - tc : 0;
       }
       if(!ok){
         ret = k;
@@ -1399,13 +1467,6 @@ static inline int crt_ratrecon_lift_modgbs(gb_modpoly_t modgbs, data_lift_t dl,
   return ret;
 }
 
-
-/* w * y mod p for w < p < 2^63, mu = shoup_mu(p, w) and any y < 2^64 */
-static inline uint64_t shoup_mulmod(const uint64_t w, const uint64_t mu,
-                                    const uint64_t y, const uint64_t p){
-  uint64_t r = w * y - shoup_mul(mu, y) * p;
-  return r >= p ? r - p : r;
-}
 
 /*
   Same as crt_ratrecon_lift_modgbs, the coefficients being lifted from
@@ -1515,7 +1576,7 @@ static inline int crt_ratrecon_lift_modgbs_mr(gb_modpoly_t modgbs, data_lift_t d
           for(uint32_t j = 0; j < np; j++){
             const uint64_t c = modgbs->wide ?
               MODCF64(pol[0], l, j + 1) : (uint64_t)MODCF(pol[0], l, j + 1);
-            res[j] = shoup_mulmod(dmod[j], dmods[j], c, pr[j]);
+            res[j] = shoup_mod_mul(dmod[j], dmods[j], c, pr[j]);
           }
           fmpz_multi_CRT_ui(y, res, comb, comb_temp, 1);
           fmpz_get_mpz(x, y);
@@ -1532,10 +1593,10 @@ static inline int crt_ratrecon_lift_modgbs_mr(gb_modpoly_t modgbs, data_lift_t d
             const uint64_t p = pr[i];
             const uint64_t c = modgbs->wide ?
               MODCF64(pol[0], l, i + 1) : (uint64_t)MODCF(pol[0], l, i + 1);
-            const uint64_t r = shoup_mulmod(dmod[i], dmods[i], c, p);
+            const uint64_t r = shoup_mod_mul(dmod[i], dmods[i], c, p);
             const uint64_t xm = mpz_fdiv_ui(x, p);
             uint64_t v = r >= xm ? r - xm : r + (p - xm);
-            v = shoup_mulmod(pinv[i], pinvs[i], v, p);
+            v = shoup_mod_mul(pinv[i], pinvs[i], v, p);
             if(i > 0 && (v == 0 || v == p - 1)){
               const int s = v != 0;
               bits = s == sgn ? bits + (p >> 32 ? 61 : 30) : (p >> 32 ? 61 : 30);
@@ -1683,9 +1744,10 @@ static inline int verif_lifted_basis(gb_modpoly_t modgbs, data_lift_t dl,
           /* all coefficients share the denominator lm */
           uint64_t ilc = mpz_fdiv_ui(pol[0]->lm, prime);
           ilc = mod_p_inverse_64((int64_t)ilc, (int64_t)prime);
+          const uint64_t ilcs = shoup_mu(prime, ilc);
           for(int32_t c = 0; c < pol[0]->len; c++){
             uint64_t v = mpz_fdiv_ui(pol[0]->cf_qq[c], prime);
-            v = mul_mod_64(v, ilc, prime);
+            v = shoup_mod_mul(ilc, ilcs, v, prime);
             if(v != (modgbs->wide ?
                      MODCF64(pol[0], c, np) :
                      (uint64_t)MODCF(pol[0], c, np))){
@@ -2202,10 +2264,29 @@ restart:
     double tpass = -1;
     int multi_off = !msolve_multi_primes;
     double r31 = 0;
+    /* the time spent applying a trace of a signature-based run, and
+       whether it was replaced by a trace learned by F4 */
+    double tsig = 0;
+    int relearned = st->nev > 0 || st->tr == NULL || st->tr->sgr == NULL;
+    const double tlearn = st->learning_rtime;
     while(apply){
 
       int nthrds = 1; /* mono-threaded mult-mid comp */
 
+      if(!relearned && mnx >= mld && probe >= 3
+         && tsig >= SIG_RELEARN * tlearn){
+        relearned = 1;
+        if(relearn_by_f4(bs, st, msd->lp->p[0], msd->leadmons_ori[0],
+                         msd->num_gb[0])){
+          if(info_level > 1){
+            fprintf(VERBSTREAM, "(F4 trace)");
+          }
+          /* the probes are done again for the new trace */
+          probe     = 0;
+          tprobe[0] = tprobe[1] = 0;
+          tpass     = -1;
+        }
+      }
       if(probe < 3){
         wide_walk = probe == 2;
       }
@@ -2303,6 +2384,9 @@ restart:
               fprintf(VERBSTREAM, "(x%d)", MULTI_PRIMES);
             }
             tpass = realtime() - t0;
+            if(!relearned){
+              tsig += tpass;
+            }
             mld = MULTI_PRIMES;
             mnx = 0;
             prime = (uint32_t)mpr[MULTI_PRIMES-1];
@@ -2341,6 +2425,9 @@ restart:
                                    pre, pre ? mbs[mnx] : NULL);
       if(pre){
         mbs[mnx++] = NULL;
+      }
+      else if(!relearned){
+        tsig += realtime() - tapp;
       }
       if(probe < 3){
         if(probe > 0){

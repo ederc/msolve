@@ -1,5 +1,6 @@
 /* Unit test for the 64-bit Shoup arithmetic used by the wide
- * signature-F4 replay: shoup_mu / shoup_mul (tools.h) and the dense-row
+ * signature-F4 replay: shoup_mu / shoup_mul (tools.h), shoup_mu_preinv,
+ * which computes shoup_mu by the reciprocal of p, and the dense-row
  * update sg_sub_row_64. shoup_mu(p, x) = floor(x*2^64/p) and with
  * q = floor(mu*y/2^64) the wrapping difference x*y - q*p lies in
  * [0, 2p) and is x*y mod p or that plus p for 0 < x < p < 2^62 and any
@@ -25,7 +26,14 @@ static int check_pair(const uint64_t p, const uint64_t x, const uint64_t y)
 {
     /* q = floor(v*psi/2^64); d = x*y - q*p (wrapping u64) lies in
      * [0, 2p) and is x*y mod p or that plus p */
-    const uint64_t q = shoup_mul(shoup_mu(p, x), y);
+    const preinv_t pi = preinv_64(p);
+    const uint64_t mu = shoup_mu(p, x);
+    if (shoup_mu_preinv(&pi, x) != mu) {
+        printf("FAIL shoup_mu_preinv p=%llu x=%llu\n",
+               (unsigned long long)p, (unsigned long long)x);
+        return 0;
+    }
+    const uint64_t q = shoup_mul(mu, y);
     const uint64_t d = x * y - q * p;
     const uint64_t ref = mul_mod_64(x, y, p);
     if (d != ref && d != ref + p) {
@@ -77,6 +85,7 @@ int main(void)
      * must keep every entry in [0, 2p) */
     for (int pi = 0; pi < nprimes; ++pi) {
         const uint64_t p = primes[pi];
+        const preinv_t ppi = preinv_64(p);
         const len_t ncols = 512;
         uint64_t *dr = (uint64_t *)calloc(ncols, sizeof(uint64_t));
         cf64_t *pf = (cf64_t *)malloc(ncols * sizeof(cf64_t));
@@ -87,7 +96,7 @@ int main(void)
         }
         for (int i = 0; i < 1000; ++i) {
             const uint64_t v = rng() % p; /* consumed dense value */
-            sg_sub_row_64(dr, pr, pf, ncols, v, p);
+            sg_sub_row_64(dr, pr, pf, ncols, v, p, &ppi);
             for (len_t j = 0; j < ncols; ++j) {
                 if (dr[j] >= 2 * p) {
                     printf("FAIL sg_sub_row_64: dr[%d]=%llu >= 2p=%llu (p=%llu, iter %d)\n",
@@ -102,7 +111,7 @@ int main(void)
          * and a zero pivot coefficient leaves its column untouched */
         uint64_t *snap = (uint64_t *)malloc(ncols * sizeof(uint64_t));
         memcpy(snap, dr, ncols * sizeof(uint64_t));
-        sg_sub_row_64(dr, pr, pf, ncols, 0, p);
+        sg_sub_row_64(dr, pr, pf, ncols, 0, p, &ppi);
         for (len_t j = 0; j < ncols; ++j) {
             if (dr[j] != snap[j]) {
                 printf("FAIL sg_sub_row_64 edge v=0: dr[%d] changed\n", (int)j);
@@ -110,7 +119,7 @@ int main(void)
             }
         }
         pf[ncols / 2] = 0;
-        sg_sub_row_64(dr, pr, pf, ncols, rng() % p, p);
+        sg_sub_row_64(dr, pr, pf, ncols, rng() % p, p, &ppi);
         if (dr[ncols / 2] != snap[ncols / 2]) {
             printf("FAIL sg_sub_row_64 edge pf=0: dr[%d] changed\n",
                    (int)(ncols / 2));

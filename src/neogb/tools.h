@@ -232,6 +232,50 @@ static inline uint64_t shoup_mu(
     return (uint64_t)(((unsigned __int128)x << 64) / p);
 }
 
+/* a prime p < 2^63 normalized to pn = p << s with its reciprocal
+ * v = floor((2^128 - 1) / pn) - 2^64, for divisions by p without a
+ * 128-bit division (moeller-2011, Algorithm 4) */
+typedef struct
+{
+    uint64_t pn;
+    uint64_t v;
+    int s;
+} preinv_t;
+
+static inline preinv_t preinv_64(
+        const uint64_t p
+        )
+{
+    preinv_t r;
+    r.s  = __builtin_clzll(p);
+    r.pn = p << r.s;
+    r.v  = (uint64_t)((((unsigned __int128)~r.pn << 64) | ~(uint64_t)0) / r.pn);
+    return r;
+}
+
+/* shoup_mu(p, x) by the reciprocal of p: the quotient of the two word
+ * number (x << s, 0) by pn, x < p */
+static inline uint64_t shoup_mu_preinv(
+        const preinv_t * const pi,
+        const uint64_t x
+        )
+{
+    const uint64_t nh = x << pi->s;
+    unsigned __int128 q = (unsigned __int128)pi->v * nh;
+    q += (unsigned __int128)(nh + 1) << 64;
+    uint64_t qh = (uint64_t)(q >> 64);
+    const uint64_t ql = (uint64_t)q;
+    uint64_t r = (uint64_t)0 - qh * pi->pn;
+    if (r > ql) {
+        qh--;
+        r += pi->pn;
+    }
+    if (r >= pi->pn) {
+        qh++;
+    }
+    return qh;
+}
+
 /* Shoup's quotient q = floor(mu * y / 2^64) for mu = shoup_mu(p, x)
  * and any y < 2^64: with wrapping 64-bit arithmetic x * y - q * p lies
  * in [0, 2p) for x < p < 2^63 and is x*y mod p or that value plus p. */
@@ -241,6 +285,18 @@ static inline uint64_t shoup_mul(
         )
 {
     return (uint64_t)(((unsigned __int128)mu * y) >> 64);
+}
+
+/* w * y mod p for w < p < 2^63, mu = shoup_mu(p, w) and any y < 2^64 */
+static inline uint64_t shoup_mod_mul(
+        const uint64_t w,
+        const uint64_t mu,
+        const uint64_t y,
+        const uint64_t p
+        )
+{
+    const uint64_t r = w * y - shoup_mul(mu, y) * p;
+    return r >= p ? r - p : r;
 }
 
 /* the high word of mu * y; the BMI2 mulx instruction computes it in one
@@ -263,7 +319,7 @@ static inline uint64_t mulx_hi(
 /* subtracts v times the pivot row (pr, pf) of length pl, but its lead
  * entry, from the dense row dr; pf holds the pivot coefficients. The
  * Shoup pre-inverse psi = floor(v * 2^64 / p) of the multiplier v < p
- * is computed once per application, the per-element quotient is
+ * is computed once per application from the reciprocal pi of p, the per-element quotient is
  * mulhi(pf[j], psi) (harvey-2014 §3). Dense row entries are kept in
  * [0, 2p) as redundant representatives: the difference of two entries
  * in [0, 2p) is corrected by 2p on borrow, which is exact and
@@ -274,12 +330,13 @@ static inline void sg_sub_row_64(
         const cf64_t * const pf,
         const len_t pl,
         const uint64_t v,
-        const uint64_t p
+        const uint64_t p,
+        const preinv_t * const pi
         )
 {
     len_t j;
     const uint64_t twice = 2 * p;
-    const uint64_t psi   = shoup_mu(p, v);
+    const uint64_t psi   = shoup_mu_preinv(pi, v);
     for (j = 1; j < pl; ++j) {
         const uint64_t q = mulx_hi(psi, pf[j]);
         const uint64_t d = v * pf[j] - q * p; /* in [0, 2p) */

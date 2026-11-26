@@ -742,13 +742,9 @@ static int ml_sig_rounds(
         for (i = 0; i < nr && ok; ++i) {
             const len_t src = rd->src[i];
             const len_t e   = (src & SG_GEN) ? (src & ~SG_GEN) : src + ng;
-            const hm_t * const cols = rd->rc[i];
-            const len_t len = cols[0];
-            hm_t *row = (hm_t *)malloc((unsigned long)(len + OFFSET) * sizeof(hm_t));
-            row[LENGTH]  = len;
-            row[PRELOOP] = len % UNROLL;
-            memcpy(row + OFFSET, cols + 1, (unsigned long)len * sizeof(hm_t));
-            own[i] = row;
+            /* the recorded row is read in place */
+            hm_t *row = rd->rc[i];
+            const len_t len = row[LENGTH];
             const uint32_t * const cf = ml->cf[e];
             const hm_t lc = row[OFFSET];
             if (rd->kind[i] == 0) {
@@ -802,7 +798,6 @@ static int ml_sig_rounds(
             piv[ec[1]] = prow;
             pcf[ec[1]] = ncf;
             own[i] = prow;
-            free(row);
             const hm_t * const eb = rd->eb[nn];
             hm_t *er = (hm_t *)malloc((unsigned long)(el + OFFSET) * sizeof(hm_t));
             memcpy(er + OFFSET, eb + 1, (unsigned long)el * sizeof(hm_t));

@@ -861,6 +861,15 @@ static void convert_sparse_matrix_rows_to_basis_elements(
             insert_in_hash_table_parallel(hcm+mat->ncl, evs, mat->ncr,
                     bht, st->nthrds);
             free(evs);
+            /* the applications share bht: the positions of the columns
+             * are kept for the next ones */
+            if (bs->ght) {
+                hi_t *hc = (hi_t *)malloc((unsigned long)mat->ncr * sizeof(hi_t));
+                memcpy(hc, hcm + mat->ncl, (unsigned long)mat->ncr * sizeof(hi_t));
+                if (!__sync_bool_compare_and_swap(&(((tc_t *)tc)->hc), NULL, hc)) {
+                    free(hc);
+                }
+            }
         }
         st->hcm = hcm;
     } else {

@@ -393,6 +393,19 @@ static hm_t *sg_copy_terms(
     return c;
 }
 
+/* a copy of the row, with its header, read in place by the replays */
+static hm_t *sg_copy_row(
+        const hm_t * const row
+        )
+{
+    const len_t n = row[LENGTH];
+    hm_t *c = (hm_t *)calloc((unsigned long)(n + OFFSET), sizeof(hm_t));
+    c[LENGTH]  = n;
+    c[PRELOOP] = n % UNROLL;
+    memcpy(c + OFFSET, row + OFFSET, (unsigned long)n * sizeof(hm_t));
+    return c;
+}
+
 static void sg_rec_add(
         sg_rrd_t *rd,
         const len_t src,
@@ -411,7 +424,7 @@ static void sg_rec_add(
     rd->src[rd->n]  = src;
     rd->mul[rd->n]  = mul;
     rd->kind[rd->n] = kind;
-    rd->rc[rd->n]   = sg_copy_terms(row + OFFSET, row[LENGTH]);
+    rd->rc[rd->n]   = sg_copy_row(row);
     rd->n++;
 }
 
@@ -2752,27 +2765,33 @@ static cf64_t **sg_input_coeffs_64(
 #define SG_SUBROW_32(dr, pr, pf, pl, v, p, big, small) \
     sg_sub_row((dr), (pr), (pf), (pl), (p) - (v), (big), (small))
 #define SG_SUBROW_64(dr, pr, pf, pl, v, p, big, small) \
-    sg_sub_row_64((dr), (pr), (pf), (pl), (v), (p))
+    sg_sub_row_64((dr), (pr), (pf), (pl), (v), (p), &(big))
 
 /* inverting the lead coefficient and scaling by the inverse for
  * monicization */
 #define SG_INV_32(x, p) mod_p_inverse_32((int64_t)(x), (int64_t)(p))
 #define SG_INV_64(x, p) mod_p_inverse_64((int64_t)(x), (int64_t)(p))
-#define SG_MUL_INV_32(x, inv, p) (cf32_t)(((uint64_t)(x) * (inv)) % (p))
-#define SG_MUL_INV_64(x, inv, p) (cf64_t)mul_mod_64((x), (inv), (p))
+#define SG_MUL_INV_32(x, inv, invs, p) (cf32_t)(((uint64_t)(x) * (inv)) % (p))
+#define SG_MUL_INV_64(x, inv, invs, p) \
+    (cf64_t)shoup_mod_mul((inv), (invs), (x), (p))
+/* the Shoup pre-inverse of the inverse, only used by the 64-bit
+ * instantiation */
+#define SG_INV_PRE_32(inv, big) 0
+#define SG_INV_PRE_64(inv, big) shoup_mu_preinv(&(big), (inv))
 
-/* local constants of the lazy representation, only declared by the
- * 32-bit instantiation */
+/* local constants: the lazy representation of the 32-bit instantiation,
+ * the reciprocal of p for the Shoup pre-inverses of the 64-bit one */
 #define SG_BIG_SMALL_DECL_32(p) \
     const uint64_t big = ((uint64_t)1 << 63) / (p) * (p); \
     const int small = (p) < ((uint64_t)1 << 16)
-#define SG_BIG_SMALL_DECL_64(p) (void)(p)
+#define SG_BIG_SMALL_DECL_64(p) \
+    const preinv_t big = preinv_64(p)
 
 /* the replay core shared by both coefficient widths: cf_t is the
  * coefficient type, the variant macros adapt input coefficient
  * extraction, dense-row invariant, pivot subtraction and monicization */
 #define SG_REPLAY(name, cf_t, INPUT_COEFFS, TAKE, SUBROW, INV, MUL_INV, \
-        BIG_SMALL_DECL)                                                 \
+        INV_PRE, BIG_SMALL_DECL)                                        \
 static int name(                                                        \
         bs_t *bs,                                                       \
         md_t *md,                                                       \
@@ -2843,11 +2862,8 @@ static int name(                                                        \
             const hm_t *poly  = (src & SG_GEN) ? bs->hm[gi[src & ~SG_GEN]] : ep[src + ng]; \
             rcf[i]            = (src & SG_GEN) ? gcf[src & ~SG_GEN] : ecf[src + ng]; \
             if (cached) {                                               \
-                const len_t len = rd->rc[i][0];                         \
-                rows[i] = (hm_t *)malloc((unsigned long)(len + OFFSET) * sizeof(hm_t)); \
-                rows[i][LENGTH]  = len;                                 \
-                rows[i][PRELOOP] = len % UNROLL;                        \
-                memcpy(rows[i] + OFFSET, rd->rc[i] + 1, (unsigned long)len * sizeof(hm_t)); \
+                /* the recorded row is read in place */                 \
+                rows[i] = rd->rc[i];                                    \
                 continue;                                               \
             }                                                           \
             exp_t em[evl];                                              \
@@ -2982,12 +2998,14 @@ static int name(                                                        \
                 ok = 0;                                                 \
                 break;                                                  \
             }                                                           \
-            const uint64_t inv = INV(ncf[0], p);                        \
+            const uint64_t inv  = INV(ncf[0], p);                       \
+            const uint64_t invs = INV_PRE(inv, big);                    \
+            (void)invs;                                                 \
             hm_t *er    = (hm_t *)malloc((unsigned long)(nl + OFFSET) * sizeof(hm_t)); \
             cf_t *ec    = (cf_t *)malloc((unsigned long)nl * sizeof(cf_t)); \
             for (j = 0; j < nl; ++j) {                                  \
                 er[OFFSET+j] = nrow[j];                                 \
-                ec[j]        = MUL_INV(ncf[j], inv, p);                 \
+                ec[j]        = MUL_INV(ncf[j], inv, invs, p);           \
             }                                                           \
             er[LENGTH]  = nl;                                           \
             er[PRELOOP] = nl % UNROLL;                                  \
@@ -3043,7 +3061,7 @@ static int name(                                                        \
                 free(nwc[i]);                                           \
             }                                                           \
         }                                                               \
-        for (i = 0; i < nr; ++i) {                                      \
+        for (i = 0; i < nr && !cached; ++i) {                           \
             free(rows[i]);                                              \
         }                                                               \
         free(rows);                                                     \
@@ -3092,7 +3110,7 @@ static int name(                                                        \
  * before the core was parameterized by the coefficient width */
 SG_REPLAY(sig_f4_replay_32, cf32_t,
         SG_INPUT_COEFFS_32, SG_TAKE_32, SG_SUBROW_32,
-        SG_INV_32, SG_MUL_INV_32,
+        SG_INV_32, SG_MUL_INV_32, SG_INV_PRE_32,
         SG_BIG_SMALL_DECL_32)
 
 /* the wide replay for primes in [2^32, 2^62): coefficients in cf_64
@@ -3101,7 +3119,7 @@ SG_REPLAY(sig_f4_replay_32, cf32_t,
  * monicization with 128-bit products */
 SG_REPLAY(sig_f4_replay_64, cf64_t,
         SG_INPUT_COEFFS_64, SG_TAKE_64, SG_SUBROW_64,
-        SG_INV_64, SG_MUL_INV_64,
+        SG_INV_64, SG_MUL_INV_64, SG_INV_PRE_64,
         SG_BIG_SMALL_DECL_64)
 
 /* dispatches on the field width of the run */
