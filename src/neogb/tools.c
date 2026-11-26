@@ -167,7 +167,9 @@ static hm_t *reducer_rows_to_block(
 
 /* allocates for each row to be reduced the array of bits marking the
  * reducer rows used in its reduction; only needed when learning a
- * trace */
+ * trace. The arrays lie in one block, mat->rbb: zeroed memory of this
+ * size comes in pages which are only touched where bits are set, so the
+ * cost follows the reducer rows used, not the size of the matrix. */
 static void allocate_reducer_bit_arrays(
         mat_t *mat
         )
@@ -177,8 +179,9 @@ static void allocate_reducer_bit_arrays(
     const uint64_t len = mat->nru / 32 + ((mat->nru % 32) != 0);
     mat->rbal = mat->nrl;
     mat->rba  = (rba_t **)malloc((uint64_t)mat->rbal * sizeof(rba_t *));
+    mat->rbb  = (rba_t *)calloc((uint64_t)mat->rbal * len + 1, sizeof(rba_t));
     for (i = 0; i < mat->rbal; ++i) {
-        mat->rba[i] = (rba_t *)calloc(len, sizeof(rba_t));
+        mat->rba[i] = mat->rbb + (uint64_t)i * len;
     }
 }
 
@@ -224,7 +227,7 @@ static void construct_trace(
             rba[ctr]  = rba[i];
             ctr++;
         } else {
-            free(rba[i]);
+            /* the arrays lie in mat->rbb */
             rba[i]  = NULL;
         }
     }

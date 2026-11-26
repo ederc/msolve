@@ -249,6 +249,8 @@ struct mat_t
                         /* entries, coefficients are handled via linking */
                         /* to coefficient arrays */
     rba_t **rba;        /* bit array for each row to be reduced storing */
+    rba_t *rbb;         /* the memory of the bit arrays in rba when learning,
+                         * see allocate_reducer_bit_arrays() */
                         /* if a reducer row is used during reduction. */
                         /* Thus we can reconstruct the trace for the */
                         /* rows not reduced to zero easily by bitwise */

@@ -114,10 +114,10 @@ static void clear_matrix(
         mat_t *mat
         )
 {
-    len_t i;
-    for (i = 0; i < mat->rbal; ++i) {
-        free(mat->rba[i]);
-    }
+    /* the bit arrays lie in mat->rbb, see allocate_reducer_bit_arrays() */
+    free(mat->rbb);
+    mat->rbb  = NULL;
+    mat->rbal = 0;
     free(mat->rba);
     mat->rba  = NULL;
     free(mat->rr);
