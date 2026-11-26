@@ -3177,15 +3177,28 @@ typedef struct
     len_t nb;
     uint64_t *bd;
     hm_t *bc[SG_BAND];
-    cf32_t *bv[SG_BAND];
+    void *bv[SG_BAND];  /* cf32_t resp. cf64_t coefficients */
     len_t bn[SG_BAND];
+#ifdef FF64_VL
+    ff64_t f;           /* for the 64-bit replay, see sg_band_take64() */
+    ff64_vc_t vc;
+#endif
 } sg_band_t;
+
+/* whether the 64-bit replay at the prime p reduces in bands: with the
+ * vector arithmetic of la_ff_64.c for p < 2^52 */
+#ifdef FF64_VL
+#define SG_BAND64(p) ((p) < ((uint64_t)1 << 52))
+#else
+#define SG_BAND64(p) 0
+#endif
 
 static void sg_band_start(
         sg_band_t *bs,
         const sg_rrd_t * const rd,
         hm_t **rows,
-        const len_t nc
+        const len_t nc,
+        const int on
         )
 {
     len_t i, b;
@@ -3193,7 +3206,7 @@ static void sg_band_start(
     for (i = 0; i < rd->n; ++i) {
         ents += rows[i][LENGTH];
     }
-    bs->on = ents >= SG_BAND_MIN * (uint64_t)rd->n;
+    bs->on = on && ents >= SG_BAND_MIN * (uint64_t)rd->n;
     bs->nb = 0;
     bs->i0 = 0;
     bs->bd = NULL;
@@ -3210,7 +3223,7 @@ static void sg_band_start(
         }
         for (b = 0; b < SG_BAND; ++b) {
             bs->bc[b] = (hm_t *)malloc((unsigned long)(nc + 1) * sizeof(hm_t));
-            bs->bv[b] = (cf32_t *)malloc((unsigned long)(nc + 1) * sizeof(cf32_t));
+            bs->bv[b] = malloc((unsigned long)(nc + 1) * sizeof(cf64_t));
         }
     }
 }
@@ -3267,7 +3280,7 @@ static len_t sg_band_take(
         }
         uint64_t nsubs = 0;
         sg_band_reduce(g, nb, br, pc, pcf, bs->bd, nc, p, big, small,
-                NULL, bs->bc, bs->bv, bs->bn, &nsubs);
+                NULL, bs->bc, (cf32_t **)bs->bv, bs->bn, &nsubs);
         bs->i0 = i;
         bs->nb = nb;
     }
@@ -3276,6 +3289,211 @@ static len_t sg_band_take(
     memcpy(nrow, bs->bc[b], (unsigned long)nl * sizeof(hm_t));
     memcpy(ncf, bs->bv[b], (unsigned long)nl * sizeof(cf32_t));
     return nl;
+}
+
+#ifdef FF64_VL
+/* sg_band_reduce() for the 64-bit replay at a prime p < 2^52: the
+ * entries are kept in [0, p), a pivot row is subtracted from the rows of
+ * the band with the vector arithmetic of la_ff_64.c, FF64_VL entries of a
+ * column at once */
+static void sg_band_reduce64(
+        const len_t nb,
+        hm_t **rows,
+        const cf64_t * const *rcf,
+        hm_t **pc,
+        cf64_t **pcf,
+        uint64_t *bd,
+        const len_t nc,
+        const ff64_t * const f,
+        const ff64_vc_t * const vc,
+        hm_t **ncol,
+        cf64_t **nval,
+        len_t *nnl
+        )
+{
+    len_t b, a, j, k, l;
+    const uint64_t p = f->p;
+    hm_t from = nc;
+    len_t lead[SG_BAND];
+    uint64_t inv[SG_BAND], rel[SG_BAND][SG_BAND], e[SG_BAND];
+    memset(rel, 0, sizeof(rel));
+    for (b = 0; b < nb; ++b) {
+        const hm_t * const r = rows[b] + OFFSET;
+        const len_t len = rows[b][LENGTH];
+        for (j = 0; j < len; ++j) {
+            bd[(unsigned long)r[j] * SG_BAND + b] = rcf[b][j];
+        }
+        if (r[0] < from) {
+            from = r[0];
+        }
+        lead[b] = nc;
+        nnl[b]  = 0;
+    }
+    for (k = from; k < nc; ++k) {
+        uint64_t * const x = bd + (unsigned long)k * SG_BAND;
+        uint64_t any = 0;
+        for (b = 0; b < SG_BAND; ++b) {
+            any |= x[b];
+        }
+        if (any == 0) {
+            continue;
+        }
+        if (pc[k] != NULL) {
+            /* the entries are the multipliers of the pivot row */
+            uint64_t m[SG_BAND];
+            len_t nz = 0, one = 0;
+            for (b = 0; b < SG_BAND; ++b) {
+                m[b] = x[b];
+                x[b] = 0;
+                if (m[b] != 0) {
+                    ++nz;
+                    one = b;
+                }
+            }
+            const hm_t * const pr   = pc[k] + OFFSET;
+            const cf64_t * const pf = pcf[k];
+            const len_t pl          = pc[k][LENGTH];
+            if (nz == 1) {
+                const uint64_t mm = ff64_mont(m[one], f);
+                for (j = 1; j < pl; ++j) {
+                    uint64_t * const y = bd + (unsigned long)pr[j] * SG_BAND + one;
+                    *y = (uint64_t)ff64_submul((int64_t)*y, pf[j], mm, f);
+                }
+            } else {
+                ff64_m mv[SG_BAND / FF64_VL];
+                for (l = 0; l < SG_BAND / FF64_VL; ++l) {
+                    mv[l] = ff64_m_from(ff64_v_load(m + l * FF64_VL), vc);
+                }
+                for (j = 1; j < pl; ++j) {
+                    uint64_t * const y = bd + (unsigned long)pr[j] * SG_BAND;
+                    const ff64_v fv = ff64_v_set1(pf[j]);
+                    for (l = 0; l < SG_BAND / FF64_VL; ++l) {
+                        ff64_v_store(y + l * FF64_VL, ff64_v_submul(
+                                    ff64_v_load(y + l * FF64_VL), fv, mv[l], vc));
+                    }
+                }
+            }
+            continue;
+        }
+        /* a column without pivot: the entries of the rows in turn */
+        len_t owner = nb;
+        for (b = 0; b < nb; ++b) {
+            uint64_t v = x[b];
+            x[b] = 0;
+            for (a = 0; a < b; ++a) {
+                if (rel[b][a] != 0 && e[a] != 0) {
+                    const uint64_t t = mul_mod_64(rel[b][a], e[a], p);
+                    v = v >= t ? v - t : v + p - t;
+                }
+            }
+            if (v != 0 && owner < b) {
+                /* the row is reduced by the band row taking this column */
+                rel[b][owner] = mul_mod_64(v, inv[owner], p);
+                v = 0;
+            } else if (v != 0 && lead[b] == nc) {
+                lead[b]  = k;
+                owner    = b;
+                inv[b]   = mod_p_inverse_64((int64_t)v, (int64_t)p);
+            }
+            e[b] = v;
+            if (v != 0) {
+                ncol[b][nnl[b]]   = k;
+                nval[b][nnl[b]++] = v;
+            }
+        }
+        for (; b < SG_BAND; ++b) {
+            x[b] = 0;
+        }
+    }
+}
+#endif
+
+/* the arithmetic modulo p of the 64-bit replay in bands */
+static void sg_band_init64(
+        sg_band_t *bs,
+        const uint64_t p
+        )
+{
+#ifdef FF64_VL
+    if (bs->on) {
+        bs->f  = ff64_init(p);
+        bs->vc = ff64_vc_init(&(bs->f));
+    }
+#else
+    (void)bs;
+    (void)p;
+#endif
+}
+
+/* whether most rows of the record recp, at least half of them, lie in
+ * rounds which the replay reduces in bands, see sg_band_start() */
+int sig_record_banded(
+        const void * const recp
+        )
+{
+    const sg_rec_t * const rec = (const sg_rec_t *)recp;
+    uint64_t all = 0, banded = 0;
+    len_t r, i;
+    for (r = 0; r < rec->nrd; ++r) {
+        const sg_rrd_t * const rd = rec->rd + r;
+        uint64_t ents = 0;
+        all += rd->n;
+        if (rd->rc == NULL) {
+            continue;
+        }
+        for (i = 0; i < rd->n; ++i) {
+            ents += rd->rc[i][LENGTH];
+        }
+        if (ents >= SG_BAND_MIN * (uint64_t)rd->n) {
+            banded += rd->n;
+        }
+    }
+    return 2 * banded >= all && all > 0;
+}
+
+/* sg_band_take() for the 64-bit replay, see sg_band_reduce64() */
+static len_t sg_band_take64(
+        sg_band_t *bs,
+        const len_t i,
+        const sg_rrd_t * const rd,
+        hm_t **rows,
+        const cf64_t * const *rcf,
+        hm_t **pc,
+        cf64_t **pcf,
+        const len_t nc,
+        hm_t *nrow,
+        cf64_t *ncf
+        )
+{
+#ifdef FF64_VL
+    if (!bs->on) {
+        return SG_NONE;
+    }
+    if (bs->nb == 0 || i < bs->i0 || i >= bs->i0 + bs->nb) {
+        /* a new band from row i on */
+        len_t nb = 0, l;
+        for (l = i; l < rd->n && nb < SG_BAND && rd->kind[l] == 1; ++l) {
+            nb++;
+        }
+        if (nb < 2) {
+            bs->nb = 0;
+            return SG_NONE;
+        }
+        sg_band_reduce64(nb, rows + i, rcf + i, pc, pcf, bs->bd, nc,
+                &(bs->f), &(bs->vc), bs->bc, (cf64_t **)bs->bv, bs->bn);
+        bs->i0 = i;
+        bs->nb = nb;
+    }
+    const len_t b  = i - bs->i0;
+    const len_t nl = bs->bn[b];
+    memcpy(nrow, bs->bc[b], (unsigned long)nl * sizeof(hm_t));
+    memcpy(ncf, bs->bv[b], (unsigned long)nl * sizeof(cf64_t));
+    return nl;
+#else
+    (void)bs; (void)i; (void)rd; (void)rows; (void)rcf; (void)pc;
+    (void)pcf; (void)nc; (void)nrow; (void)ncf;
+    return SG_NONE;
+#endif
 }
 
 /* coefficient-width variants of the replay operations */
@@ -3335,7 +3553,9 @@ static len_t sg_band_take(
     sg_band_take((bs), (i), (rd), (rows), (const cf32_t * const *)(rcf), \
             (pc), (pcf), (nc), (p), (big), (small), (nrow), (ncf))
 #define SG_BAND_TAKE_64(bs, i, rd, rows, rcf, pc, pcf, nc, p, big, small, \
-        nrow, ncf) SG_NONE
+        nrow, ncf)                                                      \
+    sg_band_take64((bs), (i), (rd), (rows), (const cf64_t * const *)(rcf), \
+            (pc), (pcf), (nc), (nrow), (ncf))
 
 /* the replay core shared by both coefficient widths: cf_t is the
  * coefficient type, the variant macros adapt input coefficient
@@ -3476,7 +3696,11 @@ static int name(                                                        \
         sg_band_t bst;                                                  \
         bst.on = 0;                                                     \
         if (BANDED) {                                                   \
-            sg_band_start(&bst, rd, rows, nc);                          \
+            sg_band_start(&bst, rd, rows, nc,                           \
+                    sizeof(cf_t) == sizeof(cf32_t) || SG_BAND64(p));    \
+            if (sizeof(cf_t) == sizeof(cf64_t)) {                       \
+                sg_band_init64(&bst, p);                                \
+            }                                                           \
         }                                                               \
         for (i = 0; i < nr && ok; ++i) {                                \
             hm_t *row     = rows[i];                                    \
@@ -3721,7 +3945,7 @@ SG_REPLAY(sig_f4_replay_32, cf32_t,
 SG_REPLAY(sig_f4_replay_64, cf64_t,
         SG_INPUT_COEFFS_64, SG_TAKE_64, SG_SUBROW_64,
         SG_INV_64, SG_MUL_INV_64, SG_INV_PRE_64,
-        SG_BIG_SMALL_DECL_64, 0, SG_BAND_TAKE_64)
+        SG_BIG_SMALL_DECL_64, 1, SG_BAND_TAKE_64)
 
 /* dispatches on the field width of the run */
 static int sig_f4_replay(

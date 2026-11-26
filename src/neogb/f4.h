@@ -103,6 +103,12 @@ hm_t *sig_record_lead_terms(
         len_t *n
         );
 
+/* whether most rows of the record recp are reduced in bands when it is
+ * applied, see sigf4.c */
+int sig_record_banded(
+        const void * const recp
+        );
+
 /* Computes the Groebner basis of gbs, for an elimination order possibly
  * via a DRL Groebner basis, see md_t->elim_drl. Over the rationals
  * (gmd->fc != fc) the DRL data is kept in gmd for the next primes and

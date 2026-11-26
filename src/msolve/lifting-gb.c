@@ -37,7 +37,9 @@
    traces of F4 are applied at primes below 2^52 by vector kernels, see
    la_ff_64.c, so b = F4_WIDE_BITS for them; the traces of the
    signature-based F4 are applied by the same scalar arithmetic at all
-   primes below 2^62, so b = SIG_WIDE_BITS for them. */
+   primes below 2^62, so b = SIG_WIDE_BITS for them, unless most of their
+   rows are reduced in bands, which use these vector kernels, too, see
+   sig_record_banded(). */
 #define F4_WIDE_BITS  51
 #define SIG_WIDE_BITS 61
 /* wide primes are taken if the trace is applied at one in less than
@@ -2475,7 +2477,7 @@ restart:
     double tprobe[2] = {0, 0};
     /* the size of the wide primes, see F4_WIDE_BITS */
     int wbits = st->tr != NULL && st->tr->sgr != NULL
-      ? SIG_WIDE_BITS : F4_WIDE_BITS;
+      && !sig_record_banded(st->tr->sgr) ? SIG_WIDE_BITS : F4_WIDE_BITS;
     uint64_t wlo = (uint64_t)1 << wbits;
     uint64_t whi = (uint64_t)1 << (wbits + 1);
     {
