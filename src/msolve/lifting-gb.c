@@ -528,20 +528,54 @@ static inline void display_modpoly(FILE *file,
   free(evi);
 }
 
+/* the polynomials written at once by the threads of
+   display_gbmodpoly_cf_qq(), per thread */
+#define OUT_CHUNK 16
+
+/* With several threads the polynomials are written in chunks: each
+   thread writes its polynomials to a stream in memory, then the streams
+   go to file in the order of the polynomials. */
 static inline void display_gbmodpoly_cf_qq(FILE *file,
                                            gb_modpoly_t modgbs,
-                                           data_gens_ff_t *gens){
+                                           data_gens_ff_t *gens,
+                                           const int nthrds){
   int32_t p = modgbs->ld ;
   if(p==0){
     fprintf(file, "[0]:\n");
     return;
   }
   fprintf(file, "[");
-  for(int i = 0; i < p-1; i++){
-    display_modpoly(file, modgbs, i, gens);
-    fprintf(file, ", \n");
+  if(nthrds <= 1 || p < 2 * nthrds){
+    for(int i = 0; i < p-1; i++){
+      display_modpoly(file, modgbs, i, gens);
+      fprintf(file, ", \n");
+    }
+    display_modpoly(file, modgbs, p-1, gens);
   }
-  display_modpoly(file, modgbs, p-1, gens);
+  else{
+    const int32_t cs = OUT_CHUNK * nthrds;
+    char **buf  = (char **)calloc((size_t)cs, sizeof(char *));
+    size_t *len = (size_t *)calloc((size_t)cs, sizeof(size_t));
+    for(int32_t lo = 0; lo < p; lo += cs){
+      const int32_t hi = lo + cs < p ? lo + cs : p;
+#pragma omp parallel for num_threads(nthrds) schedule(dynamic, 1)
+      for(int32_t i = lo; i < hi; i++){
+        FILE *ms = open_memstream(buf + (i - lo), len + (i - lo));
+        display_modpoly(ms, modgbs, i, gens);
+        if(i < p-1){
+          fprintf(ms, ", \n");
+        }
+        fclose(ms);
+      }
+      for(int32_t i = lo; i < hi; i++){
+        fwrite(buf[i - lo], 1, len[i - lo], file);
+        free(buf[i - lo]);
+        buf[i - lo] = NULL;
+      }
+    }
+    free(buf);
+    free(len);
+  }
   fprintf(file, "]:\n");
 }
 
@@ -3273,11 +3307,11 @@ void print_msolve_gbtrace_qq(data_gens_ff_t *gens,
 
     if(flags->files->out_file != NULL){
       FILE *ofile = fopen(flags->files->out_file, "ab+");
-      display_gbmodpoly_cf_qq(ofile, (*modgbsp), gens);
+      display_gbmodpoly_cf_qq(ofile, (*modgbsp), gens, flags->nr_threads);
       fclose(ofile);
     }
     else{
-      display_gbmodpoly_cf_qq(OUTSTREAM, (*modgbsp), gens);
+      display_gbmodpoly_cf_qq(OUTSTREAM, (*modgbsp), gens, flags->nr_threads);
     }
   }
   if(flags->print_gb == 1){
