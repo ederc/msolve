@@ -49,10 +49,9 @@
 
 /* handover parameters */
 #define SG_PAIRS        1000  /* least S-pairs of an update to be tested */
-/* S-pairs per multiply-add handing over when learning a trace, see
- * sg_hand_over() */
-#define SG_LEARN_PAIR_WORK_NUM 3
-#define SG_LEARN_PAIR_WORK_DEN 2
+/* S-pairs per multiply-add handing over, see sg_hand_over() */
+#define SG_PAIR_WORK_NUM 3
+#define SG_PAIR_WORK_DEN 2
 /* a round is stopped once its reductions take more than SG_WORK_GROWTH
  * times the multiply-adds of the round before and more than SG_WORK_MIN,
  * see sg_round() */
@@ -61,6 +60,10 @@
 #define SG_EARLY        2     /* gap between signature and lead degree */
 #define SG_GAP          4
 #define SG_EARLY_ROUND  25    /* least new elements of the early round */
+/* the early round hands over for fewer zero reductions than this
+ * percentage of its new elements, see sg_hand_over() */
+#define SG_EARLY_ZERO        25
+#define SG_EARLY_ZERO_LEARN  40
 #define SG_OUTGROWN_MIN 5     /* least new elements of a round tested */
 
 /* Packed monomials: the exponents of the variables in lanes of SG_LB bits,
@@ -219,8 +222,9 @@ struct sg_row_t
                          * table, then as columns */
     const cf32_t *cf;   /* coefficients of the multiplied element */
     len_t ix;
-    hm_t sm;
-    hm_t sc;
+    hm_t sm;            /* the signature in the round's table sg->rst, its
+                         * Schreyer signature is derived where the row
+                         * gives a new element */
     int8_t reducer;     /* 1 for rows from symbolic preprocessing */
     int8_t gen;         /* 1 for a given row, a reductant of the round */
     len_t id;           /* build order: the given rows first, then the
@@ -430,6 +434,9 @@ struct sg_t
     uint32_t fc;
     ht_t *bht;
     ht_t *sht;
+    /* the signatures of the rows of a round: most rows are reducer rows,
+     * their signatures are not kept in bht */
+    ht_t *rst;
     exp_t *e0, *e1, *e2, *e3; /* scratch exponent vectors */
     /* handover state */
     int early_done;
@@ -1133,6 +1140,99 @@ static int sg_col_cmp(
     return monomial_cmp_drl(mb, ma, (const ht_t *)htp);
 }
 
+/* sorts the columns hcm[0], ..., hcm[n-1] by decreasing monomials, many
+ * of them by keys, see sort_columns_by_keys() */
+static void sg_sort_columns(
+        hi_t *hcm,
+        const len_t n,
+        ht_t *sht
+        )
+{
+    if (sht->ebl == 0 && sht->mo == 0 && !sht->boolean && n >= 4096) {
+        sort_columns_by_keys(hcm, n, sht, 0, sg_col_cmp);
+    } else {
+        sort_r(hcm, (unsigned long)n, sizeof(hi_t), sg_col_cmp, sht);
+    }
+}
+
+/* sorts the rows by sg_row_cmp(): many rows by the keys (rank of the
+ * signature monomial, index) with a stable radix sort, which keeps the
+ * build order of rows of equal signature */
+static void sg_sort_rows(
+        sg_row_t *rows,
+        const len_t nr,
+        sg_t *sg
+        )
+{
+    len_t i;
+    ht_t *rst = sg->rst;
+    sg_ctx_t ctx = {sg, rst};
+    const len_t nm = (len_t)(rst->eld - 1);
+    uint32_t mix = 0;
+    for (i = 0; i < nr; ++i) {
+        mix = rows[i].ix > mix ? rows[i].ix : mix;
+    }
+    if (nr < 4096 || mix >= ((uint32_t)1 << 24)) {
+        sort_r(rows, (unsigned long)nr, sizeof(sg_row_t), sg_row_cmp, &ctx);
+        return;
+    }
+    /* the ranks of the signature monomials in increasing order */
+    hi_t *hm = (hi_t *)malloc((unsigned long)nm * sizeof(hi_t));
+    for (i = 0; i < nm; ++i) {
+        hm[i] = i + 1;
+    }
+    sg_sort_columns(hm, nm, rst);
+    uint32_t *rk = (uint32_t *)malloc((unsigned long)(nm + 1) * sizeof(uint32_t));
+    for (i = 0; i < nm; ++i) {
+        rk[hm[i]] = nm - 1 - i;
+    }
+    free(hm);
+    uint64_t *k = (uint64_t *)malloc((unsigned long)nr * sizeof(uint64_t));
+    uint64_t *t = (uint64_t *)malloc((unsigned long)nr * sizeof(uint64_t));
+    len_t *ps   = (len_t *)malloc((unsigned long)nr * sizeof(len_t));
+    len_t *pt   = (len_t *)malloc((unsigned long)nr * sizeof(len_t));
+    for (i = 0; i < nr; ++i) {
+        k[i]  = ((uint64_t)rk[rows[i].sm] << 24) | rows[i].ix;
+        ps[i] = i;
+    }
+    free(rk);
+    /* LSD radix sort on 16 bits at a time, stable */
+    len_t *cnt = (len_t *)malloc(65537 * sizeof(len_t));
+    unsigned sh;
+    const unsigned bits = 24 + 64 - (unsigned)__builtin_clzll((uint64_t)nm | 1);
+    for (sh = 0; sh < bits; sh += 16) {
+        memset(cnt, 0, 65537 * sizeof(len_t));
+        for (i = 0; i < nr; ++i) {
+            cnt[((k[i] >> sh) & 0xFFFF) + 1]++;
+        }
+        for (i = 0; i < 65536; ++i) {
+            cnt[i+1] += cnt[i];
+        }
+        for (i = 0; i < nr; ++i) {
+            const len_t d = cnt[(k[i] >> sh) & 0xFFFF]++;
+            t[d]  = k[i];
+            pt[d] = ps[i];
+        }
+        uint64_t *x = k;
+        k = t;
+        t = x;
+        len_t *y = ps;
+        ps = pt;
+        pt = y;
+    }
+    free(cnt);
+    free(k);
+    free(t);
+    sg_row_t *sr = (sg_row_t *)malloc((unsigned long)nr * sizeof(sg_row_t));
+    for (i = 0; i < nr; ++i) {
+        sr[i] = rows[ps[i]];
+    }
+    memcpy(rows, sr, (unsigned long)nr * sizeof(sg_row_t));
+    free(sr);
+    free(ps);
+    free(pt);
+}
+
 /* returns the row of the multiple of element el (or of the input
  * generator el if gen != 0) by the monomial with exponents m */
 static sg_row_t sg_multiple(
@@ -1169,12 +1269,7 @@ static sg_row_t sg_multiple(
     for (j = 0; j < evl; ++j) {
         e[j] = em[j] + sm[j];
     }
-    row.sm = sg_insert(e, bht);
-    const exp_t * const sc = bht->ev[el->sc];
-    for (j = 0; j < evl; ++j) {
-        e[j] = em[j] + sc[j];
-    }
-    row.sc = sg_insert(e, bht);
+    row.sm = sg_insert(e, sg->rst);
     return row;
 }
 
@@ -1440,10 +1535,12 @@ static int64_t sg_round(
     len_t i, j, k;
     ht_t *bht       = sg->bht;
     ht_t *sht       = sg->sht;
+    ht_t *rst       = sg->rst;
     const len_t evl = bht->evl;
     const uint64_t p = sg->fc;
 
     const double t0 = realtime();
+    clean_hash_table(rst);
     const uint64_t nly0 = sg->nearly;
     /* select the pending signatures of least degree */
     deg_t d = sg->ps[0].deg;
@@ -1560,7 +1657,7 @@ static int64_t sg_round(
         rows[nr].id  = nr;
         /* the largest signature of the rows to be reduced, in the
          * Schreyer order of the signatures */
-        if (nr == 0 || sg_cmp_sig(rows[nr].ix, rows[nr].sm, mix, msc, bht) > 0) {
+        if (nr == 0 || sg_cmp_sig(rows[nr].ix, rows[nr].sm, mix, msc, rst) > 0) {
             mix = rows[nr].ix;
             msc = rows[nr].sm;
         }
@@ -1615,7 +1712,7 @@ static int64_t sg_round(
                 q[j] = em[j] - el[j];
                 s[j] = q[j] + esm[j];
             }
-            int c = sg_cmp_exp(s, bht->ev[msc], evl);
+            int c = sg_cmp_exp(s, rst->ev[msc], evl);
             if (c == 0) {
                 c = e->ix == mix ? 0 : (e->ix > mix ? 1 : -1);
             }
@@ -1642,7 +1739,7 @@ static int64_t sg_round(
     for (i = 0; i < nc; ++i) {
         hcm[i] = i+1;
     }
-    sort_r(hcm, (unsigned long)nc, sizeof(hi_t), sg_col_cmp, sht);
+    sg_sort_columns(hcm, nc, sht);
     for (i = 0; i < nc; ++i) {
         sht->hd[hcm[i]].idx = i;
     }
@@ -1653,8 +1750,7 @@ static int64_t sg_round(
             r[j] = sht->hd[r[j]].idx;
         }
     }
-    sg_ctx_t ctx = {sg, bht};
-    sort_r(rows, (unsigned long)nr, sizeof(sg_row_t), sg_row_cmp, &ctx);
+    sg_sort_rows(rows, nr, sg);
 
     /* without random combinations ruling out the rows reducing to zero, a
      * dense matrix with many rows to be reduced is reduced faster by F4,
@@ -1824,7 +1920,13 @@ static int64_t sg_round(
                     for (l = 0; l < nr; ++l) {
                         bres_n[l] = SG_NONE;
                     }
-                    bd = (uint64_t *)calloc((unsigned long)(nc + 1) * SG_BAND, sizeof(uint64_t));
+                    /* a column of the band is a cache line */
+                    const size_t bsz = (size_t)(nc + 1) * SG_BAND * sizeof(uint64_t);
+                    if (posix_memalign((void **)&bd, 64, bsz) == 0) {
+                        memset(bd, 0, bsz);
+                    } else {
+                        bd = (uint64_t *)calloc(bsz, 1);
+                    }
                 }
                 hm_t *bc[SG_BAND];
                 cf32_t *bv[SG_BAND];
@@ -1928,7 +2030,7 @@ static int64_t sg_round(
             row->r = NULL;
             /* reduction to zero: a syzygy signature */
             sg->nzero++;
-            sg_add_syzygy_exp(sg, row->ix, bht->ev[row->sm]);
+            sg_add_syzygy_exp(sg, row->ix, rst->ev[row->sm]);
             if (tests && ++streak >= 2) {
                 /* the rest of the run: the rows to be reduced up to the
                  * next reducer row setting a pivot */
@@ -1957,7 +2059,7 @@ static int64_t sg_round(
                         for (l = 0; l < ng; ++l) {
                             sg_row_t *x = rows + grp[l];
                             sg->nzero++;
-                            sg_add_syzygy_exp(sg, x->ix, bht->ev[x->sm]);
+                            sg_add_syzygy_exp(sg, x->ix, rst->ev[x->sm]);
                             free(x->r);
                             x->r = NULL;
                         }
@@ -2070,7 +2172,18 @@ static int64_t sg_round(
         if (rd != NULL) {
             rd->lm[rd->nn++] = r[OFFSET];
         }
-        const deg_t gap = bht->hd[nw[i].sc].deg - r[DEG];
+        /* the Schreyer signature: the one of the element multiplied, times
+         * the multiplier of the row */
+        const sg_el_t * const el = sg->e + nw[i].src;
+        const exp_t * const rsm  = rst->ev[nw[i].sm];
+        const exp_t * const esm  = bht->ev[el->sm];
+        const exp_t * const esc  = bht->ev[el->sc];
+        exp_t sce[evl];
+        for (j = 0; j < evl; ++j) {
+            sce[j] = rsm[j] - esm[j] + esc[j];
+        }
+        const hm_t sc = sg_insert(sce, bht);
+        const deg_t gap = bht->hd[sc].deg - r[DEG];
         if (gap > (deg_t)sg->maxgap) {
             sg->maxgap = gap;
         }
@@ -2083,7 +2196,8 @@ static int64_t sg_round(
                 break;
             }
         }
-        sg_add_element(sg, r, (cf32_t *)nw[i].cf, nw[i].ix, nw[i].sm, nw[i].sc);
+        sg_add_element(sg, r, (cf32_t *)nw[i].cf, nw[i].ix,
+                sg_insert(rst->ev[nw[i].sm], bht), sc);
     }
 
     for (i = 0; i < nr; ++i) {
@@ -2144,7 +2258,13 @@ static int sg_hand_over(
     }
     if (nn > 0 && sg->early_done == 0 && gap >= SG_EARLY) {
         sg->early_done = 1;
-        if (nn >= SG_EARLY_ROUND && (4 * sg->nzero < nn || 10 * sg->ndiv > 6 * nn)) {
+        /* when a trace is learned, the signature-based run hands over
+         * for more zero reductions: the time of a run handing over late
+         * is lost, while F4 applies its trace about as fast */
+        const uint64_t ez = md->trace_level == LEARN_TRACER
+            ? SG_EARLY_ZERO_LEARN : SG_EARLY_ZERO;
+        if (nn >= SG_EARLY_ROUND && (100 * (uint64_t)sg->nzero < ez * nn
+                    || 10 * sg->ndiv > 6 * nn)) {
             why = "early round";
         }
     }
@@ -2159,15 +2279,11 @@ static int sg_hand_over(
     }
 
     if (why == NULL && nn > 0) {
-        /* the S-pairs the update would form against the work of the round;
-         * when a trace is learned, the run is only done once, but its
-         * trace is applied at many primes, so it hands over only for more
-         * S-pairs */
+        /* the S-pairs the update would form against the work of the
+         * round */
         const uint64_t ob    = sg->ld - nn;
         const uint64_t pairs = (uint64_t)nn * ob + (uint64_t)nn * (nn-1) / 2;
-        const uint64_t work  = md->trace_level == LEARN_TRACER
-            ? SG_LEARN_PAIR_WORK_NUM * sg->nsubs / SG_LEARN_PAIR_WORK_DEN
-            : sg->nsubs;
+        const uint64_t work  = SG_PAIR_WORK_NUM * sg->nsubs / SG_PAIR_WORK_DEN;
         if (pairs >= SG_PAIRS && pairs >= work) {
             why = "pair work";
         }
@@ -2183,6 +2299,10 @@ static void sg_free(
         )
 {
     len_t i;
+    if (sg->rst != NULL) {
+        free_hash_table(&(sg->rst));
+        sg->rst = NULL;
+    }
     for (i = 0; i < sg->ld; ++i) {
         /* the input generators keep their polynomials in bs, only their
          * coefficients were copied for the elements */
@@ -2361,6 +2481,7 @@ static int sig_f4(
     memset(&sg, 0, sizeof(sg_t));
     sg.bht  = bht;
     sg.sht  = md->ht;
+    sg.rst  = initialize_secondary_hash_table(bht, md);
     sg.fc   = (uint32_t)md->fc;
     sg.seed = 0x9E3779B97F4A7C15ULL ^ md->fc;
     sg.rec  = rec;
@@ -2746,7 +2867,7 @@ static int name(                                                        \
             for (i = 0; i < nc; ++i) {                                  \
                 hcm[i] = i + 1;                                         \
             }                                                           \
-            sort_r(hcm, (unsigned long)nc, sizeof(hi_t), sg_col_cmp, sht); \
+            sg_sort_columns(hcm, nc, sht);                              \
             for (i = 0; i < nc; ++i) {                                  \
                 sht->hd[hcm[i]].idx = i;                                \
             }                                                           \

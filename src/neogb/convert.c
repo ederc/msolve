@@ -300,15 +300,17 @@ static void sba_convert_hashes_to_columns(
  * are sorted in parallel and then merged. hcm_cmp is a total order on
  * the columns, so the result is the same as for a serial sort. */
 /* DRL: sorts the columns by integer keys built once per column, in the
- * order of hcm_cmp: the known pivots first, then by decreasing degree, then
- * by increasing exponents from the last variable on. Each field takes the
- * bits the largest value in the columns needs; the keys are sorted by a
- * radix sort on 16 bits at a time. Columns whose keys agree because not all
- * variables fit into 96 bits are sorted by hcm_cmp. */
+ * order of cmp: the known pivots first if split, then by decreasing
+ * degree, then by increasing exponents from the last variable on. Each
+ * field takes the bits the largest value in the columns needs; the keys
+ * are sorted by a radix sort on 16 bits at a time. Columns whose keys
+ * agree because not all variables fit into 96 bits are sorted by cmp. */
 static void sort_columns_by_keys(
         hi_t *hcm,
         const len_t n,
-        ht_t *sht
+        ht_t *sht,
+        const int split,
+        int (*cmp)(const void *, const void *, void *)
         )
 {
     len_t i, j;
@@ -341,7 +343,7 @@ static void sort_columns_by_keys(
             (unsigned long)n * sizeof(unsigned __int128));
     for (i = 0; i < n; ++i) {
         const exp_t * const e = sht->ev[hcm[i]];
-        unsigned __int128 x = sht->hd[hcm[i]].idx == 2 ? 0 : 1;
+        unsigned __int128 x = split && sht->hd[hcm[i]].idx != 2;
         x = (x << w[0]) | (unsigned __int128)(mx[0] - e[0]);
         for (j = evl - 1; j > last; --j) {
             x = (x << w[j]) | (unsigned __int128)e[j];
@@ -375,7 +377,7 @@ static void sort_columns_by_keys(
             for (j = i + 1; j < n && (k[j] >> 32) == (k[i] >> 32); ++j) {
             }
             if (j - i > 1) {
-                sort_r(hcm + i, (uint64_t)(j - i), sizeof(hi_t), hcm_cmp, sht);
+                sort_r(hcm + i, (uint64_t)(j - i), sizeof(hi_t), cmp, sht);
             }
         }
     }
@@ -394,7 +396,7 @@ static void sort_columns(
 
     if (sht->ebl == 0 && sht->mo == 0 && !sht->boolean && n >= 4096
             && (nthrds == 1 || n < 8192)) {
-        sort_columns_by_keys(hcm, n, sht);
+        sort_columns_by_keys(hcm, n, sht, 1, hcm_cmp);
         return;
     }
     if (nthrds == 1 || n < 8192) {
