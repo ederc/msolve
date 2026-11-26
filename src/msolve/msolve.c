@@ -2133,6 +2133,16 @@ static int32_t *initial_modular_step(
     check_and_set_linear_poly(nlins_ptr, linvars, lineqs_ptr, bs->ht,
                               leadmons[0], bs);
     if (has_dimension_zero(bs->lml, bs->ht->nv, leadmons[0])) {
+        if (print_gb) {
+            /* only the Groebner basis is asked for: the monomial basis
+             * of the quotient, whose enumeration may cost more than the
+             * basis itself, is not needed */
+            *dim       = 0;
+            *dquot_ori = -1;
+            free_basis_without_hash_table(&(bs));
+            free(bs);
+            return NULL;
+        }
         long dquot = 0;
         int32_t *lmb = monomial_basis(bs->lml, bs->ht->nv, leadmons[0], &dquot);
 
