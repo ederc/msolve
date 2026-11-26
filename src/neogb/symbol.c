@@ -626,9 +626,9 @@ static void select_tbr(
 /* Index for finding reducers: the lead monomials of the basis sorted by
  * increasing length of their elements and, for equal lengths, from the
  * newest element to the oldest one. Among all divisors of a monomial we
- * choose the one of shortest length, the newest one among the shortest
- * ones: this leads to sparser matrices. In the order of the index this is
- * the first divisor, so the search stops there. The lead monomials are
+ * choose one of shortest length: this leads to sparser matrices. In the
+ * order of the index the divisors of shortest length come first, see
+ * find_reducer() for the choice among them. The lead monomials are
  * filtered by their short divisor masks and by the masks of their
  * variables in blocks before their exponents are compared. */
 typedef struct
@@ -798,6 +798,44 @@ static len_t search_reducer(
     return 0;
 }
 
+/* the terms of a reducer, the highest ones, looked up in sht to compare
+ * it with the other reducers of the same length, see find_reducer() */
+#define RED_TERMS 32
+
+/* number of the first RED_TERMS terms of the multiple of b with lead
+ * monomial m which are not in sht, counting stops at bound */
+static len_t new_terms_of_multiple(
+        const hm_t *b,
+        const hm_t m,
+        const ht_t * const sht,
+        const ht_t * const bht,
+        exp_t *em,
+        const len_t bound
+        )
+{
+    len_t k, n = 0;
+    const len_t evl = bht->evl;
+    const exp_t *e  = sht->ev[m];
+    const exp_t *f  = bht->ev[b[OFFSET]];
+    for (k = 0; k < evl; ++k) {
+        em[k] = (exp_t)(e[k] - f[k]);
+    }
+    const val_t h  = sht->hd[m].val - bht->hd[b[OFFSET]].val;
+    const len_t len = b[LENGTH] < RED_TERMS ? b[LENGTH] + OFFSET
+        : RED_TERMS + OFFSET;
+    for (k = OFFSET + 1; k < len && n < bound; ++k) {
+        if (find_multiplied_in_hash_table(h + bht->hd[b[k]].val, em,
+                    bht->ev[b[k]], sht) == 0) {
+            n++;
+        }
+    }
+    return n;
+}
+
+/* the most divisors of the shortest length compared for a column, see
+ * find_reducer() */
+#define RED_TIES 8
+
 static inline len_t find_reducer(
         const bs_t * const bs,
         const red_idx_t * const ri,
@@ -805,8 +843,59 @@ static inline len_t find_reducer(
         const ht_t * const sht
         )
 {
-    (void)bs;
-    return search_reducer(ri, sht->hd[m].sdm, sht->ev[m]);
+    if (sht->cl != NULL) {
+        return search_reducer(ri, sht->hd[m].sdm, sht->ev[m]);
+    }
+    /* the divisors of the shortest length, up to RED_TIES of them; of
+     * these the one whose multiple adds the fewest monomials new to the
+     * matrix, ties to the newest one. Which of equally short reducers is
+     * best differs from system to system (the newest one, the oldest
+     * one), the number of new monomials decides it for each column. */
+    len_t l0, k;
+    const len_t n     = ri->n;
+    const len_t evl   = ri->evl;
+    const sdm_t ns    = ~sht->hd[m].sdm;
+    const exp_t *e    = sht->ev[m];
+    const uint64_t nv = ~reducer_variable_mask(e, evl, ri->ebl);
+    len_t cand[RED_TIES];
+    len_t nc = 0, clen = 0;
+    for (l0 = 0; l0 < n && nc < RED_TIES; l0 += 64) {
+        uint64_t bits = reducer_candidates(ri, l0,
+                n - l0 < 64 ? n : l0 + 64, ns, nv);
+        while (bits != 0 && nc < RED_TIES) {
+            const len_t l = l0 + (len_t)__builtin_ctzll(bits);
+            bits &= bits - 1;
+            const exp_t * const f = ri->ev + (unsigned long)l * evl;
+            for (k = 0; k < evl; ++k) {
+                if (e[k] < f[k]) {
+                    break;
+                }
+            }
+            if (k == evl) {
+                const len_t len = bs->hm[bs->lmps[ri->pos[l]]][LENGTH];
+                if (nc > 0 && len != clen) {
+                    l0 = n;
+                    break;
+                }
+                clen = len;
+                cand[nc++] = ri->pos[l];
+            }
+        }
+    }
+    if (nc <= 1) {
+        return nc == 0 ? 0 : cand[0] + 1;
+    }
+    exp_t em[evl];
+    len_t best = cand[0], bn = (len_t)-1;
+    for (k = 0; k < nc; ++k) {
+        const len_t c = new_terms_of_multiple(bs->hm[bs->lmps[cand[k]]],
+                m, sht, bs->ht, em, bn);
+        if (c < bn) {
+            bn   = c;
+            best = cand[k];
+        }
+    }
+    return best + 1;
 }
 
 static void symbolic_preprocessing(
