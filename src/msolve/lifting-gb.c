@@ -963,16 +963,28 @@ static void apply_in_parallel(bs_t *bs_qq, md_t *st, const uint64_t *p,
   The trace of a signature-based run is applied at each prime more slowly
   than a trace learned by F4, but is learned faster. Where many primes are
   needed, see SIG_RELEARN, a trace is learned by F4 at the prime fc and
-  replaces it from then on. The new trace is taken only if the leading
+  replaces it from then on. F4 is guided by the signature-based run, see
+  guided_trace_learning(): it only reduces the S-pairs whose lcms are lead
+  terms of the run, until the lead terms sref[0], ..., sref[nsref-1] of
+  its basis are reached. The new trace is taken only if the leading
   monomials of its basis are those of the basis learned first, nlm
   exponent vectors of nv variables in lmo. Returns 1 if it is taken.
  */
 static int relearn_by_f4(bs_t *bs_qq, md_t *st, const uint32_t fc,
-                         const int32_t *lmo, const int32_t nlm){
+                         const int32_t *lmo, const int32_t nlm,
+                         const hm_t *sref, const len_t nsref){
   trace_t *old = st->tr;
   const int32_t osig  = neogb_sig_f4;
   const int ofr       = st->f4_qq_round;
   const int32_t oinfo = st->info_level;
+  if(sref != NULL){
+    st->glcm  = sig_record_lead_terms(old->sgr, bs_qq->ht, &(st->nglcm));
+    st->ngref = nsref;
+    st->gref  = (hm_t *)malloc((size_t)(nsref + 1) * sizeof(hm_t));
+    memcpy(st->gref, sref, (size_t)nsref * sizeof(hm_t));
+    st->gcov  = (int8_t *)calloc((size_t)nsref + 1, sizeof(int8_t));
+    st->gchk  = 0;
+  }
   st->tr          = NULL;
   st->trace_level = NO_TRACER;
   st->f4_qq_round = 1;
@@ -980,6 +992,14 @@ static int relearn_by_f4(bs_t *bs_qq, md_t *st, const uint32_t fc,
   neogb_sig_f4    = 0;
   int32_t err = 0;
   bs_t *bs = core_gba(bs_qq, st, &err, fc);
+  free(st->glcm);
+  free(st->gref);
+  free(st->gcov);
+  st->glcm  = NULL;
+  st->nglcm = 0;
+  st->gref  = NULL;
+  st->ngref = 0;
+  st->gcov  = NULL;
   neogb_sig_f4    = osig;
   st->f4_qq_round = ofr;
   st->info_level  = oinfo;
@@ -1019,7 +1039,9 @@ static int32_t gb_modular_trace_learning(gb_modpoly_t modgbs,
                                            int truncate_lifting,
                                            int32_t start,
                                            int32_t maxbitsize,
-                                           int *success)
+                                           int *success,
+                                           hm_t **sref,
+                                           len_t *nsref)
 {
     double ca0/*, rt*/;
     ca0 = realtime();
@@ -1046,6 +1068,18 @@ static int32_t gb_modular_trace_learning(gb_modpoly_t modgbs,
     st->learning_rtime = realtime()-ca0;
 
     ht_t *bht = bs->ht;
+
+    /* the lead terms of a basis learned by a signature-based run */
+    free(*sref);
+    *sref  = NULL;
+    *nsref = 0;
+    if(st->tr != NULL && st->tr->sgr != NULL){
+      *nsref = bs->lml;
+      *sref  = (hm_t *)malloc((size_t)(bs->lml + 1) * sizeof(hm_t));
+      for(len_t i = 0; i < bs->lml; i++){
+        (*sref)[i] = bs->hm[bs->lmps[i]][OFFSET];
+      }
+    }
 
     /* Leading monomials from Grobner basis */
     int32_t *bexp_lm = get_lm_from_bs(bs, bht);
@@ -2217,6 +2251,10 @@ gb_modpoly_t *core_groebner_qq(
         const int print_gb
         )
 {
+  /* the lead terms of the basis learned by a signature-based run, which
+     guide the learning by F4 replacing its trace, see relearn_by_f4() */
+  hm_t *sref  = NULL;
+  len_t nsref = 0;
 
 restart:
 
@@ -2293,13 +2331,14 @@ restart:
                                                  truncate_lifting,
                                                  0,
                                                  maxbitsize,
-                                                 &success);
+                                                 &success, &sref, &nsref);
     if(is_empty == 1 || print_gb == 1 || (*modgbsp)->ld == 0){
       if(dlinit){
         data_lift_clear(dlift);
       }
       free_rrec_data(recdata1);
       free_rrec_data(recdata2);
+      free(sref);
 
       return modgbsp;
     }
@@ -2428,7 +2467,7 @@ restart:
          && tsig >= SIG_RELEARN * tlearn){
         relearned = 1;
         if(relearn_by_f4(bs, st, msd->lp->p[0], msd->leadmons_ori[0],
-                         msd->num_gb[0])){
+                         msd->num_gb[0], sref, nsref)){
           if(info_level > 1){
             fprintf(VERBSTREAM, "(F4 trace)");
           }
@@ -2803,6 +2842,7 @@ restart:
 
   free_rrec_data(recdata1);
   free_rrec_data(recdata2);
+  free(sref);
 
   return modgbsp;
 }
