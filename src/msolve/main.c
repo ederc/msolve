@@ -268,10 +268,11 @@ static inline void display_help(char *str){
   display_option_help(0, "gb-lifting", "GBL", "Lifting of Groebner bases over the rationals\n");
   display_option_help_noopt("from their images modulo primes.\n");
   display_option_help_noopt("0 - CRT and rational reconstruction of each\n");
-  display_option_help_noopt("    coefficient (default).\n");
+  display_option_help_noopt("    coefficient.\n");
   display_option_help_noopt("1 - mixed radix digits of the coefficients times\n");
   display_option_help_noopt("    their common denominator, rational\n");
-  display_option_help_noopt("    reconstruction only for new denominators.\n");
+  display_option_help_noopt("    reconstruction only for new denominators\n");
+  display_option_help_noopt("    (default).\n");
   display_option_help(0, "random-seed", "SEED", "Random seed to initialize the pseudo-random\n");
   display_option_help_noopt("generator.\n");
   display_option_help_noopt("-1       - time(0) will be used (default).\n");
@@ -606,7 +607,7 @@ static void getoptions(
     case GB_LIFTING_OPTION:
       msolve_gb_lifting = strtol(optarg, NULL, 10);
       if (msolve_gb_lifting < 0 || msolve_gb_lifting > 1) {
-          msolve_gb_lifting = 0;
+          msolve_gb_lifting = 1;
       }
       break;
     /* Below is the template for the next long option with

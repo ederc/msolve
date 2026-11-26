@@ -37,8 +37,8 @@
 /* lifting of the polynomials whose witness coefficients are lifted, see
    the option --gb-lifting: 0 by multi-modular CRT and rational
    reconstruction of each coefficient, 1 by the mixed radix digits of the
-   coefficients times their common denominator */
-int32_t msolve_gb_lifting = 0;
+   coefficients times their common denominator (default) */
+int32_t msolve_gb_lifting = 1;
 /* number of products of the first primes kept by this lifting (their
    memory grows with the square of their number) */
 #define MR_PRODUCTS 2048

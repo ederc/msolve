@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 
-# Groebner bases over Q lifted from their images modulo primes by the
-# mixed radix digits of the coefficients (--gb-lifting 1) must be the
-# same as with the default lifting.
+# Groebner bases over Q lifted from their images modulo primes by CRT
+# and rational reconstruction of each coefficient (--gb-lifting 0) must
+# be the same as with the default lifting by the mixed radix digits of
+# the coefficients.
 
 source test/diff/diff_source.sh
 
 for file in kat7-qq cyclic5-qq henrion5-qq bug-2nd-prime-bad; do
     $(pwd)/msolve -f input_files/$file.ms -o test/diff/$file.gbl.res \
           --random-seed $seed \
-          --gb-lifting 1 \
+          --gb-lifting 0 \
           -g 2 -t 1
     if [ $? -gt 0 ]; then
         rm -f test/diff/$file.gbl.res
