@@ -411,11 +411,17 @@ static int32_t echelonize_input_generators(
     mat->nc = mat->ncl + mat->ncr;
 
     /* the echelon form is not part of the trace, each prime computes it,
-     * the lead terms are compared below */
+     * the lead terms are compared below. Its rows are taken in the order
+     * of the generators whose rows won their pivots, which depends on the
+     * order of the reductions in parallel, so it is computed with one
+     * thread: the order must be the same at all primes. */
     const tl_t tl   = md->trace_level;
+    const int32_t nt = md->nthrds;
     md->trace_level = NO_TRACER;
+    md->nthrds      = 1;
     linear_algebra(mat, bs, bs, md);
     md->trace_level = tl;
+    md->nthrds      = nt;
     if (md->info_level > 1) {
         fprintf(VERBSTREAM, "\n");
     }
