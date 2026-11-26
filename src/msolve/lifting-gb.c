@@ -33,10 +33,17 @@
 /* a trace of a signature-based run is replaced by a trace learned by F4
    once its applications took SIG_RELEARN times its learning */
 #define SIG_RELEARN 2
-/* ~61-bit primes are taken if the trace is applied at one in less than
-   SIG_PROBE_WIDE times the time at a ~31-bit prime: they give about
-   twice the bits */
-#define SIG_PROBE_WIDE 1.9
+/* The wide primes of the application phase lie in [2^b, 2^(b+1)): the
+   traces of F4 are applied at primes below 2^52 by vector kernels, see
+   la_ff_64.c, so b = F4_WIDE_BITS for them; the traces of the
+   signature-based F4 are applied by the same scalar arithmetic at all
+   primes below 2^62, so b = SIG_WIDE_BITS for them. */
+#define F4_WIDE_BITS  51
+#define SIG_WIDE_BITS 61
+/* wide primes are taken if the trace is applied at one in less than
+   WIDE_FACTOR(b) times the time at a ~31-bit prime: they give about b/30
+   times the bits */
+#define WIDE_FACTOR(b) (0.94 * (b) / 30)
 
 /* lifting of the polynomials whose witness coefficients are lifted, see
    the option --gb-lifting: 0 by multi-modular CRT and rational
@@ -66,7 +73,7 @@ typedef struct{
    * polynomial has been lifted and checked. */
   uint32_t *cf_32;
   /* 64-bit residues, same layout as cf_32; only used when the lifting walks
-   * 61-bit application primes (modgbs->wide). When it is allocated the
+   * wide application primes (modgbs->wide). When it is allocated the
    * former cf_32 images have been migrated into it (and cf_32 freed). */
   uint64_t *cf_64;
   /* len integer numerators of the lifted coefficients; they all share the
@@ -702,7 +709,7 @@ static inline int modpgbs_set(gb_modpoly_t modgbs,
   modgbs->primes[modgbs->nprimes] = fc;
 
   if(fc > UINT32_MAX && !modgbs->wide){
-    /* first image at a 61-bit prime: the residues read so far (the image
+    /* first image at a wide prime: the residues read so far (the image
      * modulo the learning prime) are widened once, cf_32 is freed and all
      * further images are stored (and read) wide */
     modgbs->wide = 1;
@@ -763,7 +770,7 @@ static inline int modpgbs_set(gb_modpoly_t modgbs,
         }
       }
       else{
-        /* an image at a ~31-bit prime after images at 61-bit primes */
+        /* an image at a ~31-bit prime after images at wide primes */
         const uint32_t * const cfs = bs->cf_32[bs->hm[idx][COEFFS]];
         for (j = 1; j < len; ++j) {
           MODCF64(modgbs->modpolys[i], bc, modgbs->nprimes) = cfs[j];
@@ -946,9 +953,9 @@ static bs_t *guided_trace_learning(bs_t *bs_qq, md_t *st, const int32_t fc,
   Applies the trace at the n primes p in parallel, one thread for each,
   each with its own copy of the hash table of bs_qq. The bases go to out,
   NULL for a bad prime, the times of the applications to t if it is not
-  NULL. If h > 0, the first h primes are ~31-bit and the others ~61-bit
+  NULL. If h > 0, the first h primes are ~31-bit and the others wide
   ones: once the applications at the ~31-bit primes are done, those at
-  the others are given up where they take SIG_PROBE_WIDE times their
+  the others are given up where they take wf times their
   mean time and their remaining time is estimated to take longer than
   an application at a ~31-bit prime, then the ~31-bit primes are taken,
   see core_groebner_qq(), and gu[l] is set for such a prime. Returns the
@@ -956,7 +963,7 @@ static bs_t *guided_trace_learning(bs_t *bs_qq, md_t *st, const int32_t fc,
  */
 static int apply_in_parallel(bs_t *bs_qq, md_t *st, const uint64_t *p,
                              const int n, bs_t **out, double *t,
-                             const int h, int *gu){
+                             const int h, int *gu, const double wf){
   st->info_level  = 0;
   st->f4_qq_round = 2;
   st->share_ht    = 0;
@@ -991,7 +998,7 @@ static int apply_in_parallel(bs_t *bs_qq, md_t *st, const uint64_t *p,
            the start of the batch */
         if(++done == h && good > 0){
           deadline[1] = sum / good;
-          deadline[0] = t0 + SIG_PROBE_WIDE * deadline[1];
+          deadline[0] = t0 + wf * deadline[1];
         }
       }
     }
@@ -1588,7 +1595,7 @@ static inline int crt_ratrecon_lift_modgbs(gb_modpoly_t modgbs, data_lift_t dl,
   residues of c * d, and x is known as soon as its digits become 0
   (x >= 0) resp. p_i - 1 (x < 0): lifting c costs as many primes as x has
   bits, not the product of all primes. At least 60 bits of digits are
-  required to stop, i.e. one digit at a 61-bit prime, two at a 31-bit
+  required to stop, i.e. one digit at a wide prime, two at a 31-bit
   one. Where x is not found with all primes, i.e. where the denominator
   of c has a new factor, c * d is lifted by rational reconstruction, which
   extends d.
@@ -1706,7 +1713,8 @@ static int lift_poly_mr(gb_modpoly_t modgbs, data_lift_t dl, const int32_t k,
         v = shoup_mod_mul(pinv[i], pinvs[i], v, p);
         if(i > 0 && (v == 0 || v == p - 1)){
           const int s = v != 0;
-          bits = s == sgn ? bits + (p >> 32 ? 61 : 30) : (p >> 32 ? 61 : 30);
+          const int pb = 63 - __builtin_clzll(p);
+          bits = s == sgn ? bits + pb : pb;
           sgn = s;
         }
         else{
@@ -2330,7 +2338,7 @@ restart:
   uint32_t prime = 0;
   uint32_t primeinit = 0;
   uint32_t lprime = 1303905299;
-  /* application prime when the signature record is replayed at 61-bit
+  /* application prime when the signature record is replayed at wide
    * primes (only used then) */
   uint64_t prime64 = 0;
 
@@ -2455,26 +2463,31 @@ restart:
     learn = 0;
     /* The trace, of F4 or of a signature-based run, is applied at two
      * ~31-bit primes, the first one warming up the data, and then at a
-     * 61-bit prime, and the walk goes on with the primes of the size
-     * which gives more bits of the coefficients per second: a 61-bit
-     * prime gives about twice the bits, but the linear algebra at 61-bit
-     * primes is slower for denser matrices. The time at the 61-bit prime
+     * wide prime, see F4_WIDE_BITS, and the walk goes on with the primes
+     * of the size which gives more bits of the coefficients per second: a
+     * wide prime gives up to twice the bits, but the linear algebra at
+     * wide primes is slower for denser matrices. The time at the wide prime
      * includes the widening of the images stored so far, which keeps the
      * decision on the side of the ~31-bit primes. */
     int wide_walk = 0;
     /* 0, 1, 2: the probe applications of the trace, 3: decided */
     int probe = 0;
     double tprobe[2] = {0, 0};
+    /* the size of the wide primes, see F4_WIDE_BITS */
+    int wbits = st->tr != NULL && st->tr->sgr != NULL
+      ? SIG_WIDE_BITS : F4_WIDE_BITS;
+    uint64_t wlo = (uint64_t)1 << wbits;
+    uint64_t whi = (uint64_t)1 << (wbits + 1);
     {
-      /* seed a random prime in [2^61, 2^62) from two rand() calls */
+      /* seed a random wide prime from two rand() calls */
       uint64_t r = ((uint64_t)rand() << 31) | (uint64_t)rand();
-      prime64 = ((uint64_t)1 << 61) + r % ((uint64_t)1 << 61);
+      prime64 = wlo + r % wlo;
       prime64 = next_prime_64(prime64);
     }
     prime = next_prime(rand() % (1303905301 - (1<<30) + 1) + (1<<30));
     if(info_level){
         if(wide_walk){
-          printf("application phase at 61-bit primes\n");
+          printf("application phase at %d-bit primes\n", wbits);
           fflush(stdout);
           fprintf(VERBSTREAM, "New prime = %lu\n", (unsigned long)prime64);
         }
@@ -2505,8 +2518,8 @@ restart:
     uint64_t *mpr = (uint64_t *)calloc((size_t)qsz, sizeof(uint64_t));
     int mld = 0, mnx = 0;
     /* the time of such a pass, -1 before the first one, whether passes
-       are not possible, and the primes used so far, those of 61 bits
-       counted twice */
+       are not possible, and the primes used so far, in units of ~31-bit
+       primes */
     double tpass = -1;
     /* with several threads, the primes are applied in parallel instead */
     int multi_off = !msolve_multi_primes || par > 1;
@@ -2528,10 +2541,15 @@ restart:
           if(info_level > 1){
             fprintf(VERBSTREAM, "(F4 trace)");
           }
-          /* the probes are done again for the new trace */
+          /* the probes are done again for the new trace, at the wide
+             primes for traces of F4 */
           probe     = 0;
           tprobe[0] = tprobe[1] = 0;
           tpass     = -1;
+          wbits     = F4_WIDE_BITS;
+          wlo       = (uint64_t)1 << wbits;
+          whi       = (uint64_t)1 << (wbits + 1);
+          prime64   = next_prime_64(wlo + (prime64 % wlo));
         }
       }
       if(probe < 3){
@@ -2549,7 +2567,7 @@ restart:
       int multi_now = 0;
       if(!queued && probe >= 3 && !multi_off && tprobe[0] > 0){
         const double unit = tprobe[1] > 0
-          ? MIN(tprobe[0], tprobe[1] / 2) : tprobe[0];
+          ? MIN(tprobe[0], tprobe[1] * 30 / wbits) : tprobe[0];
         const double tp = tpass >= 0 ? tpass
           : 0.6 * MULTI_PRIMES * tprobe[0];
         multi_now = tp < 0.9 * MULTI_PRIMES * unit && tp <= r31 * unit;
@@ -2562,19 +2580,19 @@ restart:
       }
       if(!queued && par_batch && probe == 1){
         /* the probes in parallel: the trace is applied at par-1 ~31-bit
-           primes and at one ~61-bit prime, one thread each, the mean
+           primes and at one wide prime, one thread each, the mean
            times of the good ones decide the size of the next primes */
         const int h = par - 1;
         for(int l = 0; l < par; l++){
           if(l >= h){
             prime64 = next_prime_64(prime64);
-            if(prime64 >= (uint64_t)1 << 62){
-              prime64 = next_prime_64((uint64_t)1 << 61);
+            if(prime64 >= whi){
+              prime64 = next_prime_64(wlo);
             }
             while(is_lucky_prime_u64(prime64, bs)){
               prime64 = next_prime_64(prime64);
-              if(prime64 >= (uint64_t)1 << 62){
-                prime64 = next_prime_64((uint64_t)1 << 61);
+              if(prime64 >= whi){
+                prime64 = next_prime_64(wlo);
               }
             }
             mpr[l] = prime64;
@@ -2597,7 +2615,8 @@ restart:
         int *gu    = (int *)calloc((size_t)par, sizeof(int));
         const double t0 = realtime();
         st->nthrds = 1;
-        const int ngu = apply_in_parallel(bs, st, mpr, par, mbs, tl, h, gu);
+        const int ngu = apply_in_parallel(bs, st, mpr, par, mbs, tl, h, gu,
+                                          WIDE_FACTOR(wbits));
         st->nthrds = par;
         const double tb = realtime() - t0;
         if(!relearned){
@@ -2622,17 +2641,17 @@ restart:
         tprobe[1] = n61 > 0 ? tprobe[1] / n61 : 0;
         /* bad primes say nothing about the times, then ~31-bit primes
            are kept as for the probes one after the other; the
-           applications at ~61-bit primes given up took too long */
+           applications at wide primes given up took too long */
         wide_walk = n31 > 0 && n61 > 0 && ngu == 0
-          && tprobe[1] < SIG_PROBE_WIDE * tprobe[0];
+          && tprobe[1] < WIDE_FACTOR(wbits) * tprobe[0];
         if(info_level > 1){
           if(ngu > 0){
-            fprintf(VERBSTREAM, "(31-bit primes: %.3f s at 31 bits, 61 bits given up, %d threads)",
-                    tprobe[0], par);
+            fprintf(VERBSTREAM, "(31-bit primes: %.3f s at 31 bits, %d bits given up, %d threads)",
+                    tprobe[0], wbits, par);
           }
           else{
-            fprintf(VERBSTREAM, "(%s-bit primes: %.3f s at 31 bits, %.3f s at 61 bits, %d threads)",
-                    wide_walk ? "61" : "31", tprobe[0], tprobe[1], par);
+            fprintf(VERBSTREAM, "(%d-bit primes: %.3f s at 31 bits, %.3f s at %d bits, %d threads)",
+                    wide_walk ? wbits : 31, tprobe[0], tprobe[1], wbits, par);
           }
         }
         /* the primes given up are no bad primes, they leave the queue */
@@ -2660,13 +2679,13 @@ restart:
         for(int l = 0; l < par; l++){
           if(wide_walk){
             prime64 = next_prime_64(prime64);
-            if(prime64 >= (uint64_t)1 << 62){
-              prime64 = next_prime_64((uint64_t)1 << 61);
+            if(prime64 >= whi){
+              prime64 = next_prime_64(wlo);
             }
             while(is_lucky_prime_u64(prime64, bs)){
               prime64 = next_prime_64(prime64);
-              if(prime64 >= (uint64_t)1 << 62){
-                prime64 = next_prime_64((uint64_t)1 << 61);
+              if(prime64 >= whi){
+                prime64 = next_prime_64(wlo);
               }
             }
             mpr[l] = prime64;
@@ -2687,7 +2706,7 @@ restart:
         }
         const double t0 = realtime();
         st->nthrds = 1;
-        apply_in_parallel(bs, st, mpr, par, mbs, NULL, 0, NULL);
+        apply_in_parallel(bs, st, mpr, par, mbs, NULL, 0, NULL, 0);
         st->nthrds = par;
         const double tb = realtime() - t0;
         if(!relearned){
@@ -2707,15 +2726,15 @@ restart:
       else if(wide_walk && !multi_now){
         /* walk the primes in [2^61, 2^62), wrapping around at 2^62 */
         prime64 = next_prime_64(prime64);
-        if(prime64 >= (uint64_t)1 << 62){
-          prime64 = next_prime_64((uint64_t)1 << 61);
+        if(prime64 >= whi){
+          prime64 = next_prime_64(wlo);
         }
         /* generate lucky prime numbers; the learning prime is < 2^31 so
          * no primeinit duplicate check is needed here */
         while(is_lucky_prime_u64(prime64, bs)){
           prime64 = next_prime_64(prime64);
-          if(prime64 >= (uint64_t)1 << 62){
-            prime64 = next_prime_64((uint64_t)1 << 61);
+          if(prime64 >= whi){
+            prime64 = next_prime_64(wlo);
           }
         }
       }
@@ -2800,7 +2819,7 @@ restart:
       const int pre = mnx < mld;
       const uint64_t afc = pre ? mpr[mnx]
         : (wide_walk && !multi_now ? prime64 : (uint64_t)prime);
-      r31 += afc > UINT32_MAX ? 2 : 1;
+      r31 += afc > UINT32_MAX ? (double)(63 - __builtin_clzll(afc)) / 30 : 1;
       gb_modular_trace_application((*modgbsp), msd->mgb,
                                    msd->num_gb,
                                    msd->leadmons_ori,
@@ -2830,10 +2849,10 @@ restart:
           wide_walk = 0;
         }
         else if(++probe == 3){
-          wide_walk = tprobe[1] < SIG_PROBE_WIDE * tprobe[0];
+          wide_walk = tprobe[1] < WIDE_FACTOR(wbits) * tprobe[0];
           if(info_level > 1){
-            fprintf(VERBSTREAM, "(%s-bit primes: %.3f s at 31 bits, %.3f s at 61 bits)",
-                    wide_walk ? "61" : "31", tprobe[0], tprobe[1]);
+            fprintf(VERBSTREAM, "(%d-bit primes: %.3f s at 31 bits, %.3f s at %d bits)",
+                    wide_walk ? wbits : 31, tprobe[0], tprobe[1], wbits);
           }
         }
       }
