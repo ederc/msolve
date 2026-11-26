@@ -233,6 +233,11 @@ struct sg_row_t
                          * generator i */
     hm_t mul;           /* the multiplier in the basis hash table where the
                          * run is recorded */
+    hm_t *pr;           /* if not NULL, the remainder of a row to be
+                         * reduced modulo the reducer rows before it, with
+                         * its coefficients in pv, see
+                         * sg_reduce_by_reducers() */
+    cf32_t *pv;
 };
 
 /* The record of a run for the application at other primes: for each round
@@ -1461,6 +1466,8 @@ static sg_row_t sg_multiple(
     row.gen     = 0;
     row.src     = src;
     row.mul     = sg->rec != NULL ? sg_insert(em, bht) : 0;
+    row.pr      = NULL;
+    row.pv      = NULL;
     exp_t e[evl];
     if ((uint64_t)em[0] + bht->ev[el->sc][0] > EXP_MAX) {
         exponent_overflow();
@@ -1612,10 +1619,13 @@ static void sg_band_reduce(
     memset(rel, 0, sizeof(rel));
     for (b = 0; b < nb; ++b) {
         const sg_row_t * const row = rows + g[b];
-        const hm_t * const r = row->r + OFFSET;
-        const len_t len = row->r[LENGTH];
+        /* the row, or its remainder modulo the reducers before it */
+        const hm_t * const rh   = row->pr != NULL ? row->pr : row->r;
+        const cf32_t * const rc = row->pr != NULL ? row->pv : row->cf;
+        const hm_t * const r = rh + OFFSET;
+        const len_t len = rh[LENGTH];
         for (j = 0; j < len; ++j) {
-            bd[(unsigned long)r[j] * SG_BAND + b] = row->cf[j];
+            bd[(unsigned long)r[j] * SG_BAND + b] = rc[j];
         }
         if (r[0] < from) {
             from = r[0];
@@ -1751,6 +1761,126 @@ static void sg_band_reduce(
             x[b] = 0;
         }
     }
+}
+
+/* the least number of rows to be reduced in a round for which they are
+ * reduced by the reducer rows in parallel first, see
+ * sg_reduce_by_reducers() */
+#define SG_PAR_ROWS 16
+
+/* The rows to be reduced of a round are reduced in parallel by the reducer
+ * rows before them in the order of the round, each reducer row taken as
+ * the pivot of its lead column if it is the first reducer row with this
+ * lead column. In the reduction one row after the other, see sg_round(),
+ * each such reducer row is a pivot or reduces by the pivots before it, so
+ * it lies in the span of the pivots before the row to be reduced. Thus
+ * the remainder of this reduction, which is (pr, pv) of the row, reduced
+ * by these pivots there, gives the same result as the row itself: the
+ * remainder modulo pivots with distinct lead columns is unique. The rows
+ * whose reduction would exceed the multiply-adds wmax are left as they
+ * are. Returns 1 if the rows are reduced so: the reductions after it do
+ * not see all pivots the reduction one after the other uses. */
+static int sg_reduce_by_reducers(
+        sg_row_t *rows,
+        const len_t nr,
+        const len_t nc,
+        const uint64_t p,
+        const uint64_t big,
+        const int small,
+        uint8_t *used,
+        const uint64_t wmax,
+        uint64_t *nsubs,
+        const int nthrds
+        )
+{
+    len_t i, nt = 0;
+    for (i = 0; i < nr; ++i) {
+        nt += rows[i].reducer == 0;
+    }
+    if (nt < SG_PAR_ROWS) {
+        return 0;
+    }
+    /* the first reducer row of each lead column, with its position */
+    hm_t **pr     = (hm_t **)calloc((unsigned long)nc + 1, sizeof(hm_t *));
+    cf32_t **pv   = (cf32_t **)calloc((unsigned long)nc + 1, sizeof(cf32_t *));
+    len_t *ppos   = (len_t *)malloc((unsigned long)(nc + 1) * sizeof(len_t));
+    len_t *tbr    = (len_t *)malloc((unsigned long)nt * sizeof(len_t));
+    nt = 0;
+    for (i = 0; i < nr; ++i) {
+        const hm_t lc = rows[i].r[OFFSET];
+        if (rows[i].reducer) {
+            if (pr[lc] == NULL) {
+                pr[lc]   = rows[i].r;
+                pv[lc]   = (cf32_t *)rows[i].cf;
+                ppos[lc] = i;
+            }
+        } else {
+            tbr[nt++] = i;
+        }
+    }
+    volatile uint64_t done = *nsubs;
+#pragma omp parallel num_threads(nthrds)
+    {
+        uint64_t *dr = (uint64_t *)calloc((unsigned long)nc + 1, sizeof(uint64_t));
+        hm_t *nrow   = (hm_t *)malloc((unsigned long)(nc + OFFSET) * sizeof(hm_t));
+        cf32_t *ncf  = (cf32_t *)malloc((unsigned long)(nc + 1) * sizeof(cf32_t));
+        len_t t, j, k;
+#pragma omp for schedule(dynamic, 1)
+        for (t = 0; t < nt; ++t) {
+            if (done > wmax) {
+                continue;
+            }
+            const len_t ri = tbr[t];
+            sg_row_t *row  = rows + ri;
+            const hm_t * const r = row->r;
+            const len_t len = r[LENGTH];
+            for (j = 0; j < len; ++j) {
+                dr[r[OFFSET+j]] = row->cf[j];
+            }
+            uint64_t subs = 0;
+            len_t nl = 0;
+            for (k = r[OFFSET]; k < nc; ++k) {
+                if (dr[k] == 0) {
+                    continue;
+                }
+                const uint64_t v = dr[k] % p;
+                dr[k] = 0;
+                if (v == 0) {
+                    continue;
+                }
+                if (pr[k] == NULL || ppos[k] > ri) {
+                    nrow[OFFSET+nl] = k;
+                    ncf[nl++]       = (cf32_t)v;
+                    continue;
+                }
+                const len_t pl = pr[k][LENGTH];
+                sg_sub_row(dr, pr[k] + OFFSET, pv[k], pl, p - v, big, small);
+                if (used != NULL) {
+                    used[k] = 1;
+                }
+                subs += pl;
+            }
+            hm_t *h    = (hm_t *)malloc((unsigned long)(nl + OFFSET) * sizeof(hm_t));
+            cf32_t *c  = (cf32_t *)malloc((unsigned long)(nl + 1) * sizeof(cf32_t));
+            memcpy(h + OFFSET, nrow + OFFSET, (unsigned long)nl * sizeof(hm_t));
+            memcpy(c, ncf, (unsigned long)nl * sizeof(cf32_t));
+            h[LENGTH]  = nl;
+            h[PRELOOP] = nl % UNROLL;
+            row->pr = h;
+            row->pv = c;
+#pragma omp atomic
+            done += subs;
+        }
+        free(dr);
+        free(nrow);
+        free(ncf);
+    }
+    *nsubs = done;
+    free(pr);
+    free(pv);
+    free(ppos);
+    free(tbr);
+    return 1;
 }
 
 /* one round: returns the number of new elements, -1 if the basis holds a
@@ -2006,6 +2136,8 @@ static int64_t sg_round(
             row->gen     = 0;
             row->src     = ro[ws[j]];
             row->mul     = sg->rec != NULL ? sg_insert(q, bht) : 0;
+            row->pr      = NULL;
+            row->pv      = NULL;
             row->sm      = sg_insert(s, rst);
             row->id      = nr;
             nr++;
@@ -2136,6 +2268,9 @@ static int64_t sg_round(
      * recorded rows setting pivots */
     uint8_t *used = rd != NULL ? (uint8_t *)calloc((unsigned long)nc + 1, sizeof(uint8_t)) : NULL;
     len_t *kcol   = rd != NULL ? (len_t *)malloc((unsigned long)(nr + 1) * sizeof(len_t)) : NULL;
+    const int byred = md->nthrds > 1
+        && sg_reduce_by_reducers(rows, nr, nc, p, big, small, used, wmax,
+                &sg->nsubs, md->nthrds);
     for (i = 0; i < nr; ++i) {
         if (sg->nsubs > wmax) {
             stopped = 1;
@@ -2165,12 +2300,19 @@ static int64_t sg_round(
             row->r = NULL;
             continue;
         }
-        const len_t len = r[LENGTH];
+        /* the row, or its remainder modulo the reducers before it, see
+         * sg_reduce_by_reducers() */
+        const hm_t * const rr   = row->pr != NULL ? row->pr : r;
+        const cf32_t * const rv = row->pr != NULL ? row->pv : row->cf;
+        const len_t len = rr[LENGTH];
+        const hm_t lr   = len > 0 ? rr[OFFSET] : nc;
         const uint64_t subs0 = sg->nsubs;
         const int marked = counted >= 4 && passed > 2 * written;
         len_t nl = 0;
         int banded = 0;
-        if (bres_n != NULL && bres_n[i] != SG_NONE) {
+        if (len == 0) {
+            /* the row reduces to zero by the reducers before it */
+        } else if (bres_n != NULL && bres_n[i] != SG_NONE) {
             /* reduced in the band of an earlier row */
             nl = bres_n[i];
             memcpy(nrow + OFFSET, bres_c[i], (unsigned long)nl * sizeof(hm_t));
@@ -2193,6 +2335,9 @@ static int64_t sg_round(
                 }
                 const hm_t xc = x->r[OFFSET];
                 if (pc[xc] == NULL && x->reducer) {
+                    break;
+                }
+                if (x->pr != NULL && x->pr[LENGTH] == 0) {
                     break;
                 }
                 if (x->ix == rows[l-1].ix && x->sm == rows[l-1].sm) {
@@ -2244,13 +2389,13 @@ static int64_t sg_round(
                 mk = (uint64_t *)calloc((unsigned long)nmw, sizeof(uint64_t));
             }
             for (j = 0; j < len; ++j) {
-                const hm_t c = r[OFFSET+j];
-                dr[c] = row->cf[j];
+                const hm_t c = rr[OFFSET+j];
+                dr[c] = rv[j];
                 mk[c / 64] |= (uint64_t)1 << (c % 64);
             }
             /* the columns written are larger than the current one, so the
              * bits are read in increasing order */
-            len_t w = lc / 64;
+            len_t w = lr / 64;
             while (1) {
                 while (w < nmw && mk[w] == 0) {
                     ++w;
@@ -2283,9 +2428,9 @@ static int64_t sg_round(
             }
         } else {
             for (j = 0; j < len; ++j) {
-                dr[r[OFFSET+j]] = row->cf[j];
+                dr[rr[OFFSET+j]] = rv[j];
             }
-            for (k = lc; k < nc; ++k) {
+            for (k = lr; k < nc; ++k) {
                 if (dr[k] == 0) {
                     continue;
                 }
@@ -2307,7 +2452,7 @@ static int64_t sg_round(
                 sg->nsubs += pl;
             }
         }
-        passed  += nc - lc;
+        passed  += nc - lr;
         written += len + (sg->nsubs - subs0);
         if (++counted % 64 == 0) {
             passed  /= 2;
@@ -2416,10 +2561,12 @@ static int64_t sg_round(
         nn = 0;
     }
     if (rd != NULL) {
-        /* the rows setting pivots no reduction used are not recorded */
+        /* the rows setting pivots no reduction used are not recorded;
+         * after sg_reduce_by_reducers() this is not known, all of them
+         * are recorded */
         len_t m = 0;
         for (i = 0; i < rd->n; ++i) {
-            if (rd->kind[i] == 1 || used[kcol[i]]) {
+            if (rd->kind[i] == 1 || byred || used[kcol[i]]) {
                 rd->src[m]  = rd->src[i];
                 rd->mul[m]  = rd->mul[i];
                 rd->kind[m] = rd->kind[i];
@@ -2490,6 +2637,8 @@ static int64_t sg_round(
 
     for (i = 0; i < nr; ++i) {
         free(rows[i].r);
+        free(rows[i].pr);
+        free(rows[i].pv);
     }
     free(rows);
     free(mk);
@@ -3107,6 +3256,8 @@ static len_t sg_band_take(
         for (l = i; l < rd->n && nb < SG_BAND && rd->kind[l] == 1; ++l) {
             br[nb].r  = rows[l];
             br[nb].cf = rcf[l];
+            br[nb].pr = NULL;
+            br[nb].pv = NULL;
             g[nb]     = nb;
             nb++;
         }
