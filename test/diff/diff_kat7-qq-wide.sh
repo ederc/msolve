@@ -9,10 +9,10 @@
 # 2. the diagnostics contain the line of the probe, which applies the
 #    record at a 61-bit prime: "...-bit primes: ... at 61 bits".
 #
-# The record is only learned for --signature-f4 > 0: with the default
-# signature-based F4 handover policy (-1) no record is ever attached to
-# the tracer during QQ learning, so the wide walk can never start.  We
-# use kat7-qq with --signature-f4 1: kat7's record replays cleanly at
+# The record is learned for --signature-f4 > 0 and by default for -g:
+# with -1 no record is ever attached to the tracer during QQ learning,
+# so the wide walk can never start.  We use kat7-qq with --signature-f4 1
+# set explicitly: kat7's record replays cleanly at
 # 61-bit primes (cyclic5's does not yet, see the Task 4 ruling in
 # .superpowers/sdd/2026-11-21-61bit-sigf4-replay/progress.md).
 

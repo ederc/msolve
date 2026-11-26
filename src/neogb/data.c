@@ -23,8 +23,10 @@
 
 /* -1: the signature-based F4 is used for Groebner bases over prime fields
  * computed without a trace, 0: not used, 1: also for learning traces,
- * 2: as 1 without handing over to F4 (for testing) */
-int32_t neogb_sig_f4 = -1;
+ * 2: as 1 without handing over to F4 (for testing), SIG_F4_DEFAULT: as -1,
+ * and as 1 for the traces of Groebner bases over the rationals, see
+ * core_groebner_qq() */
+int32_t neogb_sig_f4 = SIG_F4_DEFAULT;
 
 /* functions */
 /* bs_t *initialize_basis(

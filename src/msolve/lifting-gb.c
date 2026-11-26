@@ -886,9 +886,10 @@ static int same_reduced_basis(const bs_t * const a, const bs_t * const b){
  */
 static bs_t *guided_trace_learning(bs_t *bs_qq, md_t *st, const int32_t fc,
                                    const int info_level, int32_t *errp){
+  const int32_t osig = neogb_sig_f4;
   neogb_sig_f4 = 1;
   bs_t *ref = core_gba(bs_qq, st, errp, fc);
-  neogb_sig_f4 = -1;
+  neogb_sig_f4 = osig;
   if(*errp == 0 && ref != NULL && (st->tr == NULL || st->tr->sgr == NULL)){
     /* the signature-based run has handed over to F4, which has learned
        the trace */
@@ -1057,7 +1058,14 @@ static int32_t gb_modular_trace_learning(gb_modpoly_t modgbs,
       bs = guided_trace_learning(bs_qq, st, fc, info_level, &err);
     }
     else{
+      /* by default the trace is learned by the signature-based F4, see
+         relearn_by_f4() for traces applied at many primes */
+      const int32_t osig = neogb_sig_f4;
+      if(neogb_sig_f4 == SIG_F4_DEFAULT){
+        neogb_sig_f4 = 1;
+      }
       bs = core_gba(bs_qq, st, &err, fc);
+      neogb_sig_f4 = osig;
     }
     if (err) {
       fprintf(ERRSTREAM,"Problem with F4, stopped computation.\n");

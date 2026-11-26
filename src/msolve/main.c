@@ -257,7 +257,7 @@ static inline void display_help(char *str){
   display_option_help(0, "signature-f4", "SIG", "Computes Groebner bases in DRL over prime fields\n");
   display_option_help_noopt("below 2^31 by a signature-based F4 first, which\n");
   display_option_help_noopt("hands over to F4 where it does not pay off.\n");
-  display_option_help_noopt("-1 - where no trace is learned (default).\n");
+  display_option_help_noopt("-1 - where no trace is learned.\n");
   display_option_help_noopt("0  - no.\n");
   display_option_help_noopt("1  - yes, also learning traces over the rationals.\n");
   display_option_help_noopt("2  - as 1, without handing over (for testing).\n");
@@ -265,6 +265,8 @@ static inline void display_help(char *str){
   display_option_help_noopt("     learned by F4 selecting the S-pairs which\n");
   display_option_help_noopt("     do not reduce to zero in a signature-based\n");
   display_option_help_noopt("     run.\n");
+  display_option_help_noopt("By default as -1, and as 1 for Groebner bases over\n");
+  display_option_help_noopt("the rationals (option -g).\n");
   display_option_help(0, "gb-lifting", "GBL", "Lifting of Groebner bases over the rationals\n");
   display_option_help_noopt("from their images modulo primes.\n");
   display_option_help_noopt("0 - CRT and rational reconstruction of each\n");
@@ -601,7 +603,7 @@ static void getoptions(
           neogb_sig_f4 = -1;
       }
       if (neogb_sig_f4 < -1 || neogb_sig_f4 > 2) {
-          neogb_sig_f4 = -1;
+          neogb_sig_f4 = SIG_F4_DEFAULT;
       }
       break;
     case GB_LIFTING_OPTION:

@@ -598,6 +598,8 @@ struct md_t
  *         const int32_t ngens
  *         ); */
 /* 1 if the signature-based F4 is tried first, see sigf4.c */
+/* the default of neogb_sig_f4, see data.c */
+#define SIG_F4_DEFAULT -2
 extern int32_t neogb_sig_f4;
 
 extern void normalize_initial_basis(
