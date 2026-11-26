@@ -473,6 +473,7 @@ struct sg_t
     uint64_t *pw;       /* packed lead term and packed module monomial of
                          * the signature of each element */
     int wide;           /* 1 if a degree passes SG_LMAX */
+    int nthrds;         /* threads forming the S-pairs, see sg_new_pairs() */
     len_t trisz;
 };
 
@@ -633,6 +634,26 @@ static inline int sg_is_syzygy(
                 }
             }
             ((sg_t *)sg)->syzhit[ix] = f;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* sg_is_syzygy() without reordering the syzygies, for several threads */
+static inline int sg_is_syzygy_ro(
+        const sg_t * const sg,
+        const len_t ix,
+        const uint64_t * const w
+        )
+{
+    len_t i;
+    const len_t nw  = sg->nw;
+    const sg_syz_t * const s = sg->syz + ix;
+    const uint64_t nm = ~sg_mask(w, sg->bht->nv);
+    for (i = 0; i < s->ld; ++i) {
+        if (!(s->m[i] & nm)
+                && sg_divides_packed(s->w + (unsigned long)i * nw, w, nw)) {
             return 1;
         }
     }
@@ -933,6 +954,169 @@ static inline void sg_tri_set(
     sg->tri[a][b / 64] |= (uint64_t)1 << (b % 64);
 }
 
+/* whether a base divisor eliminates the S-pair of n and i, see
+ * sg_new_pairs() */
+static inline int sg_base_divisor_eliminates(
+        const sg_t * const sg,
+        const len_t n,
+        const len_t i,
+        const len_t high,
+        const len_t bd,
+        const exp_t * const v
+        )
+{
+    len_t j;
+    const ht_t * const ht = sg->bht;
+    const len_t evl = ht->evl;
+    if (high != n && i != high && sg->e[i].tau > sg->e[high].tau
+            && sg->e[i].tau > sg->e[n].tau && sg_tri_get(sg, high, i)) {
+        return 1;
+    }
+    if (bd != n && i != bd && sg->e[i].tau < sg->e[bd].tau
+            && sg->e[i].tau < sg->e[n].tau && sg_tri_get(sg, bd, i)) {
+        const exp_t * const elg = ht->ev[sg->e[i].p[OFFSET]];
+        for (j = 1; j < evl; ++j) {
+            if (elg[j] > v[j]) {
+                break;
+            }
+        }
+        if (j == evl) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* enters the S-pair of n and i of signature (ix, sm) which is no known
+ * syzygy signature: as a syzygy signature for coprime leading monomials,
+ * otherwise as a pending signature; esm and sc are scratch vectors */
+static inline void sg_enter_pair(
+        sg_t *sg,
+        const len_t n,
+        const len_t i,
+        const len_t ix,
+        const uint64_t * const sm,
+        const int coprime,
+        exp_t *esm,
+        exp_t *sc
+        )
+{
+    len_t j;
+    const ht_t * const ht = sg->bht;
+    const len_t evl = ht->evl;
+    if (coprime) {
+        /* the signature of the Koszul syzygy of g and h */
+        sg->cnt_koszul++;
+        sg_add_syzygy(sg, ix, sm);
+        sg_tri_set(sg, n, i);
+        return;
+    }
+    sg->cnt_queued++;
+    sg_unpack(sm, esm, evl);
+    const exp_t * const lf = ht->ev[sg->g[ix].p[OFFSET]];
+    if ((uint64_t)esm[0] + lf[0] > EXP_MAX) {
+        exponent_overflow();
+    }
+    for (j = 0; j < evl; ++j) {
+        sc[j] = esm[j] + lf[j];
+    }
+    sg_add_pending(sg, ix, esm, sc);
+}
+
+/* the least number of earlier elements for which the S-pairs of a new
+ * element are formed by several threads */
+#define SG_PAIRS_PAR 1024
+
+/* sg_new_pairs() for the S-pairs of n with the elements before it by
+ * several threads: they are classified in parallel against the syzygy
+ * signatures known before, then they are entered one after the other,
+ * tested only against the syzygy signatures entered meanwhile, as when
+ * they are formed one after the other */
+static void sg_new_pairs_par(
+        sg_t *sg,
+        const len_t n,
+        const len_t high,
+        const len_t bd,
+        const exp_t * const v
+        )
+{
+    len_t i, j;
+    const len_t nw  = sg->nw;
+    const len_t evl = sg->bht->evl;
+    /* 0: eliminated by a base divisor, 1: singular, 2: syzygy signature,
+     * 3: to be entered */
+    int8_t *cls  = (int8_t *)malloc((unsigned long)n * sizeof(int8_t));
+    int8_t *cop  = (int8_t *)malloc((unsigned long)n * sizeof(int8_t));
+    len_t *pix   = (len_t *)malloc((unsigned long)n * sizeof(len_t));
+    uint64_t *pw = (uint64_t *)malloc((unsigned long)n * nw * sizeof(uint64_t));
+#pragma omp parallel for num_threads(sg->nthrds) schedule(dynamic, 256)
+    for (i = 0; i < n; ++i) {
+        uint64_t *sm = pw + (unsigned long)i * nw;
+        len_t ix;
+        int coprime;
+        if (sg_base_divisor_eliminates(sg, n, i, high, bd, v)) {
+            cls[i] = 0;
+        } else if (!sg_pair_signature(sg, n, i, &ix, sm, &coprime)) {
+            cls[i] = 1;
+        } else if (sg_is_syzygy_ro(sg, ix, sm)) {
+            cls[i] = 2;
+        } else {
+            cls[i] = 3;
+            cop[i] = (int8_t)coprime;
+            pix[i] = ix;
+        }
+    }
+    /* the Koszul syzygy signatures entered here, by index */
+    len_t nk = 0;
+    len_t *kix   = (len_t *)malloc((unsigned long)n * sizeof(len_t));
+    uint64_t *kw = (uint64_t *)malloc((unsigned long)n * nw * sizeof(uint64_t));
+    exp_t esm[evl], sc[evl];
+    sg->cnt_pairs += n;
+    for (i = 0; i < n; ++i) {
+        switch (cls[i]) {
+            case 0:
+                sg->cnt_base++;
+                sg_tri_set(sg, n, i);
+                continue;
+            case 1:
+                sg->cnt_singular++;
+                continue;
+            case 2:
+                sg->cnt_syz++;
+                sg_tri_set(sg, n, i);
+                continue;
+            default:
+                break;
+        }
+        const uint64_t * const sm = pw + (unsigned long)i * nw;
+        const uint64_t nm = ~sg_mask(sm, sg->bht->nv);
+        for (j = 0; j < nk; ++j) {
+            if (kix[j] == pix[i]
+                    && !(sg_mask(kw + (unsigned long)j * nw, sg->bht->nv) & nm)
+                    && sg_divides_packed(kw + (unsigned long)j * nw, sm, nw)) {
+                break;
+            }
+        }
+        if (j < nk) {
+            sg->cnt_syz++;
+            sg_tri_set(sg, n, i);
+            continue;
+        }
+        if (cop[i]) {
+            kix[nk] = pix[i];
+            memcpy(kw + (unsigned long)nk * nw, sm, (unsigned long)nw * sizeof(uint64_t));
+            nk++;
+        }
+        sg_enter_pair(sg, n, i, pix[i], sm, cop[i], esm, sc);
+    }
+    free(kix);
+    free(kw);
+    free(cls);
+    free(cop);
+    free(pix);
+    free(pw);
+}
+
 /* forms the S-pairs of the new element n with the elements before it.
  * The base divisor of n is the element of largest sig-lead ratio whose
  * signature divides the one of n. If the signature of the S-pair of the
@@ -1022,30 +1206,19 @@ static void sg_new_pairs(
         }
     }
 
+    if (sg->nthrds > 1 && n >= SG_PAIRS_PAR) {
+        sg_new_pairs_par(sg, n, high, bd, v);
+        return;
+    }
     for (i = 0; i < n; ++i) {
         sg->cnt_pairs++;
         /* the base divisors: the S-pair of the base divisor and i is
          * known to have a syzygy signature dividing the one of the S-pair
          * of n and i (roune-2012 §3.5, Theorems 7 and 8) */
-        if (high != n && i != high && sg->e[i].tau > sg->e[high].tau
-                && sg->e[i].tau > sg->e[n].tau && sg_tri_get(sg, high, i)) {
+        if (sg_base_divisor_eliminates(sg, n, i, high, bd, v)) {
             sg->cnt_base++;
             sg_tri_set(sg, n, i);
             continue;
-        }
-        if (bd != n && i != bd && sg->e[i].tau < sg->e[bd].tau
-                && sg->e[i].tau < sg->e[n].tau && sg_tri_get(sg, bd, i)) {
-            const exp_t * const elg = ht->ev[sg->e[i].p[OFFSET]];
-            for (j = 1; j < evl; ++j) {
-                if (elg[j] > v[j]) {
-                    break;
-                }
-            }
-            if (j == evl) {
-                sg->cnt_base++;
-                sg_tri_set(sg, n, i);
-                continue;
-            }
         }
         if (!sg_pair_signature(sg, n, i, &ix, sm, &coprime)) {
             sg->cnt_singular++;
@@ -1056,23 +1229,7 @@ static void sg_new_pairs(
             sg_tri_set(sg, n, i);
             continue;
         }
-        if (coprime) {
-            /* the signature of the Koszul syzygy of g and h */
-            sg->cnt_koszul++;
-            sg_add_syzygy(sg, ix, sm);
-            sg_tri_set(sg, n, i);
-            continue;
-        }
-        sg->cnt_queued++;
-        sg_unpack(sm, esm, evl);
-        const exp_t * const lf = ht->ev[sg->g[ix].p[OFFSET]];
-        if ((uint64_t)esm[0] + lf[0] > EXP_MAX) {
-            exponent_overflow();
-        }
-        for (j = 0; j < evl; ++j) {
-            sc[j] = esm[j] + lf[j];
-        }
-        sg_add_pending(sg, ix, esm, sc);
+        sg_enter_pair(sg, n, i, ix, sm, coprime, esm, sc);
     }
 }
 
@@ -2611,6 +2768,7 @@ static int sig_f4(
     sg_t sg;
     memset(&sg, 0, sizeof(sg_t));
     sg.bht  = bht;
+    sg.nthrds = md->nthrds;
     sg.sht  = md->ht;
     sg.rst  = initialize_secondary_hash_table(bht, md);
     sg.fc   = (uint32_t)md->fc;
