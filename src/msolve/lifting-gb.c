@@ -433,20 +433,31 @@ static inline void display_gbmodpoly_cf_32(FILE *file,
   fprintf(file, "]:\n");
 }
 
-static inline void display_modpoly(FILE *file,
-                                   gb_modpoly_t modgbs,
-                                   int32_t pos,
-                                   data_gens_ff_t *gens){
+/* writes the pos-th polynomial of modgbs: if head is set its leading term,
+   then its terms of the indices i with lo < i <= hi in the loop below,
+   i.e. 0 <= lo <= hi <= len for all its other terms */
+static inline void display_modpoly_part(FILE *file,
+                                        gb_modpoly_t modgbs,
+                                        int32_t pos,
+                                        data_gens_ff_t *gens,
+                                        const len_t lo,
+                                        const len_t hi,
+                                        const int head){
 
-  if(modgbs->modpolys[pos]->len == 0){
+  if(head){
+    if(modgbs->modpolys[pos]->len == 0){
+      display_monomial_single(file, gens, pos, &modgbs->ldm);
+      return;
+    }
+    if(mpz_cmp_ui(modgbs->modpolys[pos]->lm, 1) != 0){
+      mpz_out_str_10(file, modgbs->modpolys[pos]->lm);
+      fprintf(file, "*");
+    }
     display_monomial_single(file, gens, pos, &modgbs->ldm);
+  }
+  if(hi <= lo){
     return;
   }
-  if(mpz_cmp_ui(modgbs->modpolys[pos]->lm, 1) != 0){
-    mpz_out_str_10(file, modgbs->modpolys[pos]->lm);
-    fprintf(file, "*");
-  }
-  display_monomial_single(file, gens, pos, &modgbs->ldm);
 
   len_t i, k;
   hm_t *hm    = NULL;
@@ -478,7 +489,7 @@ static inline void display_modpoly(FILE *file,
    * written through a buffer */
   mpz_t *cf = modgbs->modpolys[pos]->cf_qq;
   obuf_t ob = {file, (char *)malloc(1 << 16), 0, 1 << 16};
-  for(i = modgbs->modpolys[pos]->len; i > 0 ; i--){
+  for(i = hi; i > lo ; i--){
     const len_t c = i - 1;
     const int sg = mpz_sgn(cf[c]);
     const exp_t * const e = ht->ev[hm[len-i]];
@@ -528,13 +539,34 @@ static inline void display_modpoly(FILE *file,
   free(evi);
 }
 
-/* the polynomials written at once by the threads of
-   display_gbmodpoly_cf_qq(), per thread */
-#define OUT_CHUNK 16
+static inline void display_modpoly(FILE *file,
+                                   gb_modpoly_t modgbs,
+                                   int32_t pos,
+                                   data_gens_ff_t *gens){
+  display_modpoly_part(file, modgbs, pos, gens, 0,
+                       modgbs->modpolys[pos]->len, 1);
+}
 
-/* With several threads the polynomials are written in chunks: each
-   thread writes its polynomials to a stream in memory, then the streams
-   go to file in the order of the polynomials. */
+/* a part of the output of display_gbmodpoly_cf_qq(): the terms lo < i <=
+   hi of the polynomial pos, see display_modpoly_part(), with its leading
+   term if head is set and followed by the separator if last is set */
+typedef struct{
+  int32_t pos;
+  len_t lo, hi;
+  int head, last;
+} out_part_t;
+
+/* the parts written at once by the threads of display_gbmodpoly_cf_qq(),
+   per thread, and the least estimated size of a part in bytes */
+#define OUT_CHUNK 16
+#define OUT_PART_MIN ((uint64_t)1 << 16)
+
+/* With several threads the basis is written in parts of about the same
+   size, estimated by the digits of the coefficients: large polynomials
+   are split into several parts, so that a few large polynomials, as for
+   bases in shape position, are written in parallel, too. The threads
+   write the parts of a chunk to streams in memory, then these go to file
+   in order. */
 static inline void display_gbmodpoly_cf_qq(FILE *file,
                                            gb_modpoly_t modgbs,
                                            data_gens_ff_t *gens,
@@ -545,7 +577,7 @@ static inline void display_gbmodpoly_cf_qq(FILE *file,
     return;
   }
   fprintf(file, "[");
-  if(nthrds <= 1 || p < 2 * nthrds){
+  if(nthrds <= 1){
     for(int i = 0; i < p-1; i++){
       display_modpoly(file, modgbs, i, gens);
       fprintf(file, ", \n");
@@ -553,21 +585,64 @@ static inline void display_gbmodpoly_cf_qq(FILE *file,
     display_modpoly(file, modgbs, p-1, gens);
   }
   else{
-    const int32_t cs = OUT_CHUNK * nthrds;
+    /* the estimated size of the output: the digits of each coefficient
+       and a few bytes for its monomial */
+    const uint64_t tb = 8 + 4 * (uint64_t)modgbs->bht->nv;
+    uint64_t tot = 0;
+    for(int32_t i = 0; i < p; i++){
+      const len_t l = modgbs->modpolys[i]->len;
+      for(len_t c = 0; c < l; c++){
+        tot += mpz_sizeinbase(modgbs->modpolys[i]->cf_qq[c], 10) + tb;
+      }
+    }
+    uint64_t target = tot / ((uint64_t)nthrds * OUT_CHUNK);
+    if(target < OUT_PART_MIN){
+      target = OUT_PART_MIN;
+    }
+    /* the parts: the terms of a polynomial are written from i = len
+       down to i = 1, coefficient i-1 */
+    int64_t np = 0, sz = 2 * (int64_t)p + 16;
+    out_part_t *pt = (out_part_t *)malloc((size_t)sz * sizeof(out_part_t));
+    for(int32_t i = 0; i < p; i++){
+      const len_t l = modgbs->modpolys[i]->len;
+      len_t hi = l;
+      int head = 1;
+      uint64_t w = 0;
+      for(len_t t = l; t > 0; t--){
+        w += mpz_sizeinbase(modgbs->modpolys[i]->cf_qq[t-1], 10) + tb;
+        if(w >= target && t > 1){
+          if(np == sz){
+            sz *= 2;
+            pt = (out_part_t *)realloc(pt, (size_t)sz * sizeof(out_part_t));
+          }
+          pt[np++] = (out_part_t){i, t-1, hi, head, 0};
+          hi   = t-1;
+          head = 0;
+          w    = 0;
+        }
+      }
+      if(np == sz){
+        sz *= 2;
+        pt = (out_part_t *)realloc(pt, (size_t)sz * sizeof(out_part_t));
+      }
+      pt[np++] = (out_part_t){i, 0, hi, head, i < p-1};
+    }
+    const int64_t cs = (int64_t)OUT_CHUNK * nthrds;
     char **buf  = (char **)calloc((size_t)cs, sizeof(char *));
     size_t *len = (size_t *)calloc((size_t)cs, sizeof(size_t));
-    for(int32_t lo = 0; lo < p; lo += cs){
-      const int32_t hi = lo + cs < p ? lo + cs : p;
+    for(int64_t lo = 0; lo < np; lo += cs){
+      const int64_t hi = lo + cs < np ? lo + cs : np;
 #pragma omp parallel for num_threads(nthrds) schedule(dynamic, 1)
-      for(int32_t i = lo; i < hi; i++){
+      for(int64_t i = lo; i < hi; i++){
         FILE *ms = open_memstream(buf + (i - lo), len + (i - lo));
-        display_modpoly(ms, modgbs, i, gens);
-        if(i < p-1){
+        display_modpoly_part(ms, modgbs, pt[i].pos, gens, pt[i].lo,
+                             pt[i].hi, pt[i].head);
+        if(pt[i].last){
           fprintf(ms, ", \n");
         }
         fclose(ms);
       }
-      for(int32_t i = lo; i < hi; i++){
+      for(int64_t i = lo; i < hi; i++){
         fwrite(buf[i - lo], 1, len[i - lo], file);
         free(buf[i - lo]);
         buf[i - lo] = NULL;
@@ -575,6 +650,7 @@ static inline void display_gbmodpoly_cf_qq(FILE *file,
     }
     free(buf);
     free(len);
+    free(pt);
   }
   fprintf(file, "]:\n");
 }
