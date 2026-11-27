@@ -2153,9 +2153,66 @@ static inline int verif_coef(mpz_t num, mpz_t den, uint64_t prime, uint64_t coef
 }
 
 
+/* returns 1 if the coefficients of the polynomial pol, lifted to the
+   rationals with the common denominator lm, agree with its image modulo
+   the prime of index np */
+static inline int verif_lifted_poly(gb_modpoly_t modgbs, modpolys_t *pol,
+                                    const uint32_t np){
+  const mp_limb_t prime = modgbs->primes[np];
+  /* all coefficients share the denominator lm */
+  uint64_t ilc = mpz_fdiv_ui(pol[0]->lm, prime);
+  ilc = mod_p_inverse_64((int64_t)ilc, (int64_t)prime);
+  const uint64_t ilcs = shoup_mu(prime, ilc);
+  for(int32_t c = 0; c < pol[0]->len; c++){
+    uint64_t v = mpz_fdiv_ui(pol[0]->cf_qq[c], prime);
+    v = shoup_mod_mul(ilc, ilcs, v, prime);
+    if(v != (modgbs->wide ?
+             MODCF64(pol[0], c, np) :
+             (uint64_t)MODCF(pol[0], c, np))){
+      return 0;
+    }
+  }
+  return 1;
+}
+
+/* The lifted polynomials are checked at the new primes, the last thrds
+   ones, until NBCHECK primes agree with them. A large basis has many
+   polynomials to check with many large coefficients, so they are checked
+   in parallel with the threads of the lifting first, then the results
+   are taken in the order of the polynomials up to the first failure as
+   when checking them one after the other. */
 static inline int verif_lifted_basis(gb_modpoly_t modgbs, data_lift_t dl,
                                      int thrds){
-  for(int32_t k = 0; k < modgbs->ld; k++){
+  const int32_t ld = modgbs->ld;
+  /* ok[k*thrds+i]: polynomial k agrees with the i-th new prime */
+  int8_t *ok = NULL;
+  if(dl->nthrds > 1){
+    ok = (int8_t *)malloc((size_t)ld * thrds * sizeof(int8_t));
+#pragma omp parallel for num_threads(dl->nthrds) schedule(dynamic, 1)
+    for(int32_t k = 0; k < ld; k++){
+      if(dl->check1[k]>=1 && dl->check2[k]>0 && dl->check2[k] < NBCHECK
+         && modgbs->modpolys[k]->len > 0){
+        /* the primes are checked as long as they are needed below */
+        int32_t c2 = dl->check2[k];
+        for(int i = 0; i < thrds; i++){
+          if(c2 >= NBCHECK){
+            ok[(size_t)k*thrds+i] = 1;
+            continue;
+          }
+          ok[(size_t)k*thrds+i] = (int8_t)verif_lifted_poly(modgbs,
+              modgbs->modpolys + k, modgbs->nprimes - (thrds - i));
+          if(!ok[(size_t)k*thrds+i]){
+            for(int l = i+1; l < thrds; l++){
+              ok[(size_t)k*thrds+l] = 1;
+            }
+            break;
+          }
+          c2++;
+        }
+      }
+    }
+  }
+  for(int32_t k = 0; k < ld; k++){
     if(dl->check1[k]>=1 && dl->check2[k]>0 && dl->check2[k] < NBCHECK ){
       modpolys_t *pol = modgbs->modpolys + k;
       if(pol[0]->len == 0){
@@ -2164,20 +2221,11 @@ static inline int verif_lifted_basis(gb_modpoly_t modgbs, data_lift_t dl,
       else{
         for(int i = 0; i < thrds; i++){
           const uint32_t np = modgbs->nprimes - (thrds - i);
-          const mp_limb_t prime = modgbs->primes[np];
-          /* all coefficients share the denominator lm */
-          uint64_t ilc = mpz_fdiv_ui(pol[0]->lm, prime);
-          ilc = mod_p_inverse_64((int64_t)ilc, (int64_t)prime);
-          const uint64_t ilcs = shoup_mu(prime, ilc);
-          for(int32_t c = 0; c < pol[0]->len; c++){
-            uint64_t v = mpz_fdiv_ui(pol[0]->cf_qq[c], prime);
-            v = shoup_mod_mul(ilc, ilcs, v, prime);
-            if(v != (modgbs->wide ?
-                     MODCF64(pol[0], c, np) :
-                     (uint64_t)MODCF(pol[0], c, np))){
-              dl->check2[k] = 0;
-              return 0;
-            }
+          if(!(ok != NULL ? ok[(size_t)k*thrds+i]
+               : verif_lifted_poly(modgbs, pol, np))){
+            dl->check2[k] = 0;
+            free(ok);
+            return 0;
           }
           dl->check2[k]++;
           if(dl->check2[k] >= NBCHECK){
@@ -2198,6 +2246,7 @@ static inline int verif_lifted_basis(gb_modpoly_t modgbs, data_lift_t dl,
       }
     }
   }
+  free(ok);
   return 1;
 }
 
