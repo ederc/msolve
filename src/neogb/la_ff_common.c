@@ -56,7 +56,9 @@
  * 16 bits in la_ff_8.c and 32 bits in la_ff_16.c, i.e. p^2 <
  * 2^LA_ACC_BITS, and 32 bits in la_ff_32.c, where p < 2^31 and
  * LA_ACC_REDUCED is defined: the entries are kept in [0,p), or in [0,2p)
- * if p < 2^30, and the products are reduced with Shoup's method.
+ * if p < 2^30, and the products are reduced with Shoup's method. With
+ * AVX2, AVX-512 resp. NEON la_ff_16.c defines LA_ACC_MONT and has entries
+ * of 16 bits in [0,p), the products are reduced by Montgomery's method.
  * Otherwise (la_ff_64.c)
  * the entries have 64 bits.
  *
@@ -121,13 +123,19 @@
  * Thus we only use full groups and only if each thread gets at least two
  * of them, otherwise matrices with few rows to be reduced would only use
  * some of the threads. Returns 0 if the rows should be reduced one by
- * one. */
+ * one. With LA_ACC_MONT a group of 32 rows costs less than two of 16
+ * rows with 32 bit entries, so groups are taken from as many rows as
+ * these would be. */
 static inline len_t LA_FF(rows_per_group)(
         const len_t nrl,
         const int32_t nthrds
         )
 {
+#if defined LA_ACC_MONT && LA_NR > 16
+    return (uint64_t)nrl >= 2 * (uint64_t)nthrds * 16 ? LA_NR : 0;
+#else
     return (uint64_t)nrl >= 2 * (uint64_t)nthrds * LA_NR ? LA_NR : 0;
+#endif
 }
 
 /* Returns floor((2^64-1)/fc), from which the multipliers of Shoup's method
@@ -237,6 +245,8 @@ static inline void LA_FF(submul_interleaved_rows)(
     const uint32x4_t pv = vdupq_n_u32((uint32_t)fc);
     const uint32x4_t ptv = vdupq_n_u32(pt);
 #endif
+#elif defined LA_ACC_MONT
+    /* see below */
 #elif LA_ACC_BITS == 16
 #if defined HAVE_AVX512_BW
     const __m512i mod2v = _mm512_set1_epi16((int16_t)mod2);
@@ -263,7 +273,125 @@ static inline void LA_FF(submul_interleaved_rows)(
     const int64x2_t mod2v = vdupq_n_s64(mod2);
 #endif
 
-#if defined LA_ACC_REDUCED
+#if defined LA_ACC_MONT
+    /* Montgomery's method with R = 2^16: for T = m'*c with m' = m*R mod p
+     * and u = T*p^(-1) mod R, (T - u*p)/R = hi(T) - hi(u*p) is congruent
+     * to m*c, both halves are below p, so it lies in (-p,p), and the low
+     * halves of T and u*p cancel. All products are 16 x 16 bit ones. */
+    (void)mod2;
+    (void)pinv;
+    (void)lazy;
+    uint16_t pi = (uint16_t)fc;
+    for (r = 0; r < 4; ++r) {
+        pi = (uint16_t)(pi * (uint16_t)(2 - (uint16_t)fc * pi));
+    }
+    /* m' = m*R mod p is the Montgomery product of m and R^2 mod p, which
+     * needs no division for each multiplier: pivot rows may be short */
+    const uint32_t rp = (uint32_t)(((uint32_t)1 << 16) % fc);
+    const uint32_t r2 = (uint32_t)(((uint64_t)rp * rp) % fc);
+    uint16_t mm[LA_NR];
+    for (r = 0; r < LA_NR; ++r) {
+        const uint32_t x = (uint32_t)mlt[r] * r2;
+        const uint32_t u = (uint16_t)((uint16_t)x * pi);
+        const uint32_t h = x >> 16;
+        const uint32_t b = (u * (uint32_t)fc) >> 16;
+        mm[r] = (uint16_t)(h >= b ? h - b : h + (uint32_t)fc - b);
+    }
+#endif
+#if defined LA_ACC_MONT && defined HAVE_AVX512_BW
+    const __m512i pv  = _mm512_set1_epi16((int16_t)fc);
+    const __m512i piv = _mm512_set1_epi16((int16_t)pi);
+    __m512i mulv[LA_NR/32];
+    for (r = 0; r < LA_NR/32; ++r) {
+        mulv[r] = _mm512_loadu_si512((void *)(mm+32*r));
+    }
+    for (j = 0; j < len; ++j) {
+        LA_ACC_T *t       = dr + (uint64_t)LA_NR * ds[j];
+        const __m512i cfv = _mm512_set1_epi16((int16_t)cfs[j]);
+        for (r = 0; r < LA_NR/32; ++r) {
+            const __m512i hv = _mm512_mulhi_epu16(mulv[r], cfv);
+            const __m512i bv = _mm512_mulhi_epu16(_mm512_mullo_epi16(
+                        _mm512_mullo_epi16(mulv[r], cfv), piv), pv);
+            __m512i prodv    = _mm512_sub_epi16(hv, bv);
+            prodv = _mm512_mask_add_epi16(prodv,
+                    _mm512_cmplt_epu16_mask(hv, bv), prodv, pv);
+            const __m512i tv = _mm512_loadu_si512((void *)(t+32*r));
+            __m512i resv     = _mm512_sub_epi16(tv, prodv);
+            resv = _mm512_mask_add_epi16(resv,
+                    _mm512_cmplt_epu16_mask(tv, prodv), resv, pv);
+            _mm512_storeu_si512((void *)(t+32*r), resv);
+        }
+    }
+#elif defined LA_ACC_MONT && (defined HAVE_AVX2 || defined HAVE_AVX512_F)
+    const __m256i pv  = _mm256_set1_epi16((int16_t)fc);
+    const __m256i piv = _mm256_set1_epi16((int16_t)pi);
+    __m256i mulv[LA_NR/16];
+    for (r = 0; r < LA_NR/16; ++r) {
+        mulv[r] = _mm256_loadu_si256((__m256i *)(mm+16*r));
+    }
+    for (j = 0; j < len; ++j) {
+        LA_ACC_T *t       = dr + (uint64_t)LA_NR * ds[j];
+        const __m256i cfv = _mm256_set1_epi16((int16_t)cfs[j]);
+        for (r = 0; r < LA_NR/16; ++r) {
+            const __m256i hv = _mm256_mulhi_epu16(mulv[r], cfv);
+            const __m256i bv = _mm256_mulhi_epu16(_mm256_mullo_epi16(
+                        _mm256_mullo_epi16(mulv[r], cfv), piv), pv);
+            /* hv < bv iff min(hv,bv) != bv */
+            __m256i prodv    = _mm256_sub_epi16(hv, bv);
+            prodv = _mm256_add_epi16(prodv, _mm256_andnot_si256(
+                        _mm256_cmpeq_epi16(_mm256_min_epu16(hv, bv), bv), pv));
+            const __m256i tv = _mm256_loadu_si256((__m256i *)(t+16*r));
+            __m256i resv     = _mm256_sub_epi16(tv, prodv);
+            resv = _mm256_add_epi16(resv, _mm256_andnot_si256(
+                        _mm256_cmpeq_epi16(_mm256_min_epu16(tv, prodv), prodv), pv));
+            _mm256_storeu_si256((__m256i *)(t+16*r), resv);
+        }
+    }
+#elif defined LA_ACC_MONT && defined __aarch64__
+    const uint16x8_t pv  = vdupq_n_u16((uint16_t)fc);
+    const uint16x8_t piv = vdupq_n_u16(pi);
+    uint16x8_t mulv[LA_NR/8];
+    for (r = 0; r < LA_NR/8; ++r) {
+        mulv[r] = vld1q_u16(mm+8*r);
+    }
+    for (j = 0; j < len; ++j) {
+        LA_ACC_T *t           = dr + (uint64_t)LA_NR * ds[j];
+        const uint16x8_t cfv  = vdupq_n_u16((uint16_t)cfs[j]);
+        for (r = 0; r < LA_NR/8; ++r) {
+            /* the high halves of the 32 bit products of the widening
+             * multiplies are their odd 16 bit halves */
+            const uint16x8_t hv = vuzp2q_u16(
+                    vreinterpretq_u16_u32(vmull_u16(
+                            vget_low_u16(mulv[r]), vget_low_u16(cfv))),
+                    vreinterpretq_u16_u32(vmull_high_u16(mulv[r], cfv)));
+            const uint16x8_t uv = vmulq_u16(vmulq_u16(mulv[r], cfv), piv);
+            const uint16x8_t bv = vuzp2q_u16(
+                    vreinterpretq_u16_u32(vmull_u16(
+                            vget_low_u16(uv), vget_low_u16(pv))),
+                    vreinterpretq_u16_u32(vmull_high_u16(uv, pv)));
+            uint16x8_t prodv    = vsubq_u16(hv, bv);
+            prodv = vaddq_u16(prodv, vandq_u16(vcltq_u16(hv, bv), pv));
+            const uint16x8_t tv = vld1q_u16(t+8*r);
+            uint16x8_t resv     = vsubq_u16(tv, prodv);
+            resv = vaddq_u16(resv, vandq_u16(vcltq_u16(tv, prodv), pv));
+            vst1q_u16(t+8*r, resv);
+        }
+    }
+#elif defined LA_ACC_MONT
+    const uint32_t p32 = (uint32_t)fc;
+    for (j = 0; j < len; ++j) {
+        LA_ACC_T *t       = dr + (uint64_t)LA_NR * ds[j];
+        const uint32_t c  = (uint32_t)cfs[j];
+        for (r = 0; r < LA_NR; ++r) {
+            const uint32_t x = (uint32_t)mm[r] * c;
+            const uint16_t u = (uint16_t)((uint16_t)x * pi);
+            const uint32_t h = x >> 16;
+            const uint32_t b = ((uint32_t)u * p32) >> 16;
+            const uint32_t prod = h >= b ? h - b : h + p32 - b;
+            t[r] = (LA_ACC_T)(t[r] >= prod ? t[r] - prod : t[r] + p32 - prod);
+        }
+    }
+#elif defined LA_ACC_REDUCED
     uint32_t mp[LA_NR];
     for (r = 0; r < LA_NR; ++r) {
         const uint64_t x  = (uint64_t)mlt[r] << LA_MP_SHIFT;
@@ -274,7 +402,9 @@ static inline void LA_FF(submul_interleaved_rows)(
         mp[r] = (uint32_t)q;
     }
 #endif
-#if defined LA_ACC_REDUCED && defined HAVE_AVX512_F
+#if defined LA_ACC_MONT
+    /* the rows are updated above */
+#elif defined LA_ACC_REDUCED && defined HAVE_AVX512_F
     __m512i mulv[LA_NR/16], mpev[LA_NR/16], mpov[LA_NR/16];
     for (r = 0; r < LA_NR/16; ++r) {
         mulv[r] = _mm512_loadu_si512((void *)(mlt+16*r));
@@ -3377,6 +3507,7 @@ static void LA_FF(interreduce_matrix_rows)(
 #undef LA_WIDE
 #undef LA_ACC_BITS
 #undef LA_ACC_REDUCED
+#undef LA_ACC_MONT
 #undef LA_MP_SHIFT
 #undef LA_ACC_T
 #undef LA_NR

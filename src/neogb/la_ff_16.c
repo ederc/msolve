@@ -424,5 +424,12 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_ff_16(
 #define LA_DENSE_BITS 32
 #include "la_ff_small_prime.c"
 
+/* with AVX2, AVX-512 resp. NEON the interleaved rows have entries of 16
+ * bits, see LA_ACC_MONT in la_ff_common.c */
+#if defined HAVE_AVX2 || defined HAVE_AVX512_BW || defined __aarch64__
+#define LA_ACC_BITS 16
+#define LA_ACC_MONT
+#else
 #define LA_ACC_BITS 32
+#endif
 #include "la_ff_common.c"
