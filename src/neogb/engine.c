@@ -104,7 +104,7 @@ int initialize_gba_input_data(
             ? (st->use_signatures > 0)
             : (st->use_signatures != 0
                 && st->fc > 2 && st->fc < ((uint64_t)1 << 31)
-                && !is_gf2_ext(st->fc) && st->mo == 0 && st->nev == 0);
+                && st->mo == 0 && st->nev == 0);
         if (!sig_run) {
             sort_r(bs->hm, (unsigned long)bs->ld, sizeof(hm_t *),
                     initial_input_cmp, bht);

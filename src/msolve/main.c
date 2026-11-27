@@ -257,6 +257,7 @@ static inline void display_help(char *str){
   display_option_help(0, "signature-f4", "SIG", "Computes Groebner bases in DRL over prime fields\n");
   display_option_help_noopt("below 2^31 by a signature-based F4 first, which\n");
   display_option_help_noopt("hands over to F4 where it does not pay off.\n");
+  display_option_help_noopt("Over GF(16) resp. GF(256) only with 1 or 2.\n");
   display_option_help_noopt("-1 - where no trace is learned.\n");
   display_option_help_noopt("0  - no.\n");
   display_option_help_noopt("1  - yes, also learning traces over the rationals.\n");

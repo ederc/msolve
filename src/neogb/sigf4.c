@@ -461,6 +461,8 @@ struct sg_t
     /* handover state */
     int early_done;
     int gap_done;
+    const gf2x_t *gx;   /* the tables of GF(16) resp. GF(256), NULL over
+                         * prime fields */
     /* statistics */
     uint64_t nsubs;     /* multiply-adds of the current round */
     uint64_t psubs;     /* multiply-adds of the previous round */
@@ -1485,7 +1487,9 @@ static sg_row_t sg_multiple(
 /* subtracts mul times the pivot row (pr, pf) of length pl but its lead
  * entry from the dense row dr. For p < 2^16 each product is below 2^32, so
  * the entries stay below 2^63 for less than 2^31 subtractions, otherwise
- * they are kept below 2^63 by subtracting big, a multiple of p. */
+ * they are kept below 2^63 by subtracting big, a multiple of p. Over
+ * GF(16) resp. GF(256), with their tables gx, the entries are elements of
+ * the field, subtraction is XOR. */
 static inline void sg_sub_row(
         uint64_t *dr,
         const hm_t * const pr,
@@ -1493,11 +1497,17 @@ static inline void sg_sub_row(
         const len_t pl,
         const uint64_t mul,
         const uint64_t big,
-        const int small
+        const int small,
+        const gf2x_t * const gx
         )
 {
     len_t j;
-    if (small) {
+    if (gx != NULL) {
+        const uint8_t * const mr = gx->mul[mul];
+        for (j = 1; j < pl; ++j) {
+            dr[pr[j]] ^= mr[pf[j]];
+        }
+    } else if (small) {
         for (j = 1; j < pl; ++j) {
             dr[pr[j]] += mul * pf[j];
         }
@@ -1507,6 +1517,17 @@ static inline void sg_sub_row(
             dr[pr[j]] = t >= big ? t - big : t;
         }
     }
+}
+
+/* the multiplier subtracting the multiple v of a pivot: -v modulo p, over
+ * GF(16) resp. GF(256) v itself */
+static inline uint64_t sg_neg(
+        const uint64_t v,
+        const uint64_t p,
+        const gf2x_t * const gx
+        )
+{
+    return gx != NULL ? v : p - v;
 }
 
 /* the least number s of random combinations with (p-1)^s >= 2^31: if s
@@ -1577,7 +1598,8 @@ static int sg_zero_test(
                 memset(dr + k + 1, 0, (unsigned long)(nc - k - 1) * sizeof(uint64_t));
                 return 0;
             }
-            sg_sub_row(dr, pc[k] + OFFSET, pcf[k], pc[k][LENGTH], p - v, big, small);
+            sg_sub_row(dr, pc[k] + OFFSET, pcf[k], pc[k][LENGTH], p - v, big,
+                    small, NULL);
             *nsubs += pc[k][LENGTH];
         }
     }
@@ -1599,10 +1621,62 @@ static inline uint64_t sg_band_sub(
         const len_t nz,
         const len_t one,
         const uint64_t big,
-        const int small
+        const int small,
+        const gf2x_t * const gx
         )
 {
     len_t j;
+    if (gx != NULL) {
+        if (nz == 1) {
+            const uint8_t * const mr = gx->mul[m[one]];
+            for (j = 1; j < pl; ++j) {
+                bd[(unsigned long)pr[j] * SG_BAND + one] ^= mr[pf[j]];
+            }
+            return pl;
+        }
+#if (defined(__AVX512F__) || defined(__AVX2__)) && SG_BAND == 8
+        /* the products m[b]*f of all rows of the band at once: with the
+         * nibbles of the multipliers, f*m[b] = lo[f][m[b] & 15] ^
+         * hi[f][m[b] >> 4] by two byte shuffles, see gf2_ext.c */
+        uint8_t ml[16], mh[16];
+        memset(ml, 0, sizeof(ml));
+        memset(mh, 0, sizeof(mh));
+        for (len_t b = 0; b < SG_BAND; ++b) {
+            ml[b] = (uint8_t)(m[b] & 15);
+            mh[b] = (uint8_t)(m[b] >> 4);
+        }
+        const __m128i mlv = _mm_loadu_si128((const __m128i *)ml);
+        const __m128i mhv = _mm_loadu_si128((const __m128i *)mh);
+        for (j = 1; j < pl; ++j) {
+            uint64_t * const y = bd + (unsigned long)pr[j] * SG_BAND;
+            const cf32_t f     = pf[j];
+            const __m128i pv   = _mm_xor_si128(
+                    _mm_shuffle_epi8(_mm_loadu_si128((const __m128i *)gx->lo[f]), mlv),
+                    _mm_shuffle_epi8(_mm_loadu_si128((const __m128i *)gx->hi[f]), mhv));
+#if defined(__AVX512F__)
+            _mm512_storeu_si512((void *)y, _mm512_xor_si512(
+                        _mm512_loadu_si512((const void *)y),
+                        _mm512_cvtepu8_epi64(pv)));
+#else
+            _mm256_storeu_si256((__m256i *)y, _mm256_xor_si256(
+                        _mm256_loadu_si256((const __m256i *)y),
+                        _mm256_cvtepu8_epi64(pv)));
+            _mm256_storeu_si256((__m256i *)(y+4), _mm256_xor_si256(
+                        _mm256_loadu_si256((const __m256i *)(y+4)),
+                        _mm256_cvtepu8_epi64(_mm_srli_si128(pv, 4))));
+#endif
+        }
+#else
+        for (j = 1; j < pl; ++j) {
+            uint64_t * const y = bd + (unsigned long)pr[j] * SG_BAND;
+            const cf32_t f     = pf[j];
+            for (len_t b = 0; b < SG_BAND; ++b) {
+                y[b] ^= gx->mul[m[b]][f];
+            }
+        }
+#endif
+        return (uint64_t)pl * nz;
+    }
     /* boyer-2016 §4.2: where only one row of the band holds an
      * entry, a specialized operation reduces that row alone, and
      * the row operations run only on the nonzero multipliers */
@@ -1694,6 +1768,7 @@ static void sg_band_reduce(
         const uint64_t p,
         const uint64_t big,
         const int small,
+        const gf2x_t * const gx,
         uint8_t *used,
         hm_t **ncol,
         cf32_t **nval,
@@ -1738,7 +1813,7 @@ static void sg_band_reduce(
             len_t nz = 0, one = 0;
             for (b = 0; b < SG_BAND; ++b) {
                 const uint64_t v = x[b] % p;
-                m[b] = (uint32_t)(v == 0 ? 0 : p - v);
+                m[b] = (uint32_t)(v == 0 ? 0 : sg_neg(v, p, gx));
                 x[b] = 0;
                 if (v != 0) {
                     ++nz;
@@ -1748,7 +1823,7 @@ static void sg_band_reduce(
             const hm_t * const pr   = pc[k] + OFFSET;
             const cf32_t * const pf = pcf[k];
             const len_t pl          = pc[k][LENGTH];
-            *nsubs += sg_band_sub(bd, pr, pf, pl, m, nz, one, big, small);
+            *nsubs += sg_band_sub(bd, pr, pf, pl, m, nz, one, big, small, gx);
             if (used != NULL) {
                 used[k] = 1;
             }
@@ -1761,17 +1836,20 @@ static void sg_band_reduce(
             x[b] = 0;
             for (a = 0; a < b; ++a) {
                 if (rel[b][a] != 0 && e[a] != 0) {
-                    v = (v + p - (rel[b][a] * e[a]) % p) % p;
+                    v = gx != NULL ? v ^ gx->mul[rel[b][a]][e[a]]
+                        : (v + p - (rel[b][a] * e[a]) % p) % p;
                 }
             }
             if (v != 0 && owner < b) {
                 /* the row is reduced by the band row taking this column */
-                rel[b][owner] = (v * inv[owner]) % p;
+                rel[b][owner] = gx != NULL ? gx->mul[v][inv[owner]]
+                    : (v * inv[owner]) % p;
                 v = 0;
             } else if (v != 0 && lead[b] == nc) {
                 lead[b]  = k;
                 owner    = b;
-                inv[b]   = mod_p_inverse_32((int64_t)v, (int64_t)p);
+                inv[b]   = gx != NULL ? gx->inv[v]
+                    : mod_p_inverse_32((int64_t)v, (int64_t)p);
             }
             e[b] = v;
             if (v != 0) {
@@ -1809,6 +1887,7 @@ static int sg_reduce_by_reducers(
         const uint64_t p,
         const uint64_t big,
         const int small,
+        const gf2x_t * const gx,
         uint8_t *used,
         const uint64_t wmax,
         uint64_t *nsubs,
@@ -1908,7 +1987,7 @@ static int sg_reduce_by_reducers(
                         nval[b][nl[b]++] = (cf32_t)v;
                         continue;
                     }
-                    m[b] = (uint32_t)(p - v);
+                    m[b] = (uint32_t)sg_neg(v, p, gx);
                     ++nz;
                     one = b;
                 }
@@ -1916,7 +1995,7 @@ static int sg_reduce_by_reducers(
                     continue;
                 }
                 subs += sg_band_sub(bd, pr[k] + OFFSET, pv[k], pr[k][LENGTH],
-                        m, nz, one, big, small);
+                        m, nz, one, big, small, gx);
                 if (used != NULL) {
                     used[k] = 1;
                 }
@@ -2275,6 +2354,8 @@ static int64_t sg_round(
     cf32_t **pcf    = (cf32_t **)calloc((unsigned long)nc, sizeof(cf32_t *));
     uint64_t *dr    = (uint64_t *)calloc((unsigned long)nc, sizeof(uint64_t));
     const uint64_t big = ((uint64_t)1 << 63) / p * p;
+    /* the tables of GF(16) resp. GF(256), NULL over prime fields */
+    const gf2x_t * const gx = sg->gx;
     hm_t *nrow      = (hm_t *)malloc((unsigned long)(nc+OFFSET) * sizeof(hm_t));
     cf32_t *ncf     = (cf32_t *)malloc((unsigned long)nc * sizeof(cf32_t));
     /* A row is reduced by a dense scan over the columns from its lead
@@ -2301,7 +2382,7 @@ static int64_t sg_round(
      * the run, up to the next reducer row setting a pivot, reduces to zero
      * as a whole; after a failed test the run is tested in blocks of 8
      * rows, doubling up to 64 */
-    const int tests = md->laopt >= 40 && p > 3;
+    const int tests = md->laopt >= 40 && p > 3 && gx == NULL;
     const len_t zs  = tests ? sg_zero_combinations(p) : 0;
     len_t streak    = 0, blk = 0;
     len_t *grp      = tests ? (len_t *)malloc((unsigned long)nr * sizeof(len_t)) : NULL;
@@ -2335,7 +2416,7 @@ static int64_t sg_round(
     uint8_t *used = rd != NULL ? (uint8_t *)calloc((unsigned long)nc + 1, sizeof(uint8_t)) : NULL;
     len_t *kcol   = rd != NULL ? (len_t *)malloc((unsigned long)(nr + 1) * sizeof(len_t)) : NULL;
     const int byred = md->nthrds > 1
-        && sg_reduce_by_reducers(rows, nr, nc, p, big, small, used, wmax,
+        && sg_reduce_by_reducers(rows, nr, nc, p, big, small, gx, used, wmax,
                 &sg->nsubs, md->nthrds);
     for (i = 0; i < nr; ++i) {
         if (sg->nsubs > wmax) {
@@ -2435,7 +2516,7 @@ static int64_t sg_round(
                     bv[l] = (cf32_t *)malloc((unsigned long)(nc + 1) * sizeof(cf32_t));
                 }
                 sg_band_reduce(g, nb, rows, pc, pcf, bd, nc, p, big, small,
-                        used, bc, bv, bn, &sg->nsubs);
+                        gx, used, bc, bv, bn, &sg->nsubs);
                 nl = bn[0];
                 memcpy(nrow + OFFSET, bc[0], (unsigned long)nl * sizeof(hm_t));
                 memcpy(ncf, bv[0], (unsigned long)nl * sizeof(cf32_t));
@@ -2483,7 +2564,8 @@ static int64_t sg_round(
                 }
                 const hm_t * const pr   = pc[k] + OFFSET;
                 const len_t pl          = pc[k][LENGTH];
-                sg_sub_row(dr, pr, pcf[k], pl, p - v, big, small);
+                sg_sub_row(dr, pr, pcf[k], pl, sg_neg(v, p, gx), big, small,
+                        gx);
                 if (used != NULL) {
                     used[k] = 1;
                 }
@@ -2511,7 +2593,8 @@ static int64_t sg_round(
                     continue;
                 }
                 const len_t pl          = pc[k][LENGTH];
-                sg_sub_row(dr, pc[k] + OFFSET, pcf[k], pl, p - v, big, small);
+                sg_sub_row(dr, pc[k] + OFFSET, pcf[k], pl, sg_neg(v, p, gx), big,
+                        small, gx);
                 if (used != NULL) {
                     used[k] = 1;
                 }
@@ -2585,12 +2668,14 @@ static int64_t sg_round(
         }
         streak = 0;
         /* a new element, made monic */
-        const uint64_t inv = mod_p_inverse_32((int64_t)ncf[0], (int64_t)p);
+        const uint64_t inv = gx != NULL ? gx->inv[ncf[0]]
+            : mod_p_inverse_32((int64_t)ncf[0], (int64_t)p);
         hm_t *er    = (hm_t *)malloc((unsigned long)(nl+OFFSET) * sizeof(hm_t));
         cf32_t *ecf = (cf32_t *)malloc((unsigned long)nl * sizeof(cf32_t));
         for (j = 0; j < nl; ++j) {
             er[OFFSET+j] = nrow[OFFSET+j];
-            ecf[j]       = (cf32_t)(((uint64_t)ncf[j] * inv) % p);
+            ecf[j]       = gx != NULL ? gx->mul[ncf[j]][inv]
+                : (cf32_t)(((uint64_t)ncf[j] * inv) % p);
         }
         er[LENGTH]  = nl;
         er[PRELOOP] = nl % UNROLL;
@@ -2847,10 +2932,13 @@ static int sig_f4_applicable(
         const md_t * const md
         )
 {
-    return (md->sig_f4 > 0 || (md->sig_f4 < 0 && md->trace_level == NO_TRACER))
+    /* over GF(16) resp. GF(256) F4 is about as fast in the mean, and
+     * much faster on some inputs, the signature-based F4 is only run on
+     * request there */
+    return (md->sig_f4 > 0 || (md->sig_f4 < 0 && md->trace_level == NO_TRACER
+                && !is_gf2_ext(md->fc)))
         && md->trace_level != APPLY_TRACER
         && md->fc > 2 && md->fc < ((uint64_t)1 << 31)
-        && !is_gf2_ext(md->fc)
         && md->nev == 0 && bs->ht->mo == 0
         && !bs->ht->boolean
         && (md->ff_bits == 8 || md->ff_bits == 16 || md->ff_bits == 32)
@@ -2987,6 +3075,7 @@ static int sig_f4(
     sg.sht  = md->ht;
     sg.rst  = initialize_secondary_hash_table(bht, md);
     sg.fc   = (uint32_t)md->fc;
+    sg.gx   = is_gf2_ext(md->fc) ? gf2x_table(md->fc) : NULL;
     sg.seed = 0x9E3779B97F4A7C15ULL ^ md->fc;
     sg.rec  = rec;
     const len_t evl = bht->evl;
@@ -3346,7 +3435,7 @@ static len_t sg_band_take(
         }
         uint64_t nsubs = 0;
         sg_band_reduce(g, nb, br, pc, pcf, bs->bd, nc, p, big, small,
-                NULL, bs->bc, (cf32_t **)bs->bv, bs->bn, &nsubs);
+                NULL, NULL, bs->bc, (cf32_t **)bs->bv, bs->bn, &nsubs);
         bs->i0 = i;
         bs->nb = nb;
     }
@@ -3588,7 +3677,7 @@ static len_t sg_band_take64(
  * instantiation the Shoup product with the pre-inverse of the
  * multiplier */
 #define SG_SUBROW_32(dr, pr, pf, pl, v, p, big, small) \
-    sg_sub_row((dr), (pr), (pf), (pl), (p) - (v), (big), (small))
+    sg_sub_row((dr), (pr), (pf), (pl), (p) - (v), (big), (small), NULL)
 #define SG_SUBROW_64(dr, pr, pf, pl, v, p, big, small) \
     sg_sub_row_64((dr), (pr), (pf), (pl), (v), (p), &(big))
 
