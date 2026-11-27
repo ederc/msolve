@@ -54,8 +54,10 @@
 #define SG_PAIR_WORK_DEN 2
 /* a round is stopped once its reductions take more than SG_WORK_GROWTH
  * times the multiply-adds of the round before and more than SG_WORK_MIN,
- * see sg_round() */
-#define SG_WORK_GROWTH 16
+ * see sg_round(). Dense quadratic systems over GF(65521) grow by up to 22
+ * times in their fifth degree, where F4 has many more zero reductions,
+ * while the rounds handing over better grow by more than 27 times. */
+#define SG_WORK_GROWTH 24
 #define SG_WORK_MIN ((uint64_t)1 << 27)
 #define SG_EARLY        2     /* gap between signature and lead degree */
 #define SG_GAP          4
