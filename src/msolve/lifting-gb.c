@@ -1722,7 +1722,9 @@ static inline int crt_ratrecon_lift_modgbs(gb_modpoly_t modgbs, data_lift_t dl,
 typedef struct{
   mpz_t x, P, rden, d;
   rrec_data_t rd;
-  uint64_t *dmod, *dmods, *res;
+  uint64_t *dmod, *dmods;
+  /* the residues for fmpz_multi_CRT_ui(), limbs as modgbs->cf_64 */
+  mp_limb_t *res;
   uint32_t *ep;
   mpz_t *eden;
   uint32_t nealloc;
@@ -1745,7 +1747,7 @@ static void mr_scratch_init(mr_scratch_t *sc, const uint32_t np,
   sc->comb    = comb_init;
   sc->res     = NULL;
   if(comb_init){
-    sc->res = (uint64_t *)malloc(sizeof(uint64_t) * np);
+    sc->res = (mp_limb_t *)malloc(sizeof(mp_limb_t) * np);
     fmpz_comb_temp_init(sc->comb_temp, comb);
     fmpz_init(sc->y);
   }
